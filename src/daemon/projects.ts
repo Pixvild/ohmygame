@@ -333,9 +333,9 @@ export class ProjectManager {
     return this.#covers.set(this.#projectDirectory(id), contents, source);
   }
 
-  async restoreAutomaticCover(id: string): Promise<void> {
+  async setCoverMode(id: string, mode: ProjectCoverMode, fallback?: Uint8Array): Promise<void> {
     if (!this.#projects.has(id)) throw new Error(`Project not found: ${id}`);
-    await this.#covers.restoreAutomatic(this.#projectDirectory(id));
+    await this.#covers.setMode(this.#projectDirectory(id), mode, fallback);
   }
 
   async addGeneratedAsset(
@@ -504,8 +504,9 @@ export class ProjectManager {
       const destination = path.join(path.dirname(source.absolutePath), normalizedName);
       if (source.absolutePath === destination) return source.relativePath;
       try {
-        await lstat(destination);
-        throw new ProjectAssetError("A file or folder with that name already exists", 409);
+        const existing = await lstat(destination);
+        // On a case-insensitive file system a name that differs only in letter case is the source entry itself.
+        if (existing.isSymbolicLink() || await realpath(destination) !== source.absolutePath) throw new ProjectAssetError("A file or folder with that name already exists", 409);
       } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause; }
       await rename(source.absolutePath, destination);
       try {
