@@ -88,9 +88,18 @@ configuration later in Settings; it is hidden once a model is ready.
 **Next** and the provider screen's actions sit near the bottom, above the
 step indicators.
 
-The provider list shows language providers only. Without a search, connected
-providers come first, then the popular providers shared with Settings, and
-the rest stay under **More providers**. Searching lists every match. Saved
+Settings → Providers and the setup list share one grouping. Every working
+connection, including free cloud and local services, is under **Connected
+providers**. Unconnected providers follow as **Free cloud**, **Popular
+providers** (OpenAI, Anthropic, OpenRouter, Google, DeepSeek, Meshy, Tripo,
+filtered by capability), **Local providers**, and the collapsed **More
+providers**.
+
+The setup list shows language providers only. Without a search, connected and
+popular providers come first, and the rest, including local services, stay
+under **More providers**. The legacy OpenAI Codex entry is hidden unless it is
+already connected, because OpenAI sign-in covers ChatGPT subscriptions.
+Searching lists every match. Saved
 built-in and custom connections show **Connected** instead of offering setup
 again. Disabled connections offer **Enable** without changing credentials.
 Before starting or retrying setup, the renderer refreshes the provider's saved

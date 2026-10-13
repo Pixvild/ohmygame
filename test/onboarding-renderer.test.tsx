@@ -408,7 +408,7 @@ describe("first-run screens", () => {
     expect(stepButton("welcome").hasAttribute("aria-current")).toBe(false);
   });
 
-  it("lists every provider and starts the chosen provider's authorization", async () => {
+  it("hides the legacy Codex entry and starts the chosen provider's authorization", async () => {
     api.listProviders.mockResolvedValue(
       ["openai-codex", "openai"].map((id) => ({
         ...provider,
@@ -426,8 +426,8 @@ describe("first-run screens", () => {
       "Choose your provider.",
     );
     expect(providerButton("openai", "Sign in")).toBeDefined();
-    await act(async () => button("More providers (1)").click());
-    expect(providerButton("openai-codex", "Sign in")).toBeDefined();
+    expect(container.querySelector('[aria-label="openai-codex"]')).toBeNull();
+    expect(container.textContent).not.toContain("More providers");
     await act(async () => providerButton("openai", "Sign in").click());
     expect(api.startModelProviderLogin).toHaveBeenCalledWith("openai", "oauth");
   });
@@ -669,9 +669,9 @@ describe("first-run screens", () => {
       [...container.querySelectorAll('[role="group"]')].map((row) =>
         row.getAttribute("aria-label"),
       );
-    expect(rows()).toEqual(["Baseten", "OpenRouter", "Anthropic"]);
+    expect(rows()).toEqual(["Baseten", "Anthropic", "OpenRouter"]);
     await act(async () => button("More providers (1)").click());
-    expect(rows()).toEqual(["Baseten", "OpenRouter", "Anthropic", "Cerebras"]);
+    expect(rows()).toEqual(["Baseten", "Anthropic", "OpenRouter", "Cerebras"]);
     await act(async () => button("More providers (1)").click());
     await fillInput("Search providers…", "cere");
     expect(rows()).toEqual(["Cerebras"]);
