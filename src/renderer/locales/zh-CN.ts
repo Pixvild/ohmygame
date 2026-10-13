@@ -184,6 +184,18 @@ const zhCN: typeof en = {
     noImageModels: "没有可用的图像模型。",
     noVideoModels: "没有可用的视频模型。",
     loadingModels: "正在加载模型",
+    breadcrumb: "服务商导航",
+    remove: {
+      title: "移除服务商",
+      hint: "删除 {{name}} 已保存的连接和模型设置。",
+      action: "移除…",
+    },
+    connection: {
+      title: "连接",
+      signedInWith: "已通过 {{name}} 登录",
+      signedIn: "已通过浏览器登录",
+      reconnect: "重新连接",
+    },
     delete: {
       button: "删除服务商",
       confirmation: "确认删除服务商",
@@ -216,7 +228,6 @@ const zhCN: typeof en = {
     browserSignIn: "浏览器登录",
     useBrowserSignIn: "改用浏览器登录",
     useApiKey: "改用 API 密钥",
-    apiKeySettings: "API 密钥设置",
     apiKeyConfigured: "已配置 API 密钥",
     editApiKey: "编辑 API 密钥",
     baseUrlSettings: "Base URL 设置",
@@ -242,6 +253,7 @@ const zhCN: typeof en = {
     },
     status: {
       connected: "已连接",
+      connectedWith: "已连接 · {{method}}",
       checking: "正在检查…",
       failed: "连接失败",
       notConfigured: "未配置",
@@ -310,6 +322,8 @@ const zhCN: typeof en = {
       label: "筛选模型",
     },
     title: "模型",
+    default: "默认",
+    hiddenCount: "已隐藏的模型（{{count}}）",
     reloadTitle: "重新加载内置的官方预设和账户模型目录",
     reloadLabel: "重新加载模型目录",
     add: "添加模型",
@@ -677,6 +691,7 @@ const zhCN: typeof en = {
     title: "Responses 连接方式",
     preferWebSocket: "优先使用 WebSocket",
     hint: "自动模式下，官方 OpenAI 优先使用 WebSocket，中转服务使用 HTTP / SSE。连接暂时失败时，会在五分钟内改用 HTTP / SSE。开启自动重试后，中断的回复会以“重新连接”的方式重试。",
+    shortHint: "自动选择 WebSocket 或 HTTP / SSE，连接失败时自动回退。",
   },
   model3dForm: {
     edit: "编辑 3D 模型",

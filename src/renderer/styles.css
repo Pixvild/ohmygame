@@ -1609,32 +1609,58 @@ body {
   gap: 24px;
 }
 
+.settings-provider-detail-top {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.settings-provider-breadcrumb {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.settings-provider-breadcrumb button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-provider-breadcrumb button:hover,
+.settings-provider-breadcrumb button:focus-visible {
+  color: var(--text);
+}
+
+.settings-provider-breadcrumb [aria-current] {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-provider-detail-header {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 10px;
-  margin-left: -8px;
 }
 
-.settings-provider-detail-header > button {
-  display: grid;
-  width: 28px;
-  height: 28px;
+.settings-provider-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
   flex: 0 0 auto;
-  padding: 0;
-  place-items: center;
-  border: 0;
+  margin-right: 6px;
   border-radius: 50%;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.settings-provider-detail-header > button:hover,
-.settings-provider-detail-header > button:focus-visible {
-  background: var(--menu-hover);
-  color: var(--text);
+  background: var(--success);
+  vertical-align: middle;
 }
 
 .settings-provider-heading {
@@ -1677,6 +1703,86 @@ body {
   min-width: 0;
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
+}
+
+.settings-provider-advanced summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.settings-provider-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-provider-advanced summary:hover {
+  color: var(--text);
+}
+
+.settings-provider-advanced[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.settings-provider-advanced-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-provider-inline-select {
+  justify-self: start;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--search-border);
+  border-radius: var(--radius);
+  background: var(--control-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-provider-remove {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-provider-remove-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-provider-remove-row > span {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.settings-provider-remove-row strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settings-provider-remove-row small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-provider-remove .settings-provider-delete-confirmation {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .settings-provider-setting-row {
@@ -1863,6 +1969,52 @@ select.settings-search-input {
 
 .provider-model-row:last-child {
   border-bottom: 0;
+}
+
+.provider-model-row.is-compact {
+  min-height: 38px;
+  padding-block: 6px;
+}
+
+.provider-model-row.is-compact .provider-model-copy {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-model-row.is-compact .provider-model-copy small:not(.provider-model-default) {
+  margin-left: auto;
+}
+
+.provider-model-copy .provider-model-default {
+  justify-self: start;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--settings-row-surface-emphasis);
+  color: var(--text-secondary);
+  font-family: inherit;
+  line-height: 14px;
+}
+
+.provider-models-hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.provider-models-hidden-toggle:hover {
+  color: var(--text);
+}
+
+.provider-models-hidden-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 
 .provider-models.is-editing .provider-model-row:hover {
