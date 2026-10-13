@@ -15,6 +15,7 @@ import path from "node:path";
 import { promptContextLabels, splitPromptContext, withProjectDesignContext } from "./prompt-context.js";
 import { gameDesignMetadata } from "./game-design-context.js";
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { AgentContextUsage, AgentMessagePhase, AgentReasoningLevel, AgentStatus, ConversationAgentState, ConversationAttachment, PendingPrompt, PlanMode, PlanSessionState, PlanState, PluginMention, ProjectAgentActivity, ProjectState, PromptImage, PromptReference, QuestionnaireAnswer, QuestionnaireQuestion, QuestionnaireResult, ThreadItem, ThreadItemError, ToolArtifact } from "../shared/contracts.js";
 import { hasPluginMentionToken, parsePluginMentions, serializePluginMentions } from "../shared/plugins.js";
 import type { RuntimeEventBus } from "../shared/events.js";
@@ -34,12 +35,17 @@ import { createProviderImageReadTool, installDeepSeekImageFiles } from "./deepse
 import { SessionImages } from "./session-images.js";
 import { installSessionImageRequests } from "./session-image-requests.js";
 import { AGENT_ERROR_ENTRY, assistantMessageError, normalizeAgentError, thrownAgentError } from "./agent-errors.js";
+import {
+  CHECKPOINT_ENTRY, CHECKPOINT_RESTORED_ENTRY, CHECKPOINT_UNDONE_ENTRY, TURN_END_ENTRY, parseStoredCheckpoint, parseStoredCheckpointUndone, parseStoredTurnEnd, turnRange,
+  type StoredCheckpointUndone, type StoredTurnEnd, type TurnRange,
+} from "./checkpoint-extension.js";
 
 export interface CodingSession {
   readonly messages: readonly unknown[];
   readonly model?: RuntimeModel;
   readonly sessionManager?: Pick<SessionManager, "appendCustomEntry" | "getBranch">;
   prompt(prompt: string, options?: { images?: PiPromptImage[] }): Promise<void>;
+  sendCustomMessage?(message: { customType: string; content: string; display: boolean }, options?: { triggerTurn?: boolean }): Promise<void>;
   followUp?(prompt: string, images?: PiPromptImage[]): Promise<unknown>;
   steer?(prompt: string, images?: PiPromptImage[]): Promise<unknown>;
   compact?(customInstructions?: string): Promise<unknown>;
@@ -56,6 +62,13 @@ export interface CodingSession {
   setActiveToolsByName?(toolNames: string[]): void;
   getAllTools?(): Array<{ name: string }>;
   getSkills?(): SkillCatalogItem[];
+}
+
+/** The conversation has no such checkpoint on its current branch. */
+export class CheckpointNotFoundError extends Error {
+  constructor() {
+    super("Checkpoint not found");
+  }
 }
 
 export interface SkillCatalogItem {
@@ -104,6 +117,7 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
   let turnFinished = true;
   let lastTimestamp: number | undefined;
   let storedPrompt: StoredPromptDetails | undefined;
+  let checkpointId: string | undefined;
 
   for (const entry of entries) {
     if (entry.type === "compaction") {
@@ -136,6 +150,34 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
       storedPrompt = parseStoredPromptDetails(entry.data);
       continue;
     }
+    if (entry.type === "custom" && entry.customType === CHECKPOINT_ENTRY) {
+      // The snapshot was taken just before the user message that follows.
+      checkpointId = parseStoredCheckpoint(entry.data) ? entry.id : undefined;
+      continue;
+    }
+    if (entry.type === "custom" && entry.customType === CHECKPOINT_RESTORED_ENTRY) {
+      // The message that checkpoint belonged to is no longer on this branch.
+      checkpointId = undefined;
+      continue;
+    }
+    if (entry.type === "custom" && entry.customType === TURN_END_ENTRY) {
+      // The entry names the checkpoint of a message that is already listed; the message that comes next is not its concern.
+      const end = parseStoredTurnEnd(entry.data);
+      const index = items.findIndex((item) => item.type === "userMessage" && item.checkpointId === end?.checkpoint);
+      const item = items[index];
+      if (end && item?.type === "userMessage") items[index] = { ...item, changes: { files: end.files } };
+      continue;
+    }
+    if (entry.type === "custom" && entry.customType === CHECKPOINT_UNDONE_ENTRY) {
+      const undone = parseStoredCheckpointUndone(entry.data);
+      const index = items.findIndex((item) => item.type === "userMessage" && item.checkpointId === undone?.checkpoint);
+      const item = items[index];
+      // The last undo of a turn says how it stands: one that left files as they are, until a later one puts those back too.
+      if (undone && item?.type === "userMessage" && item.changes) {
+        items[index] = { ...item, changes: { files: item.changes.files, undone: true, ...(undone.kept > 0 ? { kept: undone.kept } : {}) } };
+      }
+      continue;
+    }
     if (entry.type === "custom" && entry.customType === AGENT_ERROR_ENTRY) {
       const data = record(entry.data);
       const storedError = record(data?.error);
@@ -143,6 +185,7 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
       if (data.beforeUserMessage === true) {
         turnId = entry.id;
         storedPrompt = undefined;
+        checkpointId = undefined;
       } else turnId ??= entry.id;
       const error = normalizeAgentError(storedError.message, storedError.diagnostics);
       const previous = items.findLastIndex((item) => item.turnId === turnId && item.type === "agentMessage");
@@ -162,13 +205,15 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
       const parsed = parseUserPrompt(textContent(message.content));
       const details = storedPrompt?.wirePromptHash === promptHash(textContent(message.content)) ? storedPrompt : undefined;
       storedPrompt = undefined;
+      const checkpoint = checkpointId;
+      checkpointId = undefined;
       const images = imageContent(message.content);
       const text = details?.prompt ?? parsed.text;
       const mentions = details?.mentions ?? parsed.mentions;
       const attachments = details?.attachments ?? parsed.attachments;
       const contexts = promptContextLabels(details?.attachmentContext ?? parsed.attachmentContext);
       if (text || images.length > 0 || attachments.length > 0) {
-        items.push({ id: entry.id, turnId, type: "userMessage", text, ...(mentions.length ? { mentions } : {}), ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}), ...(contexts.length ? { contexts } : {}), timestamp });
+        items.push({ id: entry.id, turnId, type: "userMessage", text, ...(mentions.length ? { mentions } : {}), ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}), ...(contexts.length ? { contexts } : {}), ...(checkpoint ? { checkpointId: checkpoint } : {}), timestamp });
         if (images.length) items.push({ id: `${entry.id}:images`, turnId, type: "imageRead", count: images.length, status: "completed", timestamp });
       }
       continue;
@@ -321,8 +366,22 @@ interface AgentManagerOptions {
   activeToolNames?: (project: ProjectState, mode: PlanMode, session: CodingSession) => string[];
   onRunCompleted?: (project: ProjectState) => void;
   onRunFinished?: (project: ProjectState, conversationId: string) => Promise<void>;
+  /** Takes the snapshot that closes a turn, and counts the files that differ between two snapshots. */
+  checkpoints?: {
+    snapshot(project: ProjectState): Promise<string>;
+    changed(project: ProjectState, from: string, to: string): Promise<number>;
+  };
   errorDiagnostics?: () => NonNullable<ThreadItemError["diagnostics"]>;
   onRunFailed?: (error: ThreadItemError, scope: { projectId: string; conversationId: string; turnId: string }) => void;
+}
+
+interface UndoneChanges {
+  /** The snapshot of the workspace as it was just before the undo. */
+  previous: string;
+  /** Paths that were put back. */
+  changed: string[];
+  /** Paths that were left as they are. */
+  conflicts: string[];
 }
 
 interface ManagedSession {
@@ -336,6 +395,16 @@ interface ActiveTurn {
   projectId: string;
   conversationId: string;
   turnId: string;
+  /** The checkpoint taken before the user message of this turn, once there is one. */
+  checkpointId?: string;
+  /** One for each user message of the run, in order. Undefined where the snapshot failed, so the turn before has no known end. */
+  checkpoints: Array<{ id: string; commit: string } | undefined>;
+  /** The session's last entry when the user message of this turn started. */
+  entryBeforeMessage?: string;
+  /** The run is over and only its end is still being recorded. */
+  ended?: boolean;
+  /** The entries of the conversation before the last message was edited, until the edited message starts. */
+  left?: readonly SessionEntry[];
   prompt: string;
   mentions: PluginMention[];
   images: PromptImage[];
@@ -386,6 +455,9 @@ export class AgentManager {
   readonly #steeringPrompts = new Map<string, QueuedPrompt[]>();
   readonly #queueMutations = new Map<string, Promise<void>>();
   readonly #revisions = new Set<string>();
+  /** The projects whose files a restore, an undo or a put-back is changing. No turn starts in them meanwhile. */
+  readonly #puttingBack = new Set<string>();
+  readonly #turnEndsRecorded = new Map<string, number>();
   readonly #questionnaires = new Map<string, PendingQuestionnaire>();
   readonly #invalidatedProjects = new Set<string>();
   #closing = false;
@@ -402,7 +474,8 @@ export class AgentManager {
   projectActivity(): ProjectAgentActivity[] {
     const statuses = new Map<string, ProjectAgentActivity["status"]>();
     for (const active of this.#activeTurns.values()) {
-      if (statuses.get(active.projectId) !== "running") statuses.set(active.projectId, active.status);
+      // A run that has ended is not at work any more, although its turn is not closed yet.
+      if (!active.ended && statuses.get(active.projectId) !== "running") statuses.set(active.projectId, active.status);
     }
     return [...statuses].map(([projectId, status]) => ({ projectId, status }));
   }
@@ -418,6 +491,9 @@ export class AgentManager {
 
   async cancelPlan(project: ProjectState, conversation: StoredConversation): Promise<void> {
     const key = conversationKey(project.id, conversation.summary.id);
+    // A conversation reads as idle from the end of its run, a little before its turn is closed. What is asked of it
+    // in between waits for that instead of being refused; with no such turn nothing is awaited.
+    if (this.#activeTurns.get(key)?.ended) await this.#turnClosed(key);
     if (this.#activeTurns.has(key)) throw new Error("Wait for the agent to finish before cancelling the plan");
     await this.#getSession(project, conversation);
     if (this.#activeTurns.has(key)) throw new Error("Wait for the agent to finish before cancelling the plan");
@@ -426,6 +502,7 @@ export class AgentManager {
 
   async refinePlan(project: ProjectState, conversation: StoredConversation): Promise<void> {
     const key = conversationKey(project.id, conversation.summary.id);
+    if (this.#activeTurns.get(key)?.ended) await this.#turnClosed(key);
     if (this.#activeTurns.has(key)) throw new Error("Wait for the agent to finish before refining the plan");
     await this.#getSession(project, conversation);
     if (this.#activeTurns.has(key)) throw new Error("Wait for the agent to finish before refining the plan");
@@ -436,9 +513,11 @@ export class AgentManager {
 
   async approvePlan(project: ProjectState, conversation: StoredConversation): Promise<{ turnId: string; result: Promise<AgentRunResult> }> {
     const key = conversationKey(project.id, conversation.summary.id);
+    if (this.#activeTurns.get(key)?.ended) await this.#turnClosed(key);
     if (this.#activeTurns.has(key)) throw new Error("Wait for the agent to finish before approving the plan");
     await this.#getSession(project, conversation);
     if (this.#activeTurns.has(key)) throw new Error("Wait for the agent to finish before approving the plan");
+    if (this.#puttingBack.has(project.id)) throw new Error(PUTTING_BACK);
     const state = this.planState(conversation);
     if (state.mode !== "awaiting_approval" || !state.plan) throw new Error("There is no plan waiting for approval");
     const turnId = randomUUID();
@@ -456,6 +535,7 @@ export class AgentManager {
     persist: () => void,
   ): Promise<void> {
     const key = conversationKey(projectId, conversationId);
+    if (this.#activeTurns.get(key)?.ended) await this.#turnClosed(key);
     if (this.#activeTurns.has(key) || this.#revisions.has(key)) throw new Error("Wait for the agent to finish before changing models");
     const managed = this.#sessions.get(key);
     if (!managed) {
@@ -473,6 +553,7 @@ export class AgentManager {
     persist: () => void,
   ): Promise<AgentReasoningLevel | undefined> {
     const key = conversationKey(projectId, conversationId);
+    if (this.#activeTurns.get(key)?.ended) await this.#turnClosed(key);
     if (this.#activeTurns.has(key) || this.#revisions.has(key)) throw new Error("Wait for the agent to finish before changing reasoning");
     const managed = this.#sessions.get(key);
     if (!managed) {
@@ -492,6 +573,7 @@ export class AgentManager {
     customInstructions?: string,
   ): Promise<{ turnId: string; result: Promise<AgentRunResult> }> {
     const key = conversationKey(project.id, conversation.summary.id);
+    if (this.#activeTurns.get(key)?.ended) await this.#turnClosed(key);
     if (this.#activeTurns.has(key) || this.#revisions.has(key)) {
       throw new Error("Wait for the agent to finish before compacting the session");
     }
@@ -523,6 +605,7 @@ export class AgentManager {
       preparingToolItemIds: new Map(),
       toolItemIds: new Map(),
       items: new Map(),
+      checkpoints: [],
     };
     this.#activeTurns.set(key, active);
     this.#setState(project.id, conversation.summary.id, { status: "running" });
@@ -576,11 +659,26 @@ export class AgentManager {
     if (!prompt.trim() && images.length === 0 && !attachmentContext.trim()) throw new Error("Prompt must not be empty");
     if (this.#closing) throw new Error("Agent manager is closing");
     const key = conversationKey(project.id, conversation.summary.id);
+    const active = this.#activeTurns.get(key);
+    if (active?.ended) {
+      // The conversation reads as idle, so this is a message for a new run and not one to queue in the run
+      // that is over. It waits in the conversation's queue, behind the mutation that closes the turn, and is
+      // then taken as if it had been sent a moment later.
+      const taken = this.#withQueueMutation(key, async () => {
+        // A turn that could not be closed is still there, and then nothing can start.
+        if (this.#activeTurns.get(key) === active) throw new Error("Agent run is no longer active");
+        const next = this.prompt(project, conversation, prompt, references, images, mode, mentions, turnId, attachmentContext, attachments);
+        // A message queued behind the new run waits for a later mutation of this queue, so that is handed on and not awaited here.
+        return { followUp: next.queued ? next.result : undefined };
+      });
+      return { turnId, queued: true, result: taken.then(({ followUp }) => followUp) };
+    }
+    // No turn may write files while a restore, an undo or a put-back changes them, whichever conversation asked for it.
+    if (this.#puttingBack.has(project.id)) throw new Error(PUTTING_BACK);
     if (this.#revisions.has(key)) throw new Error("A message edit is already starting in this conversation");
     const planState = this.planState(conversation);
     if (mode === "normal" && planState.mode !== "normal") throw new Error("Finish or cancel the current plan before continuing");
     if (mode === "planning" && planState.mode === "executing") throw new Error("The plan is already executing");
-    const active = this.#activeTurns.get(key);
     if (active) {
       if (mode !== "normal") throw new Error("Wait for the agent to finish before changing plan mode");
       if (active.status === "cancelling") throw new Error("Wait for the agent to stop");
@@ -599,22 +697,33 @@ export class AgentManager {
         );
         const queued = { turnId, prompt, mentions, references, images, attachments, attachmentContext: privateContext, wirePrompt, queuedEventId: event.id };
         this.#pendingPrompts.set(key, [...(this.#pendingPrompts.get(key) ?? []), queued]);
+        const unqueue = () => {
+          const pending = this.#pendingPrompts.get(key) ?? [];
+          this.#pendingPrompts.set(key, pending.filter((item) => item.turnId !== turnId));
+          this.events.publish(project.id, "prompt.removed", {}, { conversationId: conversation.summary.id, turnId });
+        };
         try {
           const managed = await this.#getSession(project, conversation);
           const current = this.#activeTurns.get(key);
           if (!current || current.status !== "running") {
             throw new Error("Agent run is no longer active");
           }
-          if (!managed.session.followUp) throw new Error("The current agent session cannot queue follow-ups");
-          await managed.session.followUp(wirePrompt, images.length ? images.map(toPiImage) : undefined);
+          if (!current.ended) {
+            if (!managed.session.followUp) throw new Error("The current agent session cannot queue follow-ups");
+            await managed.session.followUp(wirePrompt, images.length ? images.map(toPiImage) : undefined);
+            return {};
+          }
         } catch (cause) {
-          const pending = this.#pendingPrompts.get(key) ?? [];
-          this.#pendingPrompts.set(key, pending.filter((item) => item.turnId !== turnId));
-          this.events.publish(project.id, "prompt.removed", {}, { conversationId: conversation.summary.id, turnId });
+          unqueue();
           throw cause;
         }
+        // The run ended while the message was on its way here, so there is no run left to queue it behind. It is
+        // taken as a message for a new run, which waits behind the mutation that closes the turn. That one comes
+        // after this one, so its outcome is handed on and not awaited here.
+        unqueue();
+        return { held: this.prompt(project, conversation, prompt, references, images, mode, mentions, turnId, attachmentContext, attachments).result };
       });
-      return { turnId, queued: true, result };
+      return { turnId, queued: true, result: result.then(({ held }) => held) };
     }
 
     this.#pendingPrompts.delete(key);
@@ -629,9 +738,11 @@ export class AgentManager {
     validateReference: (reference: PromptReference) => Promise<PromptReference>,
   ): Promise<{ turnId: string; result: Promise<AgentRunResult> }> {
     if (!prompt.trim()) throw new Error("Prompt must not be empty");
-    if (this.#closing) throw new Error("Agent manager is closing");
     const key = conversationKey(project.id, conversation.summary.id);
+    if (this.#activeTurns.get(key)?.ended) await this.#turnClosed(key);
+    if (this.#closing) throw new Error("Agent manager is closing");
     if (this.planState(conversation).mode !== "normal") throw new Error("Finish or cancel the current plan before editing a message");
+    if (this.#puttingBack.has(project.id)) throw new Error(PUTTING_BACK);
     if (this.#activeTurns.has(key) || this.#revisions.has(key)) {
       throw new Error("Wait for the agent to finish before editing a message");
     }
@@ -647,6 +758,7 @@ export class AgentManager {
       const references = await Promise.all(previous.references.map(validateReference));
       const managed = await this.#getSession(project, conversation);
       if (!managed.session.navigateTree) throw new Error("The current agent session cannot edit messages");
+      const left = managed.session.sessionManager?.getBranch() ?? [];
       const navigation = await managed.session.navigateTree(previous.id, { summarize: false });
       if (navigation.cancelled) throw new Error("Message edit was cancelled");
       navigated = true;
@@ -667,6 +779,7 @@ export class AgentManager {
           previous.mentions.filter((mention) => hasPluginMentionToken(prompt, mention)),
           previous.attachmentContext,
           previous.attachments,
+          left,
         ),
       };
     } catch (cause) {
@@ -674,6 +787,129 @@ export class AgentManager {
       throw cause;
     } finally {
       this.#revisions.delete(key);
+      this.#flushInvalidatedProject(project.id);
+    }
+  }
+
+  /**
+   * Puts the workspace and the conversation back to just before the user
+   * message a checkpoint was taken for. `restoreFiles` restores the workspace
+   * to a snapshot and returns a snapshot of what it replaced.
+   */
+  async restoreCheckpoint(
+    project: ProjectState,
+    conversation: StoredConversation,
+    checkpointId: string,
+    restoreFiles: (commit: string) => Promise<string>,
+  ): Promise<void> {
+    await this.turnsClosed(project.id);
+    if (this.#closing) throw new Error("Agent manager is closing");
+    const key = conversationKey(project.id, conversation.summary.id);
+    if (this.planState(conversation).mode !== "normal") throw new Error("Finish or cancel the current plan before restoring");
+    if (this.#puttingBack.has(project.id)) throw new Error(PUTTING_BACK);
+    // Any conversation of the project may be changing the same workspace.
+    if (this.isProjectBusy(project.id)) throw new Error("Wait for the agent to finish before restoring");
+    if ((this.#pendingPrompts.get(key)?.length ?? 0) > 0 || (this.#steeringPrompts.get(key)?.length ?? 0) > 0) {
+      throw new Error("Remove queued messages before restoring");
+    }
+
+    this.#revisions.add(key);
+    this.#puttingBack.add(project.id);
+    try {
+      const { session } = await this.#getSession(project, conversation);
+      const sessionManager = session.sessionManager;
+      if (!session.navigateTree || !sessionManager) throw new Error("The current agent session cannot restore checkpoints");
+      const branch = sessionManager.getBranch();
+      const index = branch.findIndex((entry) => entry.id === checkpointId);
+      const entry = branch[index];
+      const checkpoint = entry?.type === "custom" && entry.customType === CHECKPOINT_ENTRY ? parseStoredCheckpoint(entry.data) : undefined;
+      const message = checkpoint && branch.slice(index + 1).find((candidate) => candidate.type === "message" && candidate.message.role === "user");
+      if (!checkpoint || !message) throw new CheckpointNotFoundError();
+
+      const undo = await restoreFiles(checkpoint.commit);
+      try {
+        const navigation = await session.navigateTree(message.id, { summarize: false });
+        if (navigation.cancelled) throw new Error("Restore was cancelled");
+        // Pi moves back in memory only; an entry after the move makes it the conversation's end on disk too.
+        sessionManager.appendCustomEntry(CHECKPOINT_RESTORED_ENTRY, { version: 1, checkpoint: checkpointId, undo });
+        carryTurnEnds(sessionManager, branch);
+        appendPlanState(sessionManager, { mode: "normal" });
+      } catch (cause) {
+        await restoreFiles(undo).catch(() => {});
+        this.#forgetConversation(key);
+        throw cause;
+      }
+    } finally {
+      this.#revisions.delete(key);
+      this.#puttingBack.delete(project.id);
+      this.#flushInvalidatedProject(project.id);
+    }
+  }
+
+  /**
+   * Takes back the file changes of the turn a checkpoint was taken for and
+   * leaves the conversation as it is. `undo` puts the files of the range
+   * back and returns the paths it changed and the ones it left as they are.
+   */
+  async undoCheckpoint(
+    project: ProjectState,
+    conversation: StoredConversation,
+    checkpointId: string,
+    undo: (range: TurnRange) => Promise<UndoneChanges>,
+  ): Promise<UndoneChanges> {
+    await this.turnsClosed(project.id);
+    if (this.#closing) throw new Error("Agent manager is closing");
+    const key = conversationKey(project.id, conversation.summary.id);
+    if (this.#puttingBack.has(project.id)) throw new Error(PUTTING_BACK);
+    // Any conversation of the project may be changing the same workspace.
+    if (this.isProjectBusy(project.id)) throw new Error("Wait for the agent to finish before undoing");
+
+    this.#revisions.add(key);
+    this.#puttingBack.add(project.id);
+    try {
+      const { session } = await this.#getSession(project, conversation);
+      const sessionManager = session.sessionManager;
+      const range = sessionManager && turnRange(sessionManager.getBranch(), checkpointId);
+      if (!sessionManager || !range) throw new CheckpointNotFoundError();
+
+      const result = await undo(range);
+      // An undo that only met files to leave alone has undone nothing, and can be asked for again.
+      if (result.changed.length > 0 || result.conflicts.length === 0) {
+        const undone: StoredCheckpointUndone = { version: 1, checkpoint: checkpointId, previous: result.previous, kept: result.conflicts.length };
+        sessionManager.appendCustomEntry(CHECKPOINT_UNDONE_ENTRY, undone);
+      }
+      if (result.changed.length > 0) {
+        try {
+          // Stored with the conversation and put before the model without starting a turn, so its next reply does not build on files that are gone.
+          await session.sendCustomMessage?.({ customType: UNDO_NOTE_MESSAGE, content: undoNote(result.changed), display: false }, { triggerTurn: false });
+        } catch {
+          console.warn("Could not tell the agent about the undo");
+        }
+      }
+      return result;
+    } finally {
+      this.#revisions.delete(key);
+      this.#puttingBack.delete(project.id);
+      this.#flushInvalidatedProject(project.id);
+    }
+  }
+
+  /**
+   * Puts the workspace back to where a restore or an undo that was cut off
+   * had started. That is no conversation's own doing and leaves all of them
+   * as they are. `restoreFiles` restores the workspace.
+   */
+  async restoreUnfinished(project: ProjectState, restoreFiles: () => Promise<void>): Promise<void> {
+    await this.turnsClosed(project.id);
+    if (this.#closing) throw new Error("Agent manager is closing");
+    if (this.#puttingBack.has(project.id)) throw new Error(PUTTING_BACK);
+    if (this.isProjectBusy(project.id)) throw new Error("Wait for the agent to finish before restoring");
+
+    this.#puttingBack.add(project.id);
+    try {
+      await restoreFiles();
+    } finally {
+      this.#puttingBack.delete(project.id);
       this.#flushInvalidatedProject(project.id);
     }
   }
@@ -691,6 +927,7 @@ export class AgentManager {
     mentions: PluginMention[] = [],
     attachmentContext = "",
     attachments: ConversationAttachment[] = [],
+    left?: readonly SessionEntry[],
   ): Promise<AgentRunResult> {
 
     const active: ActiveTurn = {
@@ -715,6 +952,8 @@ export class AgentManager {
       preparingToolItemIds: new Map(),
       toolItemIds: new Map(),
       items: new Map(),
+      checkpoints: [],
+      ...(left ? { left } : {}),
     };
     this.#activeTurns.set(conversationKey(project.id, active.conversationId), active);
     this.#setState(project.id, active.conversationId, { status: "running" });
@@ -815,7 +1054,8 @@ export class AgentManager {
   async cancel(projectId: string, conversationId: string, turnId: string): Promise<void> {
     const key = conversationKey(projectId, conversationId);
     const active = this.#activeTurns.get(key);
-    if (!active || active.turnId !== turnId || active.status !== "running") return;
+    // A run that is over has nothing left to stop.
+    if (!active || active.turnId !== turnId || active.status !== "running" || active.ended) return;
     active.status = "cancelling";
     this.#setState(projectId, conversationId, { status: "cancelling" });
     const managed = this.#sessions.get(key);
@@ -900,6 +1140,23 @@ export class AgentManager {
       }
       throw cause;
     }
+  }
+
+  /** Waits for the turn of a conversation whose run has ended to be closed. The daemon may have begun to close meanwhile. */
+  async #turnClosed(key: string): Promise<void> {
+    await this.#queueMutations.get(key);
+    if (this.#closing) throw new Error("Agent manager is closing");
+  }
+
+  /**
+   * Waits until the turns of a project that have ended are closed. A
+   * conversation reads as idle from the moment its turn ends, a little
+   * before the end is recorded and the project stops being busy. What the
+   * player asks for in between waits here instead of being refused.
+   */
+  async turnsClosed(projectId: string): Promise<void> {
+    const prefix = `${projectId}:`;
+    await Promise.all([...this.#queueMutations].flatMap(([key, mutation]) => key.startsWith(prefix) ? [mutation] : []));
   }
 
   #withQueueMutation<T>(key: string, mutate: () => Promise<T>): Promise<T> {
@@ -1033,6 +1290,7 @@ export class AgentManager {
       ...(active.images.length ? { images: active.images } : {}),
       ...(active.attachments.length ? { attachments: active.attachments } : {}),
       ...(contexts.length ? { contexts } : {}),
+      ...(active.checkpointId ? { checkpointId: active.checkpointId } : {}),
       ...timestamp,
     }, ...(active.images.length ? [{
       id: `${active.turnId}:images`,
@@ -1044,8 +1302,19 @@ export class AgentManager {
     }] : []), ...active.items.values()];
   }
 
+  /** The turn that is in progress. One whose run is over is not, though it is listed from memory until its end is recorded. */
   activeTurnId(projectId: string, conversationId: string): string | undefined {
-    return this.#activeTurns.get(conversationKey(projectId, conversationId))?.turnId;
+    const active = this.#activeTurns.get(conversationKey(projectId, conversationId));
+    return active?.ended ? undefined : active?.turnId;
+  }
+
+  /**
+   * How many turn ends were written for a conversation since the daemon
+   * started. One that is written late comes with no run starting or ending,
+   * so this is what tells a reader of the session file that it changed.
+   */
+  turnEndsRecorded(projectId: string, conversationId: string): number {
+    return this.#turnEndsRecorded.get(conversationKey(projectId, conversationId)) ?? 0;
   }
 
   activeStart(projectId: string, conversationId: string): { id: number; timestamp: string } | undefined {
@@ -1081,9 +1350,14 @@ export class AgentManager {
     const projectId = project.id;
     this.#runs.delete(run);
     const key = conversationKey(projectId, active.conversationId);
+    // Set together with queueing the mutation that closes the turn, so whatever then waits in this queue comes after it.
+    // Since the event that ended the run nothing from outside has had a turn: only promise callbacks ran in between.
+    active.ended = true;
     await this.#withQueueMutation(key, async () => {
       if (this.#activeTurns.get(key) !== active) return;
-      await this.options.onRunFinished?.(project, active.conversationId);
+      // The turn is still active, so no prompt, edit or restore moves the conversation on before its end is written.
+      const ends = await this.#turnEnds(project, active);
+      this.#recordTurnEnds(projectId, active, ends);
       this.#activeTurns.delete(key);
       const questionnaire = this.#questionnaires.get(key);
       if (questionnaire) {
@@ -1113,6 +1387,82 @@ export class AgentManager {
       if (result === "completed" && !this.#closing) this.options.onRunCompleted?.(project);
       this.#flushInvalidatedProject(projectId);
     });
+  }
+
+  /**
+   * Cleans up after a run and works out where each of its turns ended. The
+   * last one ends with the workspace as it is now; an earlier one ends where
+   * the next message's checkpoint was taken. A turn whose end is not known
+   * is left out.
+   *
+   * Messages, restores and undos wait for the turn to be closed, so the
+   * snapshot gets CLOSING_MS and the turn is then closed without its ends.
+   * The cleanup is waited for however long it takes: the playtest driver
+   * gives up on a request by itself, and a run that started before the
+   * cleanup of the one before it was over could have its game windows closed
+   * by it.
+   */
+  async #turnEnds(project: ProjectState, active: ActiveTurn): Promise<StoredTurnEnd[]> {
+    try {
+      await this.options.onRunFinished?.(project, active.conversationId);
+    } catch {
+      // The conversation reads as idle from the end of the run. With the turn left open nothing could be asked of
+      // it until the daemon starts again, so a cleanup that fails does not stop the turn from being closed.
+      console.warn("Could not clean up after the run");
+    }
+    const checkpoints = this.options.checkpoints;
+    if (!checkpoints || !active.checkpoints.some(Boolean)) return [];
+    const found = async (): Promise<StoredTurnEnd[]> => {
+      try {
+        const last = await checkpoints.snapshot(project);
+        const ends: StoredTurnEnd[] = [];
+        for (const [index, checkpoint] of active.checkpoints.entries()) {
+          const commit = index === active.checkpoints.length - 1 ? last : active.checkpoints[index + 1]?.commit;
+          if (!checkpoint || !commit) continue;
+          ends.push({ version: 1, checkpoint: checkpoint.id, commit, files: await checkpoints.changed(project, checkpoint.commit, commit) });
+        }
+        return ends;
+      } catch {
+        // The run ends all the same; its turns only have no changes to show and nothing to undo.
+        console.warn("Could not take the snapshot that closes the turn");
+        return [];
+      }
+    };
+    // Asked for while the turn is still open, the snapshot is where the run ended whenever it comes back: the store
+    // takes one snapshot of a project at a time, so the checkpoint of the next turn waits behind it.
+    const work = found();
+    const ends = await within(work, CLOSING_MS);
+    if (ends !== TOO_LONG) return ends;
+    console.warn("Could not close the turn in time");
+    // The ends are recorded when they are there, wherever the conversation has got to; they are found by the
+    // checkpoint they name.
+    void work.then((late) => { if (!this.#closing) this.#recordTurnEnds(project.id, active, late, true); });
+    return [];
+  }
+
+  /**
+   * Stores the ends of a run's turns and tells the conversation. Nothing is
+   * awaited, so a reader sees the turn gone and its end together. Ends that
+   * come late may find the session let go, and are then written to the
+   * conversation's file if that is still there.
+   */
+  #recordTurnEnds(projectId: string, active: ActiveTurn, ends: StoredTurnEnd[], late = false): void {
+    if (ends.length === 0) return;
+    const key = conversationKey(projectId, active.conversationId);
+    try {
+      const { sessionPath } = active.conversation;
+      const sessionManager = this.#sessions.get(key)?.session.sessionManager
+        ?? (late && !this.#sessionLoads.has(key) && existsSync(sessionPath) ? SessionManager.open(sessionPath, sessionDirectory(active.project), active.project.workspacePath) : undefined);
+      if (!sessionManager) return;
+      for (const end of ends) {
+        sessionManager.appendCustomEntry(TURN_END_ENTRY, end);
+        this.#turnEndsRecorded.set(key, (this.#turnEndsRecorded.get(key) ?? 0) + 1);
+        // Turn ids differ between the live and the stored conversation; the checkpoint id does not.
+        this.events.publish(projectId, "checkpoint.completed", { checkpointId: end.checkpoint, files: end.files }, { conversationId: active.conversationId });
+      }
+    } catch {
+      console.warn("Could not save where the turn ended");
+    }
   }
 
   #finishCompact(project: ProjectState, active: ActiveTurn, run: Promise<AgentRunResult>, outcome: CompactRunOutcome): void {
@@ -1194,6 +1544,11 @@ export class AgentManager {
     if (event.type === "message_start" && isUserMessage(event.message)) {
       active.userMessageStarted = true;
       const key = conversationKey(projectId, conversationId);
+      const sessionManager = this.#sessions.get(key)?.session.sessionManager;
+      // The edit of a message holds from here on.
+      if (active.left && sessionManager) carryTurnEnds(sessionManager, active.left, true);
+      active.left = undefined;
+      active.entryBeforeMessage = sessionManager?.getBranch().at(-1)?.id;
       const steering = this.#steeringPrompts.get(key) ?? [];
       const pending = this.#pendingPrompts.get(key) ?? [];
       const started = steering[0] ?? pending[0];
@@ -1204,6 +1559,7 @@ export class AgentManager {
       if (active.images.length && active.startedEventId !== undefined) this.events.expireThrough(projectId, active.startedEventId);
       if (started.images.length) this.events.expireThrough(projectId, started.queuedEventId);
       active.turnId = started.turnId;
+      active.checkpointId = undefined;
       active.prompt = started.prompt;
       active.mentions = started.mentions;
       active.images = started.images;
@@ -1329,6 +1685,22 @@ export class AgentManager {
       active.toolItemIds.set(toolCall.id, itemId);
       const args = toolArguments(toolCall.name, toolCall.arguments);
       this.#updateItem(projectId, active, toolThreadItem(active.turnId, itemId, toolCall.id, toolCall.name, args, "preparing"));
+    } else if (event.type === "message_end" && isUserMessage(event.message)) {
+      // The checkpoint extension has run by now and Pi has not stored the message yet, so the entry is among those
+      // added since the message started; the end of an earlier turn may have been recorded after it. An entry
+      // that was there already is not this message's: after an edit the last one is the checkpoint of the message
+      // that was replaced, and stays the last one when the snapshot then fails.
+      const branch = this.#sessions.get(conversationKey(projectId, conversationId))?.session.sessionManager?.getBranch() ?? [];
+      const before = branch.findIndex((candidate) => candidate.id === active.entryBeforeMessage);
+      // Where the message started is not known in a session that was empty then; its checkpoint is the last entry.
+      const added = before < 0 ? branch.slice(-1) : branch.slice(before + 1);
+      const entry = added.findLast((candidate) => candidate.type === "custom" && candidate.customType === CHECKPOINT_ENTRY);
+      const checkpoint = entry?.type === "custom" ? parseStoredCheckpoint(entry.data) : undefined;
+      active.checkpoints.push(entry && checkpoint ? { id: entry.id, commit: checkpoint.commit } : undefined);
+      if (entry && checkpoint) {
+        active.checkpointId = entry.id;
+        this.events.publish(projectId, "checkpoint.created", { checkpointId: entry.id }, eventScope(active));
+      }
     } else if (event.type === "message_end" && isAssistantMessage(event.message)) {
       const status = threadItemStatus(event.message.stopReason);
       active.lastError = event.message.stopReason === "error" ? this.#turnError(active, assistantMessageError(event.message)) : undefined;
@@ -1579,7 +1951,7 @@ export class AgentManager {
 
   isProjectBusy(projectId: string): boolean {
     const prefix = `${projectId}:`;
-    return [...this.#activeTurns.keys(), ...this.#revisions].some((key) => key.startsWith(prefix));
+    return this.#puttingBack.has(projectId) || [...this.#activeTurns.keys(), ...this.#revisions].some((key) => key.startsWith(prefix));
   }
 
   invalidateProjectSessions(projectId: string): void {
@@ -1619,9 +1991,77 @@ export class AgentManager {
   }
 }
 
+/**
+ * Writes again where the turns that are still part of a conversation ended,
+ * as the entries it left behind said. The end of a turn is recorded when its
+ * run ends, which is after a message that was queued behind it, and a late
+ * end may come after the next message too. Going back to before such a
+ * message would otherwise take the changes of the turn before it away.
+ *
+ * That a turn was undone is carried over only when the files stayed as they
+ * are, as when a message is edited. A restore puts them back to where that
+ * undo had not happened yet, so there the turn can be undone again. The note
+ * that told the model of the undo is left behind either way.
+ */
+function carryTurnEnds(sessionManager: NonNullable<CodingSession["sessionManager"]>, left: readonly SessionEntry[], undone = false): void {
+  const kept = sessionManager.getBranch();
+  const ids = new Set(kept.map((entry) => entry.id));
+  // The turns that stay are the checkpoints whose message is still there; the last checkpoint may have lost its own.
+  const turns = new Set<string>();
+  const ended = new Set<string>();
+  let checkpoint: string | undefined;
+  for (const entry of kept) {
+    if (entry.type === "message" && entry.message.role === "user") {
+      if (checkpoint) turns.add(checkpoint);
+      checkpoint = undefined;
+    } else if (entry.type === "custom" && entry.customType === CHECKPOINT_ENTRY) {
+      checkpoint = entry.id;
+    } else if (entry.type === "custom" && entry.customType === TURN_END_ENTRY) {
+      const end = parseStoredTurnEnd(entry.data);
+      if (end) ended.add(end.checkpoint);
+    }
+  }
+  for (const entry of left) {
+    if (entry.type !== "custom" || entry.customType !== TURN_END_ENTRY || ids.has(entry.id)) continue;
+    const end = parseStoredTurnEnd(entry.data);
+    if (!end || !turns.has(end.checkpoint) || ended.has(end.checkpoint)) continue;
+    sessionManager.appendCustomEntry(TURN_END_ENTRY, end);
+    ended.add(end.checkpoint);
+  }
+  if (!undone) return;
+  // The last undo of a turn says how it stands, and is read after the end of that turn.
+  const last = new Map<string, StoredCheckpointUndone>();
+  for (const entry of left) {
+    if (entry.type !== "custom" || entry.customType !== CHECKPOINT_UNDONE_ENTRY || ids.has(entry.id)) continue;
+    const stored = parseStoredCheckpointUndone(entry.data);
+    if (stored && turns.has(stored.checkpoint) && ended.has(stored.checkpoint)) last.set(stored.checkpoint, stored);
+  }
+  for (const stored of last.values()) sessionManager.appendCustomEntry(CHECKPOINT_UNDONE_ENTRY, stored);
+}
+
 const REFERENCE_MARKER = "<workspace-file-references>";
 const LOCAL_ATTACHMENTS_MARKER = "<local-attachments>";
 const USER_PROMPT_ENTRY = "ohmygame-user-prompt";
+const UNDO_NOTE_MESSAGE = "ohmygame-checkpoint-undone-note";
+const UNDO_NOTE_PATHS = 20;
+/** What is answered to a message, an edit, a restore or an undo that comes while the project's files are being put back. */
+const PUTTING_BACK = "Wait until the project's files have been put back";
+// How long the end of a run waits for its cleanup and for the snapshot that closes it. A snapshot reads only what
+// changed since the one before it, some 60 MB a second on a laptop disk, so this is time for a turn that wrote more
+// than a gigabyte. The turn is then closed without an end, and gets one later if the snapshot does come back.
+const CLOSING_MS = 30_000;
+/** What `within` gives when the work has not come back in time. */
+const TOO_LONG = Symbol("too long");
+
+/** Gives what the work gives, or `TOO_LONG` when it has not come back after `ms`. The work itself goes on. */
+async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TOO_LONG> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<typeof TOO_LONG>((resolve) => { timer = setTimeout(() => resolve(TOO_LONG), ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 interface StoredPromptDetails {
   version: 1;
@@ -1631,6 +2071,12 @@ interface StoredPromptDetails {
   references: PromptReference[];
   attachments: ConversationAttachment[];
   attachmentContext: string;
+}
+
+/** What the model is told after an undo. A long list is cut short: the model can look at the workspace itself. */
+function undoNote(paths: readonly string[]): string {
+  const more = paths.length - UNDO_NOTE_PATHS;
+  return `The user undid the file changes of an earlier turn, so these files are back to how they were before that turn: ${paths.slice(0, UNDO_NOTE_PATHS).join(", ")}${more > 0 ? ` and ${more} more` : ""}.`;
 }
 
 function promptWithReferences(prompt: string, references: PromptReference[]): string {
@@ -2207,12 +2653,14 @@ export async function createPiSession(
   agentDir = process.env.PI_CODING_AGENT_DIR ?? path.resolve(process.cwd(), ".data", "pi-agent"),
   resolvePluginSkills?: () => Promise<PluginSkillRegistration[]>,
   mcp?: { factory: ExtensionFactory; host: PluginMcpHost },
+  checkpointFactory?: ExtensionFactory,
 ): Promise<CodingSession> {
   // Trusted-local phase: cwd guides Pi but is not an OS security boundary.
   const { resourceLoader, sessionSettings, pluginSkills } = await createPiResourceLoader(project.workspacePath, agentDir, {
     resolvePluginSkills,
     appendSystemPrompt: appendSystemPromptForProject(project),
     mcpFactory: mcp?.factory,
+    checkpointFactory,
   });
   const images = new SessionImages(sessionManager, path.join(agentDir, "request-image-previews"));
   const { session } = await createAgentSession({
@@ -2269,6 +2717,7 @@ async function createPiResourceLoader(
     resolvePluginSkills?: () => Promise<PluginSkillRegistration[]>;
     appendSystemPrompt?: readonly string[];
     mcpFactory?: ExtensionFactory;
+    checkpointFactory?: ExtensionFactory;
   } = {},
 ): Promise<{ resourceLoader: DefaultResourceLoader; sessionSettings: SettingsManager; pluginSkills: PluginSkillRegistration[] }> {
   await ensureOhMyGamePiEnvironment(agentDir);
@@ -2285,6 +2734,7 @@ async function createPiResourceLoader(
     agentDir,
     settingsManager: sessionSettings,
     extensionFactories: [{ name: "openrouter-attribution", factory: openRouterAttributionExtension, hidden: true },
+      ...(options.checkpointFactory ? [{ name: "checkpoints", factory: options.checkpointFactory, hidden: true }] : []),
       ...(options.mcpFactory ? [{ name: "plugin-mcp", factory: options.mcpFactory, hidden: true }] : [])],
     additionalSkillPaths: pluginSkills.map((skill) => skill.path),
     appendSystemPrompt: options.appendSystemPrompt

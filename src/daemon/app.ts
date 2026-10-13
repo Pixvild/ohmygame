@@ -11,9 +11,9 @@ import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SettingsManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import { AGENT_REASONING_LEVELS, IMAGE_ASPECT_RATIOS, IMAGE_MAX_REFERENCE_IMAGES, IMAGE_OUTPUT_COUNTS, IMAGE_RESOLUTIONS, IMAGE_SIZES, PROJECT_TYPE_IDS, TOOL_IDS, VIDEO_ASPECT_RATIOS, VIDEO_RESOLUTIONS, type AgentModelRef, type AgentReasoningLevel, type AnswerQuestionnaireRequest, type AssetCanvasTextGenerationRequest, type ConversationAgentSettings, type ConversationCapabilities, type ConversationDetail, type CreateConversationRequest, type CreateLibraryImageRequest, type CreateProjectRequest, type LibraryUploadMediaType, type MediaModelDefaults, type ModelAuthMethod, type ProjectRunSettings, type ProjectState, type ProjectType, type PromptImage, type PromptRequest, type PublishProjectRequest, type RenameConversationRequest, type ReviseLastPromptRequest, type RunToolRequest, type RunVideoToolRequest, type RuntimeEvent, type SetConversationModelRequest, type SetConversationReasoningRequest, type UpdateAgentDefaultsRequest } from "../shared/contracts.js";
+import { AGENT_REASONING_LEVELS, IMAGE_ASPECT_RATIOS, IMAGE_MAX_REFERENCE_IMAGES, IMAGE_OUTPUT_COUNTS, IMAGE_RESOLUTIONS, IMAGE_SIZES, PROJECT_TYPE_IDS, TOOL_IDS, VIDEO_ASPECT_RATIOS, VIDEO_RESOLUTIONS, type AgentModelRef, type AgentReasoningLevel, type AnswerQuestionnaireRequest, type AssetCanvasTextGenerationRequest, type CheckpointChangeItem, type CheckpointFile, type CheckpointFileView, type CheckpointUndoRequest, type CheckpointUndoResponse, type ConversationAgentSettings, type ConversationCapabilities, type ConversationDetail, type CreateConversationRequest, type CreateLibraryImageRequest, type CreateProjectRequest, type LibraryUploadMediaType, type MediaModelDefaults, type ModelAuthMethod, type ProjectRunSettings, type ProjectState, type ProjectType, type PromptImage, type PromptRequest, type PublishProjectRequest, type RenameConversationRequest, type ReviseLastPromptRequest, type RunToolRequest, type RunVideoToolRequest, type RuntimeEvent, type SetConversationModelRequest, type SetConversationReasoningRequest, type UpdateAgentDefaultsRequest } from "../shared/contracts.js";
 import { findAgentModel, preferredAgentModel } from "../shared/agent-models.js";
 import { isWebRuntimeProjectType, supportsWebPreview, webPreviewSettingsChanged } from "../shared/project-runtime.js";
 import { groupThreadItems } from "../shared/turns.js";
@@ -22,7 +22,9 @@ import { EXAMPLE_ID_PATTERN } from "../shared/examples.js";
 import { PUBLISH_GAME_TITLE_MAX_LENGTH } from "../shared/publish-v1.js";
 import { clampReasoningLevel, parseReasoningLevel, supportedReasoningLevels } from "../shared/reasoning.js";
 import { matchesBearerToken } from "./access.js";
-import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
+import { AgentManager, CheckpointNotFoundError, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
+import { TURN_END_ENTRY, checkpointExtension, turnRange } from "./checkpoint-extension.js";
+import { CheckpointConflictError, CheckpointIncompleteError, CheckpointStore } from "./checkpoints.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
 import { ConversationImageStore } from "./conversation-images.js";
@@ -334,6 +336,14 @@ const reviseLastPromptSchema = {
   },
 } as const;
 
+const undoCheckpointSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    properties: { conflicts: { enum: ["keep", "overwrite"] }, expected: { type: "array", items: { type: "string" } } },
+  },
+} as const;
+
 const answerQuestionnaireSchema = {
   body: {
     type: "object",
@@ -388,6 +398,8 @@ const setConversationReasoningSchema = {
   },
 } as const;
 const MAX_PROJECT_COVER_BYTES = 5 * 1024 * 1024;
+// As much of a file as the code view shows (`readWorkspaceFile`), so a changed file reads the same in both places.
+const MAX_CHECKPOINT_FILE_BYTES = 256 * 1024;
 const MAX_LIBRARY_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_LIBRARY_UPLOAD_BYTES = 200 * 1024 * 1024;
 const LIBRARY_UPLOAD_MEDIA_TYPES = new Set<LibraryUploadMediaType>([
@@ -529,6 +541,7 @@ export function createApp(options: AppOptions = {}) {
     fetch: options.publishFetch,
   });
   const previews = new PreviewManager(events);
+  const checkpoints = new CheckpointStore();
   const webSearchSettings = new WebSearchSettingsStore(dataDirectory);
   const networkSettings = options.networkSettings ?? new NetworkSettingsService(dataDirectory);
   const meshySettings = new MediaProviderKeyStore(dataDirectory, "meshy", "Meshy");
@@ -733,6 +746,7 @@ export function createApp(options: AppOptions = {}) {
         piAgentDirectory,
         () => resolvePluginSkills([bundledPlugins, localPlugins], pluginSettings, project.type),
         Object.keys(effectiveMcp.mcpServers).length ? { factory: await pluginCapabilities.host.extension(effectiveMcp), host: pluginCapabilities.host } : undefined,
+        supportsCheckpoints(project) ? checkpointExtension(() => checkpoints.snapshot(project)) : undefined,
       );
     }),
     activeToolNames: (project, mode, session) => {
@@ -742,12 +756,26 @@ export function createApp(options: AppOptions = {}) {
     onRunFinished: async (project, conversationId) => {
       await agentPlaytests.get(`${project.id}:${conversationId}`)?.cleanup();
     },
+    checkpoints: {
+      snapshot: (project) => checkpoints.snapshot(project),
+      changed: async (project, from, to) => (await checkpoints.diff(project, from, to)).length,
+    },
     onRunCompleted: (project) => {
       void previews.automatic(project, true).catch(() => {});
     },
   });
   const invalidatePluginSessions = () => {
     for (const project of projects.list()) agents.invalidateProjectSessions(project.id);
+  };
+  /**
+   * What follows when files were put back outside a turn. As after a turn of
+   * the Agent, a running game is left running: it follows the files by
+   * itself. One that is not running is looked at again and may start.
+   */
+  const workspaceChanged = async (project: ProjectState) => {
+    await projects.refreshPreviewReadiness(project.id);
+    await projects.touch(project.id);
+    void previews.automatic(project, true).catch(() => {});
   };
   const app = Fastify({
     logger: options.logger ?? false,
@@ -1442,6 +1470,8 @@ export function createApp(options: AppOptions = {}) {
   app.delete<{ Params: { projectId: string } }>("/projects/:projectId", async (request, reply) => {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
+    // A project reads as idle from the end of a run, a little before its turn is closed; what is asked of it then waits.
+    await agents.turnsClosed(project.id);
     if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before deleting this project" });
     await previews.forget(project);
     agents.forgetProject(project.id);
@@ -1453,6 +1483,8 @@ export function createApp(options: AppOptions = {}) {
     }
     await conversationImages.removeProject(project.id);
     await canvasStore.cancelProject(project.id);
+    // A snapshot that is still being taken writes into the folder that is about to be removed.
+    await checkpoints.settled(project);
     await projects.delete(project.id);
     return reply.code(204).send();
   });
@@ -2369,13 +2401,32 @@ export function createApp(options: AppOptions = {}) {
           ),
         } : {}),
       };
-      const branch = (await conversations.view(project, conversation)).getBranch();
+      // A turn that is closed while the file is read writes its end after the read began. The answer would then
+      // be past the event that says what the turn changed without holding it, so the file is read again when the
+      // conversation's run is no longer the one it was. Each time it is read twice: a read can be answered with
+      // one that began earlier, and only the second is sure to have begun after the run was looked at.
+      // The end of a turn whose snapshot took long is written with no run starting or ending, so that is looked at too.
+      let branch: SessionEntry[];
+      let run = agents.activeStart(project.id, conversation.summary.id);
+      let ends = agents.turnEndsRecorded(project.id, conversation.summary.id);
+      for (;;) {
+        await conversations.view(project, conversation);
+        branch = (await conversations.view(project, conversation)).getBranch();
+        const now = agents.activeStart(project.id, conversation.summary.id);
+        const endsNow = agents.turnEndsRecorded(project.id, conversation.summary.id);
+        if ((!run || run.id === now?.id) && ends === endsNow) break;
+        run = now;
+        ends = endsNow;
+      }
       // Capture live state and its cursor together after all asynchronous reads.
       const currentRun = agents.activeStart(project.id, conversation.summary.id);
       const activeItems = agents.activeItems(project.id, conversation.summary.id);
       const activePlanState = agents.planState(conversation);
+      // The end of an earlier turn is kept whatever its time: it is written when a run is over, in the very
+      // millisecond in which a message that waited for that starts the next run.
+      const before = (entry: SessionEntry) => !currentRun || entry.timestamp < currentRun.timestamp || (entry.type === "custom" && entry.customType === TURN_END_ENTRY);
       const loadedItems = [
-        ...conversationItems(currentRun ? branch.filter((entry) => entry.timestamp < currentRun.timestamp) : branch, !currentRun),
+        ...conversationItems(branch.filter(before), !currentRun),
         // A reset must be a complete snapshot. Replaying from the active turn's
         // start is unsafe once a chat produces more events than the replay buffer.
         ...(currentRun ? activeItems : []),
@@ -2821,6 +2872,168 @@ export function createApp(options: AppOptions = {}) {
     },
   );
 
+  app.post<{ Params: { projectId: string; conversationId: string; checkpointId: string } }>(
+    "/projects/:projectId/conversations/:conversationId/checkpoints/:checkpointId/restore",
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      const conversation = await conversations.get(project, request.params.conversationId);
+      if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+      if (!supportsCheckpoints(project)) return reply.code(404).send({ error: "Checkpoint not found" });
+      const { checkpointId } = request.params;
+      try {
+        await agents.restoreCheckpoint(project, conversation, checkpointId, async (commit) => (await checkpoints.restore(project, commit)).previous);
+      } catch (cause) {
+        if (cause instanceof CheckpointNotFoundError) return reply.code(404).send({ error: cause.message });
+        if (cause instanceof CheckpointIncompleteError) return reply.code(409).send({ error: cause.message, code: "CHECKPOINT_INCOMPLETE" });
+        return reply.code(409).send({ error: cause instanceof Error ? cause.message : String(cause) });
+      }
+      // A running game serves the files it started with; the next preview starts from the restored ones.
+      await previews.stop(project);
+      await projects.refreshPreviewReadiness(project.id);
+      await projects.touch(project.id);
+      events.publish(project.id, "workspace.restored", { checkpointId }, { conversationId: conversation.summary.id });
+      return reply.code(204).send();
+    },
+  );
+
+  app.get<{ Params: { projectId: string; conversationId: string; checkpointId: string } }>(
+    "/projects/:projectId/conversations/:conversationId/checkpoints/:checkpointId/changes",
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      const conversation = await conversations.get(project, request.params.conversationId);
+      if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+      // The app reads its lists again when a run ends, a little before the turn is closed and the project stops
+      // being busy. Answered at once, such a list would lack how the files stand, and nothing asks for it again.
+      await agents.turnsClosed(project.id);
+      // A read can be answered with one that began earlier, before the end of the turn was written; the second cannot.
+      await conversations.view(project, conversation);
+      const range = supportsCheckpoints(project) ? turnRange((await conversations.view(project, conversation)).getBranch(), request.params.checkpointId) : undefined;
+      if (!range) return reply.code(404).send({ error: "Checkpoint not found" });
+      try {
+        const changes: CheckpointChangeItem[] = await checkpoints.diff(project, range.before, range.after);
+        // While the Agent works the files do not hold still, so how they stand is left out.
+        if (agents.isProjectBusy(project.id)) return { changes };
+        const now = await checkpoints.snapshot(project);
+        const differing = async (commit: string) => new Set((await checkpoints.diff(project, commit, now)).map((change) => change.path));
+        const [sinceEnd, sinceStart] = await Promise.all([differing(range.after), differing(range.before)]);
+        const state = (file: string): CheckpointChangeItem["state"] => !sinceEnd.has(file) ? "applied" : !sinceStart.has(file) ? "undone" : "changed";
+        return { changes: changes.map((change) => ({ ...change, state: state(change.path) })) };
+      } catch (cause) {
+        // The store may not hold a snapshot the conversation names, or may not be able to read the workspace.
+        return reply.code(409).send({ error: cause instanceof Error ? cause.message : String(cause) });
+      }
+    },
+  );
+
+  app.get<{ Params: { projectId: string; conversationId: string; checkpointId: string }; Querystring: { path?: string } }>(
+    "/projects/:projectId/conversations/:conversationId/checkpoints/:checkpointId/file",
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      const conversation = await conversations.get(project, request.params.conversationId);
+      if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+      if (!request.query.path) return reply.code(400).send({ error: "File path is required" });
+      const range = supportsCheckpoints(project) ? turnRange((await conversations.view(project, conversation)).getBranch(), request.params.checkpointId) : undefined;
+      if (!range) return reply.code(404).send({ error: "Checkpoint not found" });
+      try {
+        // Only the files of the turn are read: a path is known to be one of them, and nothing else is loaded into memory.
+        const change = (await checkpoints.diff(project, range.before, range.after)).find((candidate) => candidate.path === request.query.path);
+        if (!change) return reply.code(404).send({ error: "File not found" });
+        const media = workspaceMediaInfo(change.path);
+        const side = async (commit: string, held: boolean): Promise<CheckpointFile | null> => {
+          if (!held) return null;
+          if (media) return { binary: true };
+          const content = await checkpoints.read(project, commit, change.path);
+          return content ? checkpointFile(content) : null;
+        };
+        return {
+          path: change.path,
+          before: await side(range.before, change.kind !== "added"),
+          after: await side(range.after, change.kind !== "removed"),
+        } satisfies CheckpointFileView;
+      } catch (cause) {
+        return reply.code(409).send({ error: cause instanceof Error ? cause.message : String(cause) });
+      }
+    },
+  );
+
+  app.post<{ Params: { projectId: string; conversationId: string; checkpointId: string }; Body: CheckpointUndoRequest }>(
+    "/projects/:projectId/conversations/:conversationId/checkpoints/:checkpointId/undo",
+    { schema: undoCheckpointSchema },
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      const conversation = await conversations.get(project, request.params.conversationId);
+      if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+      if (!supportsCheckpoints(project)) return reply.code(404).send({ error: "Checkpoint not found" });
+      const { checkpointId } = request.params;
+      const { conflicts, expected } = request.body;
+      if (conflicts === "overwrite" && !expected) return reply.code(400).send({ error: "The files to overwrite are required" });
+      let undone: CheckpointUndoResponse;
+      try {
+        undone = await agents.undoCheckpoint(project, conversation, checkpointId, async (range) => {
+          // The player agreed to overwrite the files they were shown. The store overwrites only when that list
+          // names every file in the way, and refuses with the list as it is now otherwise.
+          const result = await checkpoints.undo(project, range, { conflicts: conflicts === "overwrite" ? { overwrite: expected ?? [] } : conflicts });
+          // Told to overwrite, the store lists the files it overwrote as conflicts too; here a conflict is a file left as it is.
+          return { ...result, conflicts: result.conflicts.filter((file) => !result.changed.includes(file)) };
+        });
+      } catch (cause) {
+        if (cause instanceof CheckpointNotFoundError) return reply.code(404).send({ error: cause.message });
+        if (cause instanceof CheckpointConflictError) {
+          // Files that no choice can put back are what stands against overwriting, so asking again does not help.
+          const blocked = conflicts === "overwrite" && cause.blocked.length > 0;
+          return reply.code(409).send({ error: cause.message, conflicts: blocked ? cause.blocked : cause.conflicts, ...(blocked ? { blocked: true } : {}) });
+        }
+        if (cause instanceof CheckpointIncompleteError) return reply.code(409).send({ error: cause.message, code: "CHECKPOINT_INCOMPLETE" });
+        return reply.code(409).send({ error: cause instanceof Error ? cause.message : String(cause) });
+      }
+      if (undone.changed.length > 0) await workspaceChanged(project);
+      // Published whenever the turn was marked as undone, also when every file was already back: the app marks it from this event.
+      if (undone.changed.length > 0 || undone.conflicts.length === 0) {
+        events.publish(project.id, "workspace.undone", { checkpointId, kept: undone.conflicts.length }, { conversationId: conversation.summary.id });
+      }
+      return { changed: undone.changed, conflicts: undone.conflicts } satisfies CheckpointUndoResponse;
+    },
+  );
+
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/checkpoints/unfinished", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    return { unfinished: supportsCheckpoints(project) && Boolean(await checkpoints.unfinished(project)) };
+  });
+
+  app.post<{ Params: { projectId: string } }>("/projects/:projectId/checkpoints/unfinished/restore", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    const previous = supportsCheckpoints(project) ? await checkpoints.unfinished(project) : undefined;
+    if (!previous) return reply.code(404).send({ error: "No restore or undo was left unfinished" });
+    try {
+      await agents.restoreUnfinished(project, async () => { await checkpoints.restore(project, previous); });
+    } catch (cause) {
+      return reply.code(409).send({ error: cause instanceof Error ? cause.message : String(cause) });
+    }
+    await workspaceChanged(project);
+    events.publish(project.id, "workspace.restored", {});
+    return reply.code(204).send();
+  });
+
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/checkpoints/unfinished/changes", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    const previous = supportsCheckpoints(project) ? await checkpoints.unfinished(project) : undefined;
+    if (!previous) return reply.code(404).send({ error: "No restore or undo was left unfinished" });
+    try {
+      // What putting the files back would do to the workspace as it is now: an added file comes back, a removed one goes.
+      const changes: CheckpointChangeItem[] = await checkpoints.diff(project, await checkpoints.snapshot(project), previous);
+      return { changes };
+    } catch (cause) {
+      return reply.code(409).send({ error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  });
+
   app.delete<{ Params: { projectId: string; conversationId: string; turnId: string } }>(
     "/projects/:projectId/conversations/:conversationId/queue/:turnId",
     async (request, reply) => {
@@ -2878,6 +3091,7 @@ export function createApp(options: AppOptions = {}) {
       if (!localPublisher && request.body.accessToken === LOCAL_DEBUG_ACCESS_TOKEN) {
         return reply.code(401).send({ error: "Local debug sign-in is unavailable outside local development" });
       }
+      await agents.turnsClosed(project.id);
       if (agents.isProjectBusy(project.id)) {
         return reply.code(409).send({ error: "Wait for the agent to finish before publishing" });
       }
@@ -2916,6 +3130,7 @@ export function createApp(options: AppOptions = {}) {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
     if (project.type !== "interactive-story") return reply.code(409).send({ error: "Build requires an Interactive Story project" });
+    await agents.turnsClosed(project.id);
     if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before building" });
     if (publishing.has(project.id)) return reply.code(409).send({ error: "Project is already being published" });
     try {
@@ -3115,4 +3330,24 @@ function configuredDefaultModel(cwd: string, agentDir: string): AgentModelRef | 
   const provider = settings.getDefaultProvider();
   const id = settings.getDefaultModel();
   return provider && id ? { provider, id } : undefined;
+}
+
+/** Projects whose work is files in the workspace; a Canvas also changes the shared Library and generation history. */
+function supportsCheckpoints(project: Pick<ProjectState, "type">): boolean {
+  return project.type === "web-game" || project.type === "general" || project.type === "interactive-story";
+}
+
+/** A file from a snapshot, cut and told from binary much as `readWorkspaceFile` does it for a file on disk. */
+function checkpointFile(content: Uint8Array): CheckpointFile {
+  const truncated = content.byteLength > MAX_CHECKPOINT_FILE_BYTES;
+  let end = Math.min(content.byteLength, MAX_CHECKPOINT_FILE_BYTES);
+  // A cut in the middle of a character would make text look like something else, so it moves back to where one starts.
+  while (truncated && end > 0 && (content[end]! & 0xc0) === 0x80) end -= 1;
+  const visible = Buffer.from(content.buffer, content.byteOffset, end);
+  const binary = visible.includes(0) || !isUtf8(visible);
+  return {
+    binary,
+    ...(!binary ? { content: visible.toString("utf8") } : {}),
+    ...(truncated ? { truncated: true } : {}),
+  };
 }
