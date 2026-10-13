@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
-import { chmod, lstat, mkdir, readdir, readFile, readlink, rename, rm, rmdir, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, rmdir, symlink } from "node:fs/promises";
 import path from "node:path";
 import type { ProjectState } from "../shared/contracts.js";
 import {
-  BUFFERED_BYTES, DamagedObjectError, FileChangedError, SourceError, TREE_MODE, blobId, fileBlobId, fromSource, initialize, readCommitTree, readHead, readObject, readTree,
-  removeObject, verifyBlob, writeAtomically, writeBlobTo, writeCommit, writeFileBlob, writeFileCopyBlob, writeHead, writeObject, writeTree, type TreeEntry,
+  BUFFERED_BYTES, FileChangedError, ObjectVerifier, SourceError, TREE_MODE, blobId, fileBlobId, fromSource, initialize, readCommitTree, readHead, readObject, readTree,
+  writeAtomically, writeBlobTo, writeCommit, writeFileBlob, writeFileCopyBlob, writeHead, writeObject, writeTree, type TreeEntry,
 } from "./checkpoint-objects.js";
 
 type CheckpointProject = Pick<ProjectState, "workspacePath" | "storagePath">;
@@ -83,6 +83,7 @@ interface FileSignature {
   mtimeMs: number;
   ctimeMs: number;
   ino: number;
+  dev: number;
 }
 
 /**
@@ -102,6 +103,7 @@ interface Snapshot {
   tree: string;
   /** Every file the snapshot holds, as the walk saw it. */
   seen: Signatures;
+  paths: WorkspacePaths;
 }
 
 interface Walk {
@@ -111,6 +113,8 @@ interface Walk {
   cached: StatCache;
   settled: StatCache;
   seen: Signatures;
+  paths: WorkspacePaths;
+  objects: ObjectVerifier;
 }
 
 /** The changes an operation has made so far, and what each file it wrote looked like afterwards. */
@@ -130,8 +134,9 @@ const UNSETTLED_MS = 2_000;
 // Dependencies and version control are left out wherever they are. Build output and editor caches are left out at
 // the workspace root only: a game may keep its own `levels/build/`. The rest of `.data/` is kept, unlike in the
 // file tree and in published archives, because asset metadata must go back together with the assets it describes.
+// Generation history and Godot's generated cache are not project creative state.
 const EXCLUDED_ANYWHERE = new Set(["node_modules", ".git"]);
-const EXCLUDED_AT_ROOT = new Set(["dist", "build", "out", ".ohmygame", ".ohmygame-install-pending", ".data/agent-attachments"]);
+const EXCLUDED_AT_ROOT = new Set(["dist", "build", "out", ".godot", ".ohmygame", ".ohmygame-install-pending", ".data/agent-attachments", "canvas/jobs.json"]);
 const TEMPORARY_PREFIX = ".ohmygame-checkpoint-";
 const TEMPORARY_SUFFIX = ".tmp";
 // A file that is gone by the time it is read, or that may not be read, is left out of a snapshot like an excluded one.
@@ -168,6 +173,7 @@ function temporary(name: string): boolean {
 export class CheckpointStore {
   readonly #queues = new Map<string, Promise<unknown>>();
   readonly #limit = limiter(FILE_CONCURRENCY);
+  readonly #objects = new ObjectVerifier();
 
   /** Records the workspace as it is now and returns the commit that holds it. */
   snapshot(project: CheckpointProject): Promise<string> {
@@ -206,14 +212,19 @@ export class CheckpointStore {
    * for example because the app quit, and so may have left the workspace
    * partly changed. Restoring it puts the workspace back as it was. Undefined
    * when the last restore or undo ran to its end.
+   * An unreadable or malformed record is an error, not an absent recovery.
    */
   async unfinished(project: CheckpointProject): Promise<string | undefined> {
+    let text: string;
     try {
-      const { previous } = JSON.parse(await readFile(path.join(checkpointDirectory(project), UNFINISHED_FILE), "utf8")) as { previous?: unknown };
-      return typeof previous === "string" ? previous : undefined;
-    } catch {
-      return undefined;
+      text = await readFile(path.join(checkpointDirectory(project), UNFINISHED_FILE), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
     }
+    const { previous } = JSON.parse(text) as { previous?: unknown };
+    if (typeof previous !== "string" || !/^[0-9a-f]{40}$/.test(previous)) throw new Error("Invalid checkpoint recovery record");
+    return previous;
   }
 
   /**
@@ -221,15 +232,18 @@ export class CheckpointStore {
    * written or removed. It is refused, with nothing touched, when a file
    * cannot come back because something that is not part of checkpoints, such
    * as a folder of excluded files, is in its place.
+   * If an operation is unfinished, only restoring its recovery checkpoint is allowed.
    */
   restore(project: CheckpointProject, commit: string): Promise<CheckpointRestoreResult> {
     return this.#serialize(project, async () => {
+      const recovering = await this.unfinished(project);
+      if (recovering && commit !== recovering) throw new CheckpointIncompleteError(recovering, new Error("Recover the unfinished checkpoint operation first"));
       const gitdir = checkpointDirectory(project);
       const target = await readCommitTree(gitdir, commit);
       const { current, changes } = await this.#planned(project, async (snapshot) => ({ changes: await this.#diff(gitdir, snapshot.tree, target) }));
       const blocked = await this.#blocked(project, current, changes);
       if (blocked.length) throw new CheckpointConflictError(blocked);
-      await this.#apply(project, current, changes);
+      await this.#apply(project, current, changes, recovering);
       return { previous: current.commit, changed: paths(changes) };
     });
   }
@@ -244,9 +258,12 @@ export class CheckpointStore {
    * the caller says to keep those files as they are or to overwrite them.
    * Files that are not part of checkpoints are never removed, so a file they
    * block is refused even then.
+   * An unfinished operation must be recovered before starting another undo.
    */
   undo(project: CheckpointProject, range: CheckpointRange, options: CheckpointUndoOptions = {}): Promise<CheckpointUndoResult> {
     return this.#serialize(project, async () => {
+      const unfinished = await this.unfinished(project);
+      if (unfinished) throw new CheckpointIncompleteError(unfinished, new Error("Recover the unfinished checkpoint operation first"));
       const gitdir = checkpointDirectory(project);
       const [before, after] = await Promise.all([readCommitTree(gitdir, range.before), readCommitTree(gitdir, range.after)]);
       const { current, changes, changedAgain } = await this.#planned(project, (snapshot) => this.#undoing(gitdir, before, after, snapshot.tree, options.conflicts === "overwrite"));
@@ -295,26 +312,13 @@ export class CheckpointStore {
   }
 
   /**
-   * Records the workspace and plans changes against that record. What makes
-   * a change safe is that the store holds the content it replaces, so every
-   * such object is read through first. A damaged one is thrown away and the
-   * workspace is recorded once more, which stores it anew from the file.
+   * Records the workspace and plans changes against that record. Snapshot
+   * verifies reused objects and repairs damage from the source files before
+   * reporting success, so the content that will be replaced is recoverable.
    */
   async #planned<T extends { changes: Change[] }>(project: CheckpointProject, plan: (current: Snapshot) => Promise<T>): Promise<T & { current: Snapshot }> {
-    const gitdir = checkpointDirectory(project);
-    for (let attempt = 1; ; attempt += 1) {
-      const current = await this.#snapshot(project);
-      const planned = await plan(current);
-      const replaced = [...new Set(planned.changes.flatMap((change) => change.from ? [change.from.oid] : []))];
-      const damaged = (await all(replaced.map((oid) => this.#limit(() => verifyBlob(gitdir, oid).then(() => undefined, (error: unknown) => {
-        if (error instanceof DamagedObjectError) return oid;
-        throw error;
-      }))))).filter((oid) => oid !== undefined);
-      if (damaged.length === 0) return { ...planned, current };
-      if (attempt === 2) throw new DamagedObjectError(damaged[0]!);
-      await Promise.all(damaged.map((oid) => removeObject(gitdir, oid)));
-      await rm(path.join(gitdir, STAT_CACHE_FILE), { force: true });
-    }
+    const current = await this.#snapshot(project);
+    return { ...await plan(current), current };
   }
 
   /**
@@ -328,7 +332,7 @@ export class CheckpointStore {
     const workspace = project.workspacePath;
     const removing = new Set<string>();
     await all(changes.map(async (change) => change.from && await this.#limit(async () => {
-      const stats = await this.#recorded(project, current.seen, change);
+      const stats = await this.#recorded(project, current.seen, change, current.paths);
       if (!change.to) removing.add(identity(stats));
     })));
 
@@ -337,7 +341,8 @@ export class CheckpointStore {
       let found = places.get(relative);
       if (!found) {
         found = this.#limit(async () => {
-          const stats = await lstat(path.join(workspace, relative)).catch(() => undefined);
+          await current.paths.check(relative);
+          const stats = await present(path.join(workspace, relative));
           if (!stats) return "free";
           if (stats.isDirectory()) return "folder";
           return removing.has(identity(stats)) ? "free" : "taken";
@@ -355,38 +360,43 @@ export class CheckpointStore {
         if (found !== "folder") return;
       }
       const found = await place(change.path);
-      if (found === "taken" || (found === "folder" && !(await holdsOnly(workspace, change.path, removing)))) blocked.push(change.path);
+      if (found === "taken" || (found === "folder" && !(await current.paths.holdsOnly(change.path, removing)))) blocked.push(change.path);
     }));
     return blocked.sort(compare);
   }
 
   /** Returns the stats of a file that is to be replaced or removed, and throws when it is not the file that was recorded. */
-  async #recorded(project: CheckpointProject, recorded: Signatures, change: Change): Promise<Stats> {
+  async #recorded(project: CheckpointProject, recorded: Signatures, change: Change, paths: WorkspacePaths): Promise<Stats> {
+    await paths.check(change.path);
     const file = path.join(project.workspacePath, change.path);
-    const stats = await lstat(file).catch(() => undefined);
+    const stats = await present(file);
     const signature = recorded.get(change.path);
-    if (!stats || !signature || stats.isDirectory() || !sameFile(signature, stats) || signature.ino !== stats.ino) throw new CheckpointChangedError(change.path);
+    if (!stats || !signature || stats.isDirectory() || !sameFile(signature, stats)) throw new CheckpointChangedError(change.path);
     if (signature.unsettled) {
       const oid = await (stats.isSymbolicLink() ? readlink(file, { encoding: "buffer" }).then(blobId) : fileBlobId(file, stats.size)).catch(() => undefined);
       if (oid !== change.from!.oid) throw new CheckpointChangedError(change.path);
     }
+    await paths.check(change.path);
     return stats;
   }
 
   /** Makes the changes. When that fails part way, the ones already made are taken back. */
-  async #apply(project: CheckpointProject, current: Snapshot, changes: Change[]): Promise<void> {
+  async #apply(project: CheckpointProject, current: Snapshot, changes: Change[], recovering?: string): Promise<void> {
     const gitdir = checkpointDirectory(project);
     const unfinished = path.join(gitdir, UNFINISHED_FILE);
     if (changes.length === 0) return await rm(unfinished, { force: true });
     // Says, until the end is reached, where to go back to if this process does not get there.
-    await writeAtomically(gitdir, unfinished, JSON.stringify({ previous: current.commit }));
+    const previous = recovering ?? current.commit;
+    // Recovery must keep the original complete state across retries and crashes.
+    if (!recovering) await writeAtomically(gitdir, unfinished, JSON.stringify({ previous }));
     const progress: Progress = { made: [], written: new Map() };
     try {
-      await this.#make(project, changes, current.seen, progress, false);
+      await this.#make(project, changes, current.seen, progress, false, current.paths);
     } catch (cause) {
       // The content to return to is already in the store, so this needs no room for a new snapshot.
       const inverse = progress.made.map((change): Change => ({ path: change.path, ...(change.to ? { from: change.to } : {}), ...(change.from ? { to: change.from } : {}) }));
-      await this.#make(project, inverse, progress.written, { made: [], written: new Map() }, true).catch(() => { throw new CheckpointIncompleteError(current.commit, cause); });
+      await this.#make(project, inverse, progress.written, { made: [], written: new Map() }, true, current.paths).catch(() => { throw new CheckpointIncompleteError(previous, cause); });
+      if (recovering) throw new CheckpointIncompleteError(previous, cause);
       await rm(unfinished, { force: true });
       throw cause;
     }
@@ -399,17 +409,17 @@ export class CheckpointStore {
    * `recorded` says. Taking changes back goes on after a failure, to put
    * back as much as can be.
    */
-  async #make(project: CheckpointProject, changes: Change[], recorded: Signatures, progress: Progress, goOn: boolean): Promise<void> {
+  async #make(project: CheckpointProject, changes: Change[], recorded: Signatures, progress: Progress, goOn: boolean, paths: WorkspacePaths): Promise<void> {
     const workspace = project.workspacePath;
     const failures: unknown[] = [];
     // Removals go first so a file can take the place of a folder and the other way round.
     for (const change of changes) {
       if (change.to || (failures.length && !goOn)) continue;
       try {
-        await this.#recorded(project, recorded, change);
+        await this.#recorded(project, recorded, change, paths);
         await rm(path.join(workspace, change.path), { force: true });
         progress.made.push(change);
-        await removeEmptyDirectories(workspace, path.posix.dirname(change.path));
+        await paths.removeEmptyParents(change.path);
       } catch (error) {
         failures.push(error);
       }
@@ -417,46 +427,58 @@ export class CheckpointStore {
     if (failures.length && !goOn) throw failures[0];
     // Nothing is still writing when the changes made are taken back: `all` waits for every write.
     await all(changes.map(async (change) => change.to && await this.#limit(async () => {
-      progress.written.set(change.path, await this.#place(project, change, recorded));
-      progress.made.push(change);
+      await this.#place(project, change, recorded, progress, paths);
     }))).catch((error: unknown) => { failures.push(error); });
     if (failures.length) throw failures[0];
   }
 
   /**
-   * Puts one file in place and returns what it looks like there. The content
+   * Puts one file in place and records the mutation. The content
    * goes to a temporary file beside it first, so a failure never leaves half
    * a file.
    */
-  async #place(project: CheckpointProject, change: Change, recorded: Signatures): Promise<RecordedFile> {
+  async #place(project: CheckpointProject, change: Change, recorded: Signatures, progress: Progress, paths: WorkspacePaths): Promise<void> {
     const gitdir = checkpointDirectory(project);
     const entry = change.to!;
     const file = path.join(project.workspacePath, change.path);
-    const replaced = change.from ? await this.#recorded(project, recorded, change) : undefined;
-    await mkdir(path.dirname(file), { recursive: true });
+    const replaced = change.from ? await this.#recorded(project, recorded, change, paths) : undefined;
+    await paths.prepare(change.path);
     // The temporary name does not build on the file's own name, which may already be as long as a name can be.
     const beside = path.join(path.dirname(file), `${TEMPORARY_PREFIX}${randomUUID()}${TEMPORARY_SUFFIX}`);
     try {
-      if (entry.mode === "120000") await symlink(await readObject(gitdir, entry.oid, "blob"), beside);
-      else {
+      if (entry.mode === "120000") {
+        const target = await readObject(gitdir, entry.oid, "blob");
+        await paths.check(change.path);
+        await symlink(target, beside);
+      } else {
         // A file has the permissions of the one it replaces from the start; only whether it can be executed comes from the snapshot.
         const kept = replaced?.isFile() ? replaced.mode & 0o777 : undefined;
-        await writeBlobTo(gitdir, entry.oid, beside, kept);
+        await writeBlobTo(gitdir, entry.oid, beside, kept, () => paths.check(change.path));
+        await paths.check(change.path);
         const mode = kept ?? (await lstat(beside)).mode & 0o777;
+        await paths.check(change.path);
         await chmod(beside, entry.mode === "100755" ? mode | ((mode & 0o444) >> 2) : mode & ~0o111);
       }
       // Writing the content took time, so the place is looked at once more just before it is taken.
-      if (change.from) await this.#recorded(project, recorded, change);
+      if (change.from) await this.#recorded(project, recorded, change, paths);
       else {
-        const existing = await lstat(file).catch(() => undefined);
-        if (existing?.isDirectory()) await removeEmptyTree(file);
+        const existing = await present(file);
+        if (existing?.isDirectory()) await paths.removeEmptyTree(change.path);
         else if (existing) throw new CheckpointChangedError(change.path);
       }
+      await paths.check(change.path);
       await rename(beside, file);
-      return { ...signatureOf(await lstat(file)), unsettled: true };
+      // Register the mutation before any fallible bookkeeping. Without a
+      // written signature rollback refuses this file and retains recovery.
+      progress.made.push(change);
+      await paths.check(change.path);
+      progress.written.set(change.path, { ...signatureOf(await lstat(file)), unsettled: true });
     } catch (error) {
-      await rm(beside, { force: true });
-      await removeEmptyDirectories(project.workspacePath, path.posix.dirname(change.path));
+      await (async () => {
+        await paths.check(change.path);
+        await rm(beside, { force: true });
+        await paths.removeEmptyParents(change.path);
+      })().catch(() => {});
       throw error;
     }
   }
@@ -464,32 +486,41 @@ export class CheckpointStore {
   async #snapshot(project: CheckpointProject): Promise<Snapshot> {
     const gitdir = checkpointDirectory(project);
     await initialize(gitdir);
-    const walk: Walk = { gitdir, workspace: project.workspacePath, started: Date.now(), cached: await readStatCache(gitdir), settled: new Map(), seen: new Map() };
-    const tree = await this.#writeDirectory(walk, "") ?? await writeTree(gitdir, []);
+    const paths = await WorkspacePaths.open(project.workspacePath);
+    const walk: Walk = { gitdir, workspace: project.workspacePath, started: Date.now(), cached: await readStatCache(gitdir), settled: new Map(), seen: new Map(), paths, objects: this.#objects };
+    const tree = await this.#writeDirectory(walk, "") ?? await writeTree(gitdir, [], walk.objects);
     // The cache is only there for speed, so a failure to write it is not a failure of the snapshot.
     await writeAtomically(gitdir, path.join(gitdir, STAT_CACHE_FILE), JSON.stringify(Object.fromEntries(walk.settled))).catch(() => {});
     const head = await readHead(gitdir);
     const headTree = head && await readCommitTree(gitdir, head).catch(() => undefined);
-    if (head && headTree === tree) return { commit: head, tree, seen: walk.seen };
-    const commit = await writeCommit(gitdir, tree, headTree ? head : undefined);
+    if (head && headTree === tree) return { commit: head, tree, seen: walk.seen, paths };
+    const commit = await writeCommit(gitdir, tree, headTree ? head : undefined, walk.objects);
     await writeHead(gitdir, commit);
-    return { commit, tree, seen: walk.seen };
+    return { commit, tree, seen: walk.seen, paths };
   }
 
   /** Writes one folder as a tree and returns its id, or undefined when nothing in it is kept. */
   async #writeDirectory(walk: Walk, relative: string): Promise<string | undefined> {
+    await walk.paths.directory(relative);
     const names = await this.#limit(() => fromSource(readdir(path.join(walk.workspace, relative))));
     const entries = (await all(names.map(async (name): Promise<TreeEntry | undefined> => {
       const entryPath = relative ? `${relative}/${name}` : name;
       if (excluded(entryPath)) {
         // What a restore that was cut off left behind. No restore is under way now: operations run one at a time.
-        if (temporary(name)) await rm(path.join(walk.workspace, entryPath), { force: true }).catch(() => {});
+        if (temporary(name)) {
+          await walk.paths.check(entryPath);
+          await rm(path.join(walk.workspace, entryPath), { force: true }).catch(() => {});
+        }
         return undefined;
       }
       try {
         const file = await this.#limit(async () => {
+          await walk.paths.check(entryPath);
           const stats = await fromSource(lstat(path.join(walk.workspace, entryPath)));
-          if (stats.isDirectory()) return "folder" as const;
+          if (stats.isDirectory()) {
+            walk.paths.record(entryPath, stats);
+            return "folder" as const;
+          }
           return stats.isFile() || stats.isSymbolicLink() ? await this.#writeFile(walk, entryPath, stats) : undefined;
         });
         if (file !== "folder") return file && { ...file, name };
@@ -501,7 +532,8 @@ export class CheckpointStore {
         throw error;
       }
     }))).filter((entry) => entry !== undefined);
-    return entries.length ? await this.#limit(() => writeTree(walk.gitdir, entries)) : undefined;
+    await walk.paths.directory(relative);
+    return entries.length ? await this.#limit(() => writeTree(walk.gitdir, entries, walk.objects)) : undefined;
   }
 
   /** Stores one file or symbolic link and returns its tree entry. A file that changes while it is read is read again. */
@@ -511,15 +543,16 @@ export class CheckpointStore {
       const mode = stats.isSymbolicLink() ? "120000" : stats.mode & 0o111 ? "100755" : "100644";
       const cached = walk.cached.get(entryPath);
       let oid = cached && cached.mode === mode && sameFile(cached, stats) ? cached.oid : undefined;
+      if (oid && !(await walk.objects.has(walk.gitdir, oid, "blob"))) oid = undefined;
       if (!oid) {
         try {
           oid = stats.isSymbolicLink()
-            ? await writeObject(walk.gitdir, "blob", await fromSource(readlink(absolute, { encoding: "buffer" })))
-            : await writeFileBlob(walk.gitdir, absolute, stats.size);
+            ? await writeObject(walk.gitdir, "blob", await fromSource(readlink(absolute, { encoding: "buffer" })), walk.objects)
+            : await writeFileBlob(walk.gitdir, absolute, stats.size, walk.objects);
         } catch (error) {
           if (!(error instanceof FileChangedError)) throw error;
           // After the last attempt a file that does not hold still is recorded from a copy of it.
-          if (attempt === READ_ATTEMPTS) oid = await writeFileCopyBlob(walk.gitdir, absolute);
+          if (attempt === READ_ATTEMPTS) oid = await writeFileCopyBlob(walk.gitdir, absolute, walk.objects);
         }
         const after = await fromSource(lstat(absolute));
         // A large file was read twice with the same result, which shows well enough that it held still.
@@ -529,6 +562,7 @@ export class CheckpointStore {
           continue;
         }
       }
+      await walk.paths.check(entryPath);
       const signature = signatureOf(stats);
       const unsettled = Math.max(stats.mtimeMs, stats.ctimeMs) > walk.started - UNSETTLED_MS;
       walk.seen.set(entryPath, { ...signature, unsettled });
@@ -545,6 +579,8 @@ export class CheckpointStore {
       const left = before.get(name);
       const right = after.get(name);
       const entryPath = prefix ? `${prefix}/${name}` : name;
+      // Old checkpoints may contain paths that are now excluded.
+      if (excluded(entryPath)) continue;
       if (left?.oid === right?.oid && left?.mode === right?.mode) continue;
       const leftTree = left?.mode === TREE_MODE ? left.oid : undefined;
       const rightTree = right?.mode === TREE_MODE ? right.oid : undefined;
@@ -595,51 +631,144 @@ function parents(filePath: string): string[] {
 }
 
 function signatureOf(stats: Stats): FileSignature {
-  return { size: stats.size, mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs, ino: stats.ino };
+  return { size: stats.size, mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs, ino: stats.ino, dev: stats.dev };
 }
 
-/** Size and times decide alone whether the cache is trusted: file ids are not kept across mounts on every file system. */
+/** A different file or mount invalidates the cache even when size and coarse timestamps match. */
 function sameFile(recorded: FileSignature, stats: FileSignature): boolean {
-  return recorded.size === stats.size && recorded.mtimeMs === stats.mtimeMs && recorded.ctimeMs === stats.ctimeMs;
+  return recorded.dev === stats.dev && recorded.ino === stats.ino && recorded.size === stats.size && recorded.mtimeMs === stats.mtimeMs && recorded.ctimeMs === stats.ctimeMs;
 }
 
 function identity(stats: { dev: number; ino: number }): string {
   return `${stats.dev}:${stats.ino}`;
 }
 
-/** Whether a folder holds nothing but folders and files that are about to be removed. */
-async function holdsOnly(workspace: string, relative: string, removing: ReadonlySet<string>): Promise<boolean> {
-  for (const entry of await readdir(path.join(workspace, relative), { withFileTypes: true })) {
-    const entryPath = `${relative}/${entry.name}`;
-    // An excluded file is never removed, also when it is one and the same file as one that is.
-    if (excluded(entryPath)) return false;
-    if (entry.isDirectory() ? !(await holdsOnly(workspace, entryPath, removing)) : !removing.has(identity(await lstat(path.join(workspace, entryPath))))) return false;
-  }
-  return true;
-}
+/** Checks directory ancestry as well as leaves; a moved directory can keep every leaf's identity. */
+class WorkspacePaths {
+  readonly #directories = new Map<string, string>();
+  readonly #creating = new Map<string, Promise<void>>();
 
-/** Removes a folder that holds nothing but empty folders. It fails, and removes no file, when there is a file in it. */
-async function removeEmptyTree(directory: string): Promise<void> {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.isDirectory()) await removeEmptyTree(path.join(directory, entry.name));
-  }
-  await rmdir(directory);
-}
+  private constructor(readonly workspace: string, readonly resolved: string) {}
 
-/** Removes folders a change emptied, from the given one up to the workspace root. */
-async function removeEmptyDirectories(workspace: string, relative: string): Promise<void> {
-  for (let current = relative; current && current !== "."; current = path.posix.dirname(current)) {
-    try {
-      await rmdir(path.join(workspace, current));
-    } catch {
-      return;
+  static async open(workspace: string): Promise<WorkspacePaths> {
+    const paths = new WorkspacePaths(workspace, await realpath(workspace));
+    paths.record("", await lstat(workspace));
+    await paths.check("");
+    return paths;
+  }
+
+  record(relative: string, stats: Stats): void {
+    if (!stats.isDirectory()) throw new CheckpointChangedError(relative || ".");
+    const recorded = this.#directories.get(relative);
+    if (recorded && recorded !== identity(stats)) throw new CheckpointChangedError(relative || ".");
+    this.#directories.set(relative, identity(stats));
+  }
+
+  /** Verifies every existing parent, including the root and its resolved location. */
+  async check(file: string): Promise<void> {
+    const resolved = await realpath(this.workspace).catch(() => undefined);
+    if (resolved !== this.resolved) throw new CheckpointChangedError(file || ".");
+    for (const relative of ["", ...parents(file)]) await this.#known(relative, file);
+  }
+
+  async directory(relative: string): Promise<void> {
+    await this.check(relative);
+    if (relative) await this.#known(relative, relative);
+  }
+
+  async #known(relative: string, file: string): Promise<void> {
+    const stats = await present(path.join(this.workspace, relative));
+    if (!stats?.isDirectory() || this.#directories.get(relative) !== identity(stats)) throw new CheckpointChangedError(file || ".");
+  }
+
+  /** Creates parents one at a time, sharing each creation between parallel file writes. */
+  async prepare(file: string): Promise<void> {
+    await this.check("");
+    for (const relative of parents(file)) {
+      if (this.#directories.has(relative)) {
+        await this.directory(relative);
+        continue;
+      }
+      let creating = this.#creating.get(relative);
+      if (!creating) {
+        creating = this.#create(relative);
+        this.#creating.set(relative, creating);
+      }
+      try {
+        await creating;
+      } finally {
+        if (this.#creating.get(relative) === creating) this.#creating.delete(relative);
+      }
+    }
+    await this.check(file);
+  }
+
+  async #create(relative: string): Promise<void> {
+    await this.check(relative);
+    const target = path.join(this.workspace, relative);
+    if (await present(target)) throw new CheckpointChangedError(relative);
+    await mkdir(target);
+    this.record(relative, await lstat(target));
+    await this.directory(relative);
+  }
+
+  async holdsOnly(relative: string, removing: ReadonlySet<string>): Promise<boolean> {
+    await this.directory(relative);
+    for (const entry of await readdir(path.join(this.workspace, relative), { withFileTypes: true })) {
+      const entryPath = `${relative}/${entry.name}`;
+      // An excluded file is never removed, even when it is a hard link to an included one.
+      if (excluded(entryPath)) return false;
+      if (entry.isDirectory()) {
+        if (!(await this.holdsOnly(entryPath, removing))) return false;
+      } else {
+        await this.check(entryPath);
+        if (!removing.has(identity(await lstat(path.join(this.workspace, entryPath))))) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Removes only verified empty directories, never traversing a replacement symlink. */
+  async removeEmptyTree(relative: string): Promise<void> {
+    await this.directory(relative);
+    for (const entry of await readdir(path.join(this.workspace, relative), { withFileTypes: true })) {
+      if (entry.isDirectory()) await this.removeEmptyTree(`${relative}/${entry.name}`);
+    }
+    await this.directory(relative);
+    await rmdir(path.join(this.workspace, relative));
+    this.#directories.delete(relative);
+  }
+
+  async removeEmptyParents(file: string): Promise<void> {
+    for (const relative of parents(file).reverse()) {
+      if (!this.#directories.has(relative)) return;
+      await this.directory(relative);
+      try {
+        await rmdir(path.join(this.workspace, relative));
+        this.#directories.delete(relative);
+      } catch (error) {
+        if (["ENOTEMPTY", "EEXIST", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+        throw error;
+      }
     }
   }
 }
 
+async function present(target: string): Promise<Stats | undefined> {
+  return await lstat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return undefined;
+    throw error;
+  });
+}
+
 async function readStatCache(gitdir: string): Promise<StatCache> {
   try {
-    return new Map(Object.entries(JSON.parse(await readFile(path.join(gitdir, STAT_CACHE_FILE), "utf8")) as Record<string, FileSignature & FileEntry>));
+    const entries = Object.entries(JSON.parse(await readFile(path.join(gitdir, STAT_CACHE_FILE), "utf8")) as Record<string, FileSignature & FileEntry>);
+    return new Map(entries.filter(([, entry]) => entry && typeof entry === "object"
+      && [entry.size, entry.mtimeMs, entry.ctimeMs, entry.ino, entry.dev].every(Number.isFinite)
+      && Number.isSafeInteger(entry.size) && entry.size >= 0
+      && ["100644", "100755", "120000"].includes(entry.mode)
+      && typeof entry.oid === "string" && /^[0-9a-f]{40}$/.test(entry.oid)));
   } catch {
     // Without the cache every file is read again, which is only slower.
     return new Map();
