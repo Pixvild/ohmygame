@@ -285,6 +285,12 @@ export async function removeCanvasAssetReferences(workspace: string, assetIds: s
 }
 type StoredJob = ToolJob & { input?: RunToolRequest; recoveryId?: string };
 export class CanvasStore {
+  #projectExecutions = new Map<string, Set<Promise<void>>>();
+
+  isProjectBusy(id: string): boolean { return Boolean(this.#projectExecutions.get(id)?.size); }
+  async waitForProject(id: string): Promise<void> {
+    while (this.#projectExecutions.get(id)?.size) await Promise.allSettled([...this.#projectExecutions.get(id)!]);
+  }
   readonly #jobs = new Map<string, StoredJob[]>();
   readonly #controllers = new Map<string, AbortController>();
   readonly #executions = new Set<Promise<void>>();
@@ -458,7 +464,14 @@ export class CanvasStore {
     });
     const controller = new AbortController(); this.#controllers.set(job.id, controller);
     const execution = this.#execute(id, job, prepared, controller); this.#executions.add(execution);
-    void execution.finally(() => this.#executions.delete(execution));
+    let executions = this.#projectExecutions.get(id);
+    if (!executions) { executions = new Set(); this.#projectExecutions.set(id, executions); }
+    executions.add(execution);
+    void execution.finally(() => {
+      this.#executions.delete(execution);
+      executions.delete(execution);
+      if (!executions.size) this.#projectExecutions.delete(id);
+    });
     const { input: _input, recoveryId: _recoveryId, ...publicJob } = job; return structuredClone(publicJob);
   }
   async generateNode(id: string, boardId: string, nodeId: string): Promise<ToolJob> {

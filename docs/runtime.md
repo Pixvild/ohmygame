@@ -278,11 +278,20 @@ projects/<project-id>/
 ├── cover.webp     custom cover; its presence stops automatic replacement
 ├── cover-auto.webp last automatic cover, retained when a custom cover is applied
 ├── preview-origin.json stable local preview port
+├── checkpoints/   internal Git object store for per-turn file Diff and Undo
+├── workspace-restore-notice.txt durable restore notice and workspace version
 ├── workspace/     the project files (or an existing folder in the desktop app)
 └── session/       Pi session files, one per conversation
 ```
 
 Removing a project never deletes an existing folder used as its workspace.
+
+Each consumed agent message records its file changes for **File changes** and
+explicit **Undo files**. Editing a message preserves the current files; Undo
+preserves the conversation and reloads workspace editors. Checkpoint objects
+live outside the workspace and do not require a workspace Git repository.
+See [turn file changes and Undo](checkpoints.md) for conflict choices, writer
+coordination, excluded files, and interrupted-restore recovery.
 
 Project covers are saved independently of publishing. Selecting an image in the
 publish dialog previews it; **Apply cover** saves it and stops automatic cover

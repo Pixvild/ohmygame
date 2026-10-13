@@ -6,6 +6,8 @@ import {
   RefreshCw,
   X,
 } from "./icons.js";
+import { getCheckpointRecovery, recoverCheckpoint, undoTurnFiles } from "./api.js";
+import { observeWorkspaceVersion, workspaceVersion } from "./workspace-version.js";
 import {
   Activity,
   useEffect,
@@ -122,6 +124,9 @@ export function ProjectShell({
   const [publishing, setPublishing] = useState(false);
   const [publishDialog, setPublishDialog] = useState<{ projectId: string; status: "open" | "success" }>();
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
+  const [workspaceEpoch, setWorkspaceEpoch] = useState(() => workspaceVersion(projectId));
+  const [restoring, setRestoring] = useState(false);
+  const [recoveryPending, setRecoveryPending] = useState(false);
   const [openFileRequest, setOpenFileRequest] = useState<{ path: string; id: number }>();
   const [modelChanging, setModelChanging] = useState(false);
   const [capabilities, setCapabilities] = useState<ConversationCapabilities>(EMPTY_CAPABILITIES);
@@ -169,9 +174,19 @@ export function ProjectShell({
 
   function subscribe(cursor: number, selectedConversationId: string): void {
     unsubscribeEvents.current?.();
-    unsubscribeEvents.current = subscribeToProject(projectId, cursor, {
+    let disposed = false;
+    const unsubscribe = subscribeToProject(projectId, cursor, {
       onEvent: (event) => {
         dispatch({ type: "runtime-event", event });
+        if (event.type === "workspace.restored") {
+          observeWorkspaceVersion(projectId, event.data.version);
+          setWorkspaceEpoch(event.data.version);
+          setWorkspaceRevision((value) => value + 1);
+          void Promise.all([getProject(projectId), getConversation(projectId, selectedConversationId, true)]).then(([project, detail]) => {
+            if (!disposed) dispatch({ type: "initialized", project, detail });
+          }).catch((cause: unknown) => { if (!disposed) dispatch({ type: "notice", message: errorMessage(cause) }); });
+          void getCheckpointRecovery(projectId).then((result) => { if (!disposed) setRecoveryPending(result.pending); }).catch(() => {});
+        }
         if (event.type === "agent.completed") setWorkspaceRevision((value) => value + 1);
         if (event.type === "conversation.renamed") {
           setConversations((current) => current.map((conversation) =>
@@ -188,11 +203,15 @@ export function ProjectShell({
       onError: () => dispatch({ type: "connection", status: "reconnecting" }),
       onReset: async () => {
         const [project, detail] = await Promise.all([getProject(projectId), getConversation(projectId, selectedConversationId, true)]);
+        if (disposed) return detail.cursor;
+        setWorkspaceEpoch(workspaceVersion(projectId));
+        void getCheckpointRecovery(projectId).then((result) => { if (!disposed) setRecoveryPending(result.pending); }).catch(() => {});
         dispatch({ type: "initialized", project, detail });
         setWorkspaceRevision((value) => value + 1);
         return detail.cursor;
       },
     });
+    unsubscribeEvents.current = () => { disposed = true; unsubscribe(); };
   }
 
   useEffect(() => {
@@ -206,6 +225,8 @@ export function ProjectShell({
       try {
         await waitForRuntime();
         const [project, availableConversations] = await Promise.all([getProject(projectId), listConversations(projectId)]);
+        setWorkspaceEpoch(workspaceVersion(projectId));
+        void getCheckpointRecovery(projectId).then((result) => { if (!disposed) setRecoveryPending(result.pending); }).catch((cause: unknown) => { if (!disposed) dispatch({ type: "notice", message: errorMessage(cause) }); });
         if (disposed) return;
         if (project.workspaceAvailable === false) {
           dispatch({ type: "fatal", message: "The selected workspace folder is no longer available." });
@@ -359,6 +380,29 @@ export function ProjectShell({
   ));
   const currentConversationBusy = Boolean(activeTurn);
   const agentBusy = sendingInitialPrompt || currentConversationBusy || state.agent.status === "running" || state.agent.status === "cancelling";
+  const undoFiles = useCallback(async (turnId: string, conflicts?: "keep" | "overwrite") => {
+    const current = state.conversation;
+    if (!current) throw new Error("Conversation unavailable");
+    setRestoring(true);
+    try {
+      await saveDesign.current?.();
+      const result = await undoTurnFiles(projectId, current.id, turnId, conflicts);
+      observeWorkspaceVersion(projectId, result.version);
+      setWorkspaceEpoch(result.version);
+      const [project, detail] = await Promise.all([getProject(projectId), getConversation(projectId, current.id, true)]);
+      dispatch({ type: "initialized", project, detail });
+    } finally { setRestoring(false); }
+  }, [projectId, state.conversation]);
+  async function recoverFiles() {
+    setRestoring(true);
+    try {
+      const result = await recoverCheckpoint(projectId);
+      observeWorkspaceVersion(projectId, result.version);
+      setWorkspaceEpoch(result.version);
+      setRecoveryPending(false);
+    } catch (cause) { dispatch({ type: "notice", message: errorMessage(cause) }); }
+    finally { setRestoring(false); }
+  }
   const activePlanItem = activeTurn
     ? activeTurn.items.findLast((item) => item.type === "plan")
     : undefined;
@@ -703,6 +747,10 @@ export function ProjectShell({
             ) : null}
       </>}>
           <div className="timeline" aria-live="polite">
+            {recoveryPending ? <div className="turn-changes-panel" role="alert">
+              <p>A file restore was interrupted. Recover the workspace to its state before that operation to continue. The conversation is preserved.</p>
+              <button type="button" disabled={restoring || agentBusy || publishing} onClick={() => void recoverFiles()}>Recover files</button>
+            </div> : null}
             {state.phase === "loading" ? <TimelineSkeleton /> : null}
             <Activity mode={agentIsCollapsed ? "hidden" : "visible"}>
               <ErrorBoundary label="Conversation" resetKey={conversation?.id}>
@@ -711,7 +759,9 @@ export function ProjectShell({
                 projectId={projectId}
                 workspacePath={project?.workspacePath}
                 onOpenWorkspaceFile={project ? openWorkspaceFile : undefined}
-                revisionDisabled={agentBusy || state.plan.mode !== "normal" || state.pendingPrompts.length > 0 || state.connection !== "open"}
+                revisionDisabled={agentBusy || restoring || recoveryPending || state.plan.mode !== "normal" || state.pendingPrompts.length > 0 || state.connection !== "open"}
+                undoDisabled={agentBusy || restoring || recoveryPending || publishing || state.connection !== "open"}
+                onUndoTurn={undoFiles}
                 waitingForInput={Boolean(questionnaire)}
                 onRevise={revisePrompt}
                 onAddToChat={addToChat}
@@ -793,7 +843,7 @@ export function ProjectShell({
           /> : null}
       </WorkspaceAgentPane>}
     >
-      <ErrorBoundary label="Workspace" resetKey={project?.id} onHome={onHome}>
+      <ErrorBoundary key={`${projectId}:${workspaceEpoch}`} label="Workspace" resetKey={project?.id} onHome={onHome}>
       {!project ? <section className="viewer-pane" /> : project.type !== "interactive-story" && project.type !== "asset-canvas" ? (
         <CodingWorkspace
           project={project}

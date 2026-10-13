@@ -9346,6 +9346,21 @@ button {
   display: contents;
 }
 
+.turn-file-changes { margin: 12px 0 20px; font-size: 12px; }
+.turn-changes-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border: 0; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.turn-changes-toggle:hover { color: var(--text); }
+.turn-changes-panel { margin-top: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.turn-change-select { display: flex; flex-direction: column; gap: 6px; }
+.turn-change-select select { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.turn-diff { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 10px 0; }
+.turn-diff h4 { margin: 4px 0; font-size: 11px; }
+.turn-diff pre { max-height: 320px; overflow: auto; margin: 0; padding: 8px; font: 11px/1.6 monospace; white-space: pre; }
+.turn-diff-before { background: color-mix(in srgb, #c44 8%, transparent); }
+.turn-diff-after { background: color-mix(in srgb, #4a8 8%, transparent); }
+.turn-undo-actions button, .turn-changes-panel > button { margin-right: 6px; margin-top: 6px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.turn-undo-actions button:disabled, .turn-changes-panel > button:disabled { opacity: 0.5; cursor: default; }
+.turn-changes-panel p { line-height: 1.6; overflow-wrap: anywhere; }
+
 .selected-text-menu {
   position: fixed;
   z-index: 30;

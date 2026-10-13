@@ -1,4 +1,9 @@
 import { inspectPreviewConfiguration } from "./preview-configuration.js";
+import { CheckpointStore } from "./checkpoints.js";
+import { ProjectWrites } from "./project-writes.js";
+import { registerCheckpointRoutes } from "./checkpoint-routes.js";
+import { readWorkspaceVersion } from "./workspace-notice.js";
+import { withCanvasLock } from "./canvas-workspace.js";
 import { validatePreviewSettings } from "../shared/preview-settings.js";
 import { previewPageUrl } from "../shared/preview-page.js";
 import { PluginSetupManager, registerPluginSetupRoutes } from "./plugin-setup.js";
@@ -529,6 +534,8 @@ export function createApp(options: AppOptions = {}) {
     fetch: options.publishFetch,
   });
   const previews = new PreviewManager(events);
+  const checkpoints = new CheckpointStore();
+  const projectWrites = new ProjectWrites();
   const webSearchSettings = new WebSearchSettingsStore(dataDirectory);
   const networkSettings = options.networkSettings ?? new NetworkSettingsService(dataDirectory);
   const meshySettings = new MediaProviderKeyStore(dataDirectory, "meshy", "Meshy");
@@ -675,6 +682,10 @@ export function createApp(options: AppOptions = {}) {
   const withPluginCapabilities = async (plugin: Awaited<ReturnType<typeof plugins.read>>) => plugin ? pluginCapabilities.decorate(plugin) : plugin;
   let agents: AgentManager;
   agents = new AgentManager(events, {
+    snapshot: (project) => projectWrites.exclusive(project.id, async () => {
+      await canvasStore.waitForProject(project.id);
+      return previews.withWorkspaceStopped(project, () => withCanvasLock(project.workspacePath, () => checkpoints.snapshot(project)));
+    }),
     errorDiagnostics: () => {
       const route = networkSettings.get().active;
       return { network: { source: route.source, ...(route.httpsProxy ? { proxyUrl: route.httpsProxy } : {}) } };
@@ -753,6 +764,7 @@ export function createApp(options: AppOptions = {}) {
     logger: options.logger ?? false,
     ajv: { customOptions: { coerceTypes: false } },
   });
+  projectWrites.install(app);
   const canvasStore = registerCanvasRoutes(app, { projects, library, tools });
   registerPluginCapabilityRoutes(app, { capabilities: pluginCapabilities, plugins, invalidate: invalidatePluginSessions });
   const pluginSetup = new PluginSetupManager(dataDirectory, piAgentDirectory, pluginCapabilities, plugins, localPlugins, invalidatePluginSessions, async ref => {
@@ -778,6 +790,7 @@ export function createApp(options: AppOptions = {}) {
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
     }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), providerModelSettings.load()]);
+    await Promise.all(projects.list().map(async (project) => { projectWrites.initialize(project.id, await readWorkspaceVersion(project)); }));
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     const examplesWarning = await examples.load();
     if (examplesWarning) app.log.warn(examplesWarning);
@@ -790,7 +803,8 @@ export function createApp(options: AppOptions = {}) {
     const origin = request.headers.origin;
     if (origin && allowedOrigins.has(origin)) {
       reply.header("access-control-allow-origin", origin);
-      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id");
+      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-workspace-version");
+      reply.header("access-control-expose-headers", "x-workspace-version");
       reply.header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       reply.header("vary", "Origin");
     }
@@ -802,6 +816,11 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.get("/health", async () => ({ status: "ok" }));
+
+  registerCheckpointRoutes(app, {
+    store: checkpoints, writes: projectWrites, projects, conversations, agents, previews, events,
+    busy: (id) => publishing.has(id) || canvasStore.isProjectBusy(id) || tools.jobs().some((job) => job.context?.projectId === id && job.status === "running"),
+  });
 
   // The page Scenes run in. The desktop app loads its own pages from file://,
   // where a sandboxed frame may not load its script, so the frame comes from

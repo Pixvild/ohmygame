@@ -34,8 +34,13 @@ import { createProviderImageReadTool, installDeepSeekImageFiles } from "./deepse
 import { SessionImages } from "./session-images.js";
 import { installSessionImageRequests } from "./session-image-requests.js";
 import { AGENT_ERROR_ENTRY, assistantMessageError, normalizeAgentError, thrownAgentError } from "./agent-errors.js";
+import { sessionCheckpoints, TURN_CHECKPOINT_ENTRY, type TurnCheckpointHooks } from "./turn-checkpoints.js";
+import type { TurnCheckpoint } from "../shared/checkpoints.js";
+import { readWorkspaceNotice } from "./workspace-notice.js";
 
 export interface CodingSession {
+  setCheckpointHooks?(hooks: TurnCheckpointHooks): void;
+  sendCustomMessage?(message: { customType: string; content: string; display: boolean; details?: unknown }, options: { triggerTurn: false }): Promise<void>;
   readonly messages: readonly unknown[];
   readonly model?: RuntimeModel;
   readonly sessionManager?: Pick<SessionManager, "appendCustomEntry" | "getBranch">;
@@ -96,6 +101,7 @@ type CompactRunOutcome = { status: AgentRunResult } | { status: "failed"; cause:
 export type SessionFactory = (project: ProjectState, conversation: StoredConversation) => Promise<CodingSession>;
 
 export function conversationItems(entries: readonly SessionEntry[], markInterrupted = true): ThreadItem[] {
+  const checkpoints = sessionCheckpoints(entries);
   const items: ThreadItem[] = [];
   const tools = new Map<string, Extract<ThreadItem, { type: "dynamicToolCall" | "mcpToolCall" }>>();
   const planCalls = new Set<string>();
@@ -168,7 +174,7 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
       const attachments = details?.attachments ?? parsed.attachments;
       const contexts = promptContextLabels(details?.attachmentContext ?? parsed.attachmentContext);
       if (text || images.length > 0 || attachments.length > 0) {
-        items.push({ id: entry.id, turnId, type: "userMessage", text, ...(mentions.length ? { mentions } : {}), ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}), ...(contexts.length ? { contexts } : {}), timestamp });
+        items.push({ id: entry.id, turnId, type: "userMessage", text, ...(mentions.length ? { mentions } : {}), ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}), ...(contexts.length ? { contexts } : {}), ...(checkpoints.has(entry.id) ? { checkpoint: checkpoints.get(entry.id) } : {}), timestamp });
         if (images.length) items.push({ id: `${entry.id}:images`, turnId, type: "imageRead", count: images.length, status: "completed", timestamp });
       }
       continue;
@@ -316,6 +322,7 @@ function messageTime(entry: Extract<SessionEntry, { type: "message" }>): number 
 }
 
 interface AgentManagerOptions {
+  snapshot?: (project: ProjectState) => Promise<string>;
   createSession?: SessionFactory;
   loadSkills?: (project: ProjectState) => Promise<Array<{ name: string; description: string }>>;
   activeToolNames?: (project: ProjectState, mode: PlanMode, session: CodingSession) => string[];
@@ -332,6 +339,7 @@ interface ManagedSession {
 }
 
 interface ActiveTurn {
+  checkpoint?: TurnCheckpoint;
   project: ProjectState;
   projectId: string;
   conversationId: string;
@@ -581,6 +589,7 @@ export class AgentManager {
     if (mode === "normal" && planState.mode !== "normal") throw new Error("Finish or cancel the current plan before continuing");
     if (mode === "planning" && planState.mode === "executing") throw new Error("The plan is already executing");
     const active = this.#activeTurns.get(key);
+    if (!active && this.options.snapshot && this.isProjectBusy(project.id)) throw new Error("Wait for the other conversation in this project to finish");
     if (active) {
       if (mode !== "normal") throw new Error("Wait for the agent to finish before changing plan mode");
       if (active.status === "cancelling") throw new Error("Wait for the agent to stop");
@@ -635,6 +644,7 @@ export class AgentManager {
     if (this.#activeTurns.has(key) || this.#revisions.has(key)) {
       throw new Error("Wait for the agent to finish before editing a message");
     }
+    if (this.options.snapshot && this.isProjectBusy(project.id)) throw new Error("Wait for the other conversation in this project to finish");
     if ((this.#pendingPrompts.get(key)?.length ?? 0) > 0 || (this.#steeringPrompts.get(key)?.length ?? 0) > 0) {
       throw new Error("Remove queued messages before editing a message");
     }
@@ -650,6 +660,9 @@ export class AgentManager {
       const navigation = await managed.session.navigateTree(previous.id, { summarize: false });
       if (navigation.cancelled) throw new Error("Message edit was cancelled");
       navigated = true;
+      // Pi's leaf navigation alone is in memory. Persist the new branch even
+      // if preparing the replacement prompt later fails.
+      managed.session.sessionManager?.appendCustomEntry("ohmygame-message-revision", { version: 1 });
 
       const turnId = randomUUID();
       return {
@@ -787,11 +800,15 @@ export class AgentManager {
       } else {
         await managed.session.prompt(prompt);
       }
+      await this.#endCheckpoint(project.id, active.conversationId);
       if (isCancelling(active)) {
         this.#markCancelled(project.id, active);
         return "cancelled";
       }
     } catch (cause) {
+      // Failed and cancelled turns can still have changed creative files.
+      try { await this.#endCheckpoint(project.id, active.conversationId); }
+      catch (checkpointCause) { cause = checkpointCause; }
       if (isCancelling(active)) {
         this.#markCancelled(project.id, active);
         return "cancelled";
@@ -1029,6 +1046,7 @@ export class AgentManager {
       turnId: active.turnId,
       type: "userMessage",
       text: active.prompt,
+      ...(active.checkpoint ? { checkpoint: structuredClone(active.checkpoint) } : {}),
       ...(active.mentions.length ? { mentions: active.mentions } : {}),
       ...(active.images.length ? { images: active.images } : {}),
       ...(active.attachments.length ? { attachments: active.attachments } : {}),
@@ -1178,6 +1196,10 @@ export class AgentManager {
     const unsubscribe = session.subscribe((event) => this.#forwardEvent(project.id, conversation.summary.id, event));
     const managed = { session, unsubscribe };
     this.#sessions.set(key, managed);
+    if (this.options.snapshot) session.setCheckpointHooks?.({
+      begin: () => this.#beginCheckpoint(project.id, conversation.summary.id),
+      end: () => this.#endCheckpoint(project.id, conversation.summary.id),
+    });
     const entry = session.sessionManager?.getBranch().findLast((candidate) => candidate.type === "custom" && candidate.customType === "ohmygame-plan");
     if (!this.#planStates.has(key) && entry?.type === "custom" && entry.data && typeof entry.data === "object") {
       const state = entry.data as Partial<PlanSessionState>;
@@ -1188,11 +1210,48 @@ export class AgentManager {
     return managed;
   }
 
+  async #beginCheckpoint(projectId: string, conversationId: string): Promise<void> {
+    const active = this.#activeTurns.get(conversationKey(projectId, conversationId));
+    if (!active || !this.options.snapshot) return;
+    const before = await this.options.snapshot(active.project);
+    active.checkpoint = { id: active.turnId, before };
+    this.#persistCheckpoint(active);
+  }
+
+  async #endCheckpoint(projectId: string, conversationId: string): Promise<void> {
+    const active = this.#activeTurns.get(conversationKey(projectId, conversationId));
+    if (!active?.checkpoint || active.checkpoint.after || active.checkpoint.error || !this.options.snapshot) return;
+    try { active.checkpoint.after = await this.options.snapshot(active.project); }
+    catch (cause) {
+      active.checkpoint.error = cause instanceof Error ? cause.message : String(cause);
+      this.#persistCheckpoint(active);
+      throw cause;
+    }
+    this.#persistCheckpoint(active);
+  }
+
+  #persistCheckpoint(active: ActiveTurn): void {
+    this.#sessions.get(conversationKey(active.projectId, active.conversationId))?.session.sessionManager
+      ?.appendCustomEntry(TURN_CHECKPOINT_ENTRY, { version: 1, ...active.checkpoint });
+    const item = this.activeItems(active.projectId, active.conversationId)[0];
+    if (item) this.events.publish(active.projectId, "item.updated", { item }, eventScope(active));
+  }
+
+  /** Append to the real loaded session as well as its persistent tree. */
+  async notifyWorkspaceChange(projectId: string, conversationId: string, content: string): Promise<boolean> {
+    const session = this.#sessions.get(conversationKey(projectId, conversationId))?.session;
+    if (!session?.sendCustomMessage) return false;
+    await session.sendCustomMessage({ customType: "ohmygame-workspace-undo", content, display: false }, { triggerTurn: false });
+    return true;
+  }
+
   #forwardEvent(projectId: string, conversationId: string, event: AgentSessionEvent): void {
     const active = this.#activeTurns.get(conversationKey(projectId, conversationId));
     if (!active) return;
     if (event.type === "message_start" && isUserMessage(event.message)) {
+      const initialMessage = !active.userMessageStarted;
       active.userMessageStarted = true;
+      if (initialMessage && this.#sessions.get(conversationKey(projectId, conversationId))?.session.setCheckpointHooks) return;
       const key = conversationKey(projectId, conversationId);
       const steering = this.#steeringPrompts.get(key) ?? [];
       const pending = this.#pendingPrompts.get(key) ?? [];
@@ -1204,6 +1263,7 @@ export class AgentManager {
       if (active.images.length && active.startedEventId !== undefined) this.events.expireThrough(projectId, active.startedEventId);
       if (started.images.length) this.events.expireThrough(projectId, started.queuedEventId);
       active.turnId = started.turnId;
+      active.checkpoint = undefined;
       active.prompt = started.prompt;
       active.mentions = started.mentions;
       active.images = started.images;
@@ -2199,7 +2259,7 @@ function appendPlanState(sessionManager: CodingSession["sessionManager"], state:
 const BASE_TOOL_NAMES = ["read", "write", "edit", "bash"];
 
 export async function createPiSession(
-  project: Pick<ProjectState, "workspacePath"> & AgentPromptProject,
+  project: Pick<ProjectState, "workspacePath"> & Partial<Pick<ProjectState, "storagePath">> & AgentPromptProject,
   sessionManager: SessionManager,
   customTools: ToolDefinition[] = [],
   modelRuntime?: ModelRuntime,
@@ -2209,11 +2269,39 @@ export async function createPiSession(
   mcp?: { factory: ExtensionFactory; host: PluginMcpHost },
 ): Promise<CodingSession> {
   // Trusted-local phase: cwd guides Pi but is not an OS security boundary.
+  let checkpointHooks: TurnCheckpointHooks | undefined;
+  let checkpointFailure: unknown;
+  let stopForCheckpointFailure: () => void = () => {};
+  const checkpointExtension: ExtensionFactory = (pi) => {
+    pi.on("before_agent_start", async (event) => {
+      try {
+        const notice = await readWorkspaceNotice(project);
+        return notice ? { systemPrompt: `${event.systemPrompt}\n\nWorkspace restore notice (inspect current files before continuing):\n${notice}` } : undefined;
+      } catch (cause) { checkpointFailure = cause; stopForCheckpointFailure(); }
+    });
+    const guarded = async (operation: (() => Promise<void>) | undefined) => {
+      if (checkpointFailure || !operation) return;
+      try { await operation(); }
+      catch (cause) { checkpointFailure = cause; stopForCheckpointFailure(); }
+    };
+    pi.on("message_start", async (event) => {
+      if (event.message.role === "user") await guarded(checkpointHooks ? () => checkpointHooks!.end() : undefined);
+    });
+    pi.on("message_end", async (event) => {
+      if (event.message.role === "user") await guarded(checkpointHooks ? () => checkpointHooks!.begin() : undefined);
+    });
+    // Extension exceptions are swallowed by Pi. Keep an explicit failure
+    // latch and block every tool until the failed run has settled.
+    pi.on("tool_call", () => checkpointFailure
+      ? { block: true, reason: "Workspace checkpoint failed; no tools may run." } : undefined);
+  };
   const { resourceLoader, sessionSettings, pluginSkills } = await createPiResourceLoader(project.workspacePath, agentDir, {
     resolvePluginSkills,
     appendSystemPrompt: appendSystemPromptForProject(project),
     mcpFactory: mcp?.factory,
+    checkpointFactory: checkpointExtension,
   });
+  stopForCheckpointFailure = () => { void session.abort().catch(() => {}); };
   const images = new SessionImages(sessionManager, path.join(agentDir, "request-image-previews"));
   const { session } = await createAgentSession({
     cwd: project.workspacePath,
@@ -2231,9 +2319,23 @@ export async function createPiSession(
   });
   installDeepSeekImageFiles(session, agentDir);
   installSessionImageRequests(session, images, agentDir);
+  const streamFunction = session.agent.streamFunction;
+  session.agent.streamFunction = (...args) => {
+    // Agent-core still enters streaming with an already-aborted signal.
+    // Refuse the request explicitly so a provider cannot ignore that signal.
+    if (checkpointFailure) throw checkpointFailure;
+    return streamFunction(...args);
+  };
   mcp?.host.manage(session);
   try { await session.bindExtensions({ mode: "rpc" }); } catch (cause) { session.dispose(); throw cause; }
+  const prompt = session.prompt.bind(session);
   return Object.assign(session, {
+    setCheckpointHooks: (hooks: TurnCheckpointHooks) => { checkpointHooks = hooks; },
+    prompt: async (...args: Parameters<typeof prompt>) => {
+      checkpointFailure = undefined;
+      await prompt(...args);
+      if (checkpointFailure) throw checkpointFailure;
+    },
     getSkills: () => skillCatalog(resourceLoader.getSkills().skills, pluginSkills),
   });
 }
@@ -2269,6 +2371,7 @@ async function createPiResourceLoader(
     resolvePluginSkills?: () => Promise<PluginSkillRegistration[]>;
     appendSystemPrompt?: readonly string[];
     mcpFactory?: ExtensionFactory;
+    checkpointFactory?: ExtensionFactory;
   } = {},
 ): Promise<{ resourceLoader: DefaultResourceLoader; sessionSettings: SettingsManager; pluginSkills: PluginSkillRegistration[] }> {
   await ensureOhMyGamePiEnvironment(agentDir);
@@ -2285,6 +2388,7 @@ async function createPiResourceLoader(
     agentDir,
     settingsManager: sessionSettings,
     extensionFactories: [{ name: "openrouter-attribution", factory: openRouterAttributionExtension, hidden: true },
+      ...(options.checkpointFactory ? [{ name: "workspace-checkpoints", factory: options.checkpointFactory, hidden: true }] : []),
       ...(options.mcpFactory ? [{ name: "plugin-mcp", factory: options.mcpFactory, hidden: true }] : [])],
     additionalSkillPaths: pluginSkills.map((skill) => skill.path),
     appendSystemPrompt: options.appendSystemPrompt

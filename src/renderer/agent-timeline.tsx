@@ -35,6 +35,7 @@ import { GodotIcon } from "./godot-icon.js";
 import { MarkdownContent } from "./markdown-content.js";
 import { LazyDetails } from "./lazy-details.js";
 import { agentErrorDiagnosticRows, agentErrorDiagnosticText, agentErrorPresentation } from "./agent-error-presentation.js";
+import { TurnFileChanges } from "./turn-file-changes.js";
 
 type ToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" | "mcpToolCall" }>;
 
@@ -47,9 +48,12 @@ interface AgentTimelineProps {
   onRevise?: (prompt: string) => Promise<boolean>;
   onAddToChat?: (text: string) => void;
   waitingForInput?: boolean;
+  undoDisabled?: boolean;
+  onUndoTurn?: (turnId: string, conflicts?: "keep" | "overwrite") => Promise<void>;
 }
 
 const WorkspaceLinkContext = createContext<{ workspacePath?: string; onOpenWorkspaceFile?: (path: string) => void }>({});
+const CheckpointControls = createContext<Pick<AgentTimelineProps, "undoDisabled" | "onUndoTurn">>({});
 const completedDisplays = new WeakMap<ThreadTurn, TurnDisplay>();
 
 function turnDisplay(turn: ThreadTurn): TurnDisplay {
@@ -59,7 +63,8 @@ function turnDisplay(turn: ThreadTurn): TurnDisplay {
   return display;
 }
 
-export const AgentTimeline = memo(function AgentTimeline({ turns: sourceTurns, projectId = "", workspacePath, onOpenWorkspaceFile, revisionDisabled, onRevise, onAddToChat, waitingForInput = false }: AgentTimelineProps) {
+export const AgentTimeline = memo(function AgentTimeline({ turns: sourceTurns, projectId = "", workspacePath, onOpenWorkspaceFile, revisionDisabled, onRevise, onAddToChat, waitingForInput = false, undoDisabled, onUndoTurn }: AgentTimelineProps) {
+  const checkpointControls = useMemo(() => ({ undoDisabled, onUndoTurn }), [undoDisabled, onUndoTurn]);
   const [selectionRoot, setSelectionRoot] = useState<HTMLDivElement | null>(null);
   const [editingItemId, setEditingItemId] = useState<string>();
   const [draft, setDraft] = useState("");
@@ -120,7 +125,7 @@ export const AgentTimeline = memo(function AgentTimeline({ turns: sourceTurns, p
   }, [onRevise, submitting, revisionDisabled, draft]);
 
   return (
-    <WorkspaceLinkContext.Provider value={workspaceLinks}>
+    <WorkspaceLinkContext.Provider value={workspaceLinks}><CheckpointControls.Provider value={checkpointControls}>
       <div className="agent-timeline-selection-root" ref={setSelectionRoot}>
         {turns.map((turn, index) => (
           <Turn
@@ -150,7 +155,7 @@ export const AgentTimeline = memo(function AgentTimeline({ turns: sourceTurns, p
         ))}
         {onAddToChat ? <SelectedTextMenu root={selectionRoot} onAdd={onAddToChat} /> : null}
       </div>
-    </WorkspaceLinkContext.Provider>
+    </CheckpointControls.Provider></WorkspaceLinkContext.Provider>
   );
 });
 
@@ -181,6 +186,7 @@ const Turn = memo(function Turn({ turn, projectId, waitingForInput, steeringPend
   userControls: UserControls;
   assistantControls: AssistantControls;
 }) {
+  const checkpointControls = useContext(CheckpointControls);
   const [now, setNow] = useState(Date.now());
   const active = turn.status === "inProgress";
   useEffect(() => {
@@ -200,6 +206,10 @@ const Turn = memo(function Turn({ turn, projectId, waitingForInput, steeringPend
         ? <FinalResponse projectId={projectId} items={display.finalMessages} artifacts={display.artifacts} controls={assistantControls} />
         : display.artifacts.length > 0 ? <ArtifactPreviews projectId={projectId} artifacts={display.artifacts} /> : null}
       {steeringPending ? <SteeringActivity /> : null}
+      {display.user?.checkpoint && projectId ? <TurnFileChanges
+        projectId={projectId} conversationId={turn.conversationId} checkpoint={display.user.checkpoint}
+        disabled={checkpointControls.undoDisabled || active} onUndo={checkpointControls.onUndoTurn}
+      /> : null}
     </article>
   );
 }, (previous, next) => previous.turn === next.turn && previous.projectId === next.projectId &&

@@ -1,3 +1,4 @@
+import { workspaceVersion } from "./workspace-version.js";
 import {
   Clapperboard,
   Code2,
@@ -126,6 +127,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   onSendToAgent?: (text: string, contexts: PromptContext[]) => Promise<boolean>;
 }) {
   const projectId = project.id;
+  const [writeVersion] = useState(() => workspaceVersion(projectId));
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [notice, setNotice] = useState<string>();
   const [graphMeta, setGraphMeta] = useState<GraphMeta>();
@@ -375,7 +377,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
           throw new Error(PROJECT_CHANGED);
         }
         try {
-          const saved = await updateNodeCodebase(projectId, { ...outgoing, revision: disk.revision });
+          const saved = await updateNodeCodebase(projectId, { ...outgoing, revision: disk.revision }, writeVersion);
           if (generation === diskGeneration.current) {
             diskCodebase.current = { codebase: { graph: outgoing.graph, editorLayout: outgoing.editorLayout }, revision: saved.revision };
           }
@@ -810,7 +812,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
         preset: presetId,
         id: uniqueNodeId(presetId, new Set(nodes.map((node) => node.id))),
         position: snapCanvasPosition(position),
-      });
+      }, writeVersion);
       const loaded = await getNodeCodebase(projectId);
       applyCodebase(loaded, { diskRevision: loaded.revision });
       setCodeRevision((revision) => revision + 1);
@@ -908,7 +910,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     setBuilding(true);
     try {
       await save(codebase);
-      const artifact = await buildInteractiveStory(projectId);
+      const artifact = await buildInteractiveStory(projectId, writeVersion);
       const url = URL.createObjectURL(artifact);
       const link = window.document.createElement("a");
       link.href = url;

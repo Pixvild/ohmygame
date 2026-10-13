@@ -1,4 +1,6 @@
 import { runtimeConnection, subscribeRuntimeConnection } from "./runtime-connection.js";
+import { assertWorkspaceVersion, observeWorkspaceVersion, workspaceVersion, type WorkspaceRequestInit } from "./workspace-version.js";
+import type { TurnFileChange, TurnFileDiff, TurnUndoResult } from "../shared/checkpoints.js";
 import type { DesktopRuntimeService } from "../shared/desktop-runtime.js";
 import {
   RUNTIME_EVENT_TYPES,
@@ -468,10 +470,10 @@ export async function publishProject(projectId: string, accessToken: string, met
   return request(`/projects/${projectId}/publish`, { method: "POST", body: JSON.stringify(body) });
 }
 
-export async function buildInteractiveStory(projectId: string): Promise<Blob> {
+export async function buildInteractiveStory(projectId: string, version?: string): Promise<Blob> {
   const response = await fetch(apiUrl(`/projects/${projectId}/interactive-story/build`), {
     method: "POST",
-    headers: runtimeHeaders(),
+    headers: projectRuntimeHeaders(projectId, version),
   });
   if (!response.ok) throw await responseError(response);
   return response.blob();
@@ -520,10 +522,12 @@ export async function listPlayablePresets(): Promise<{ presets: PlayablePresetSu
 export async function addPlayableNode(
   projectId: string,
   body: { preset: string; id: string; title?: string; position?: { x: number; y: number } },
+  version?: string,
 ): Promise<PlayableAddedNode> {
   return request(`/projects/${projectId}/playable/nodes`, {
     method: "POST",
     body: JSON.stringify(body),
+    workspaceVersion: version,
   });
 }
 
@@ -539,10 +543,10 @@ export async function getPlayableThumbnail(projectId: string, nodeId: string): P
   return response.blob();
 }
 
-export async function setPlayableThumbnail(projectId: string, nodeId: string, hash: string, image: Blob): Promise<void> {
+export async function setPlayableThumbnail(projectId: string, nodeId: string, hash: string, image: Blob, version?: string): Promise<void> {
   const response = await fetch(apiUrl(`/projects/${projectId}/playable/thumbnails/${encodeURIComponent(nodeId)}?hash=${encodeURIComponent(hash)}`), {
     method: "PUT",
-    headers: { "content-type": "image/webp", ...runtimeHeaders() },
+    headers: { "content-type": "image/webp", ...projectRuntimeHeaders(projectId, version) },
     body: image,
   });
   if (!response.ok) throw await responseError(response);
@@ -552,9 +556,11 @@ export async function setPlayableThumbnail(projectId: string, nodeId: string, ha
 export async function updateNodeCodebase(
   projectId: string,
   codebase: NodeCodebaseUpdate & { revision: string },
+  version?: string,
 ): Promise<{ revision: string }> {
   return request(`/projects/${projectId}/playable/codebase`, {
     method: "PUT",
+    workspaceVersion: version,
     body: JSON.stringify(codebase),
   });
 }
@@ -574,7 +580,7 @@ export async function setProjectCover(projectId: string, cover: Blob, source: Pr
   const suffix = source === "auto" ? "?source=auto" : "";
   const response = await fetch(apiUrl(`/projects/${projectId}/cover${suffix}`), {
     method: "PUT",
-    headers: { "content-type": "image/webp", ...runtimeHeaders() },
+    headers: { "content-type": "image/webp", ...projectRuntimeHeaders(projectId) },
     body: cover,
   });
   if (!response.ok) throw await responseError(response);
@@ -765,7 +771,7 @@ export async function uploadProjectAttachment(
   if (relativePath) query.set("relativePath", relativePath);
   const response = await fetch(apiUrl(`/projects/${encodeURIComponent(projectId)}/attachments?${query}`), {
     method: "POST",
-    headers: { "content-type": "application/vnd.ohmygame.attachment", ...runtimeHeaders() },
+    headers: { "content-type": "application/vnd.ohmygame.attachment", ...projectRuntimeHeaders(projectId) },
     body: file,
   });
   if (!response.ok) throw await responseError(response);
@@ -854,29 +860,43 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly conflicts?: string[],
   ) {
     super(message);
   }
 }
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: WorkspaceRequestInit = {}): Promise<T> {
+  const projectId = /^\/projects\/([^/?]+)/.exec(path)?.[1];
+  const observedVersion = projectId ? workspaceVersion(projectId) : undefined;
+  if (projectId && init.workspaceVersion !== undefined) assertWorkspaceVersion(projectId, init.workspaceVersion);
   const response = await fetch(apiUrl(path), {
     ...init,
     headers: {
       ...(init.body ? { "content-type": "application/json" } : {}),
       ...runtimeHeaders(),
+      ...(projectId ? { "x-workspace-version": init.workspaceVersion ?? observedVersion! } : {}),
       ...init.headers,
     },
   });
+  const version = response.headers.get("x-workspace-version");
+  if (projectId && version && (!init.method || init.method === "GET") && workspaceVersion(projectId) === observedVersion) observeWorkspaceVersion(projectId, version);
   if (!response.ok) throw await responseError(response);
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
 async function responseError(response: Response): Promise<ApiError> {
-  const body = await response.json().catch(() => ({})) as { error?: string; message?: string; code?: string };
-  return new ApiError(body.message ?? body.error ?? `Request failed with ${response.status}`, response.status, body.code);
+  const body = await response.json().catch(() => ({})) as { error?: string; message?: string; code?: string; conflicts?: string[] };
+  return new ApiError(body.message ?? body.error ?? `Request failed with ${response.status}`, response.status, body.code, body.conflicts);
 }
+
+const turnCheckpointUrl = (projectId: string, conversationId: string, turnId: string) => `/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}`;
+export const getTurnChanges = (projectId: string, conversationId: string, turnId: string): Promise<{ changes: TurnFileChange[] }> => request(`${turnCheckpointUrl(projectId, conversationId, turnId)}/changes`);
+export const getTurnFileDiff = (projectId: string, conversationId: string, turnId: string, filePath: string): Promise<TurnFileDiff> => request(`${turnCheckpointUrl(projectId, conversationId, turnId)}/changes?path=${encodeURIComponent(filePath)}`);
+export const getCheckpointRecovery = (projectId: string): Promise<{ pending: boolean }> => request(`/projects/${encodeURIComponent(projectId)}/checkpoint-recovery`);
+export const recoverCheckpoint = (projectId: string): Promise<TurnUndoResult> => request(`/projects/${encodeURIComponent(projectId)}/checkpoint-recovery`, { method: "POST" });
+export const undoTurnFiles = (projectId: string, conversationId: string, turnId: string, conflicts?: "keep" | "overwrite"): Promise<TurnUndoResult> => request(`${turnCheckpointUrl(projectId, conversationId, turnId)}/undo`, { method: "POST", body: JSON.stringify({ conflicts }) });
 
 async function streamProjectEvents(
   projectId: string,
@@ -1058,6 +1078,11 @@ export function playableSandboxUrl(): string {
 function apiUrl(path: string): string {
   const runtime = desktopRuntime();
   return runtime ? `${runtime.daemonUrl}${path}` : `${API_BASE}${path}`;
+}
+
+function projectRuntimeHeaders(projectId: string, version = workspaceVersion(projectId)): HeadersInit {
+  assertWorkspaceVersion(projectId, version);
+  return { ...runtimeHeaders(), "x-workspace-version": version };
 }
 
 function runtimeHeaders(): HeadersInit {

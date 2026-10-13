@@ -1,3 +1,4 @@
+import { workspaceVersion } from "./workspace-version.js";
 import { CanvasTableNode, type CanvasTables, type TableNodeRuntime } from "./canvas-table-node.js";
 import {
   ArrowUp,
@@ -326,6 +327,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   expandedDocument?: { id: string; nodeId?: string; busy?: boolean; onClose(): void };
 }) {
   const projectId = project.id;
+  const [writeVersion] = useState(() => workspaceVersion(projectId));
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [notice, setNotice] = useState<{ kind: "save" | "action"; message: string }>();
   const [loadError, setLoadError] = useState<string>();
@@ -1177,7 +1179,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     try {
       const referenceSource = { boardId: storage.boardId, nodeId: node.id };
       await documents.flush();
-      const result = await generateCanvasText(projectId, instruction, model, reasoningLevel, referenceSource);
+      const result = await generateCanvasText(projectId, instruction, model, reasoningLevel, referenceSource, writeVersion);
       setNodes((current) => current.map((candidate) => candidate.id === node.id
         ? { ...candidate, data: { ...candidate.data, text: result.text, textModel: result.model, reasoningLevel } }
         : candidate));

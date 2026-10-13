@@ -633,7 +633,7 @@ export interface PlanState {
 }
 
 export type ThreadItem = (
-  | { id: string; turnId: string; type: "userMessage"; text: string; mentions?: PluginMention[]; images?: PromptImage[]; attachments?: ConversationAttachment[]; contexts?: PromptContextLabel[] }
+  | { id: string; turnId: string; type: "userMessage"; text: string; mentions?: PluginMention[]; images?: PromptImage[]; attachments?: ConversationAttachment[]; contexts?: PromptContextLabel[]; checkpoint?: import("./checkpoints.js").TurnCheckpoint }
   | { id: string; turnId: string; type: "imageRead"; count: number; status: "completed" }
   | { id: string; turnId: string; type: "modelChange"; model: AgentModelRef; name?: string }
   | {
@@ -1050,6 +1050,7 @@ export type ToolArtifact =
   | { type: "video"; path: string; mediaType: "video/mp4" | "video/webm" };
 
 export interface RuntimeEventData {
+  "workspace.restored": { version: string; changed: string[]; recovery?: boolean };
   "conversation.renamed": { conversation: ConversationSummary };
   "conversation.model.changed": { item: Extract<ThreadItem, { type: "modelChange" }> };
   "project.renamed": { project: ProjectState };
@@ -1076,6 +1077,7 @@ export interface RuntimeEventData {
 export type RuntimeEventType = keyof RuntimeEventData;
 
 export const RUNTIME_EVENT_TYPES = [
+  "workspace.restored",
   "conversation.renamed",
   "conversation.model.changed",
   "project.renamed",

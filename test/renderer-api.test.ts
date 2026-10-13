@@ -1,3 +1,5 @@
+import { observeWorkspaceVersion, workspaceVersion } from "../src/renderer/workspace-version.js";
+import { request } from "../src/renderer/api.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { approvePlan, cancelPlan, compactConversation, createConversation, createLibraryImage, createProject, deleteWorkspaceEntry, deleteLibraryAsset, deleteProject, duplicateProject, forceDeleteLibraryAsset, getConversation, getConversationCapabilities, getConversationContextUsage, getExploreGameCover, getHomeComposerCapabilities, getLibraryAsset, getOpenAIEndpointSettings, getNodeCodebase, getProjectCover, getWorkspaceAsset, getWorkspaceFile, inspectPluginSource, installPlugin, listLibraryAssetReferences, listLibraryAssets, listModels, listPlugins, listProjects, listWorkspaceFiles, publishProject, readPlugin, readPluginSkill, refinePlan, removePendingPrompt, renameWorkspaceEntry, renameConversation, renameLibraryAsset, renameProject, reviseLastPrompt, sendPrompt, setConversationModel, setConversationReasoning, setProjectCover, steerPendingPrompt, subscribeToProject, uninstallPlugin, updateAgentDefaults, updateOpenAIEndpointSettings, updateNodeCodebase, updatePluginSettings, updateProjectRunSettings, updateProjectStartupDirectory, uploadLibraryAsset } from "../src/renderer/api.js";
 import { cancelToolJob, getProjectCoverState, listToolJobs, restoreAutomaticProjectCover, retryToolJob, startToolJob } from "../src/renderer/api.js";
@@ -79,7 +81,7 @@ describe("renderer event stream", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/projects/project-1/playable/codebase",
-      expect.objectContaining({ headers: {} }),
+      expect.objectContaining({ headers: { "x-workspace-version": "0" } }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -347,13 +349,13 @@ describe("renderer project API", () => {
     await expect(getConversation("project-1", "conversation-1")).resolves.toEqual(detail);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/projects/project-1/conversations/conversation-1",
-      expect.objectContaining({ headers: {} }),
+      expect.objectContaining({ headers: { "x-workspace-version": "0" } }),
     );
 
     await getConversation("project-1", "conversation-1", true);
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/projects/project-1/conversations/conversation-1?reset=1",
-      expect.objectContaining({ headers: {} }),
+      expect.objectContaining({ headers: { "x-workspace-version": "0" } }),
     );
   });
 
@@ -420,7 +422,7 @@ describe("renderer project API", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/projects/project-1/conversations/conversation-1/turns", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ prompt: "Build a game" }),
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-workspace-version": "0" },
     }));
   });
 
@@ -555,7 +557,7 @@ describe("renderer project API", () => {
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ title: "New title" }),
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-workspace-version": "0" },
       }),
     );
   });
@@ -660,7 +662,7 @@ describe("renderer project API", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:43210/projects/project-1/cover", {
       method: "PUT",
-      headers: { "content-type": "image/webp", authorization: "Bearer secret" },
+      headers: { "content-type": "image/webp", authorization: "Bearer secret", "x-workspace-version": "0" },
       body: cover,
     });
   });
@@ -679,10 +681,10 @@ describe("renderer project API", () => {
     await setProjectCover("project-1", cover, "auto");
     await restoreAutomaticProjectCover("project-1");
     expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:43210/projects/project-1/cover?source=auto", {
-      method: "PUT", headers: { "content-type": "image/webp", authorization: "Bearer secret" }, body: cover,
+      method: "PUT", headers: { "content-type": "image/webp", authorization: "Bearer secret", "x-workspace-version": "0" }, body: cover,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "http://127.0.0.1:43210/projects/project-1/cover", {
-      method: "DELETE", headers: { authorization: "Bearer secret" },
+      method: "DELETE", headers: { authorization: "Bearer secret", "x-workspace-version": "0" },
     });
   });
 
@@ -764,3 +766,19 @@ function chunkedStream(bytes: Uint8Array, boundaries: number[]): ReadableStream<
     },
   });
 }
+
+
+it("keeps a restore event's version when an older read settles and refuses the old editor's delayed write", async () => {
+  installWindow();
+  observeWorkspaceVersion("versioned-project", "0");
+  let finish!: (response: Response) => void;
+  const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  vi.stubGlobal("fetch", fetchMock);
+  const pending = request("/projects/versioned-project/files");
+  observeWorkspaceVersion("versioned-project", "restored");
+  finish(Response.json([], { headers: { "x-workspace-version": "0" } }));
+  await pending;
+  expect(workspaceVersion("versioned-project")).toBe("restored");
+  await expect(request("/projects/versioned-project/files", { method: "POST", workspaceVersion: "0", body: "{}" })).rejects.toMatchObject({ code: "workspace_stale" });
+  expect(fetchMock).toHaveBeenCalledOnce();
+});
