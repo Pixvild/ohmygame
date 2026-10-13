@@ -1,28 +1,28 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync, type Stats } from "node:fs";
-import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FileChangedError, writeFileBlob } from "../src/daemon/checkpoint-objects.js";
+import { FileChangedError, readCommit, readObject, writeFileBlob, writeObject } from "../src/daemon/checkpoint-objects.js";
 import { CheckpointChangedError, CheckpointConflictError, CheckpointIncompleteError, CheckpointStore, checkpointDirectory } from "../src/daemon/checkpoints.js";
 
 // Lets a test step in just before the store touches the file system, to stand in for another writer or a failing disk.
 // `frozen` makes a file look the same as when it was frozen, as on a file system that keeps coarse times.
 const interception = vi.hoisted(() => ({
-  before: undefined as ((operation: "lstat" | "rm" | "rename", target: string) => Promise<void>) | undefined,
+  before: undefined as ((operation: "lstat" | "rm" | "rename" | "copyFile", target: string) => Promise<void>) | undefined,
   frozen: new Map<string, Stats>(),
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
-  const intercepted = <T extends (...parameters: any[]) => Promise<unknown>>(operation: "lstat" | "rm" | "rename", run: T, target = 0) => (async (...parameters: Parameters<T>) => {
+  const intercepted = <T extends (...parameters: any[]) => Promise<unknown>>(operation: "lstat" | "rm" | "rename" | "copyFile", run: T, target = 0) => (async (...parameters: Parameters<T>) => {
     await interception.before?.(operation, String(parameters[target]));
     return await run(...parameters);
   }) as T;
   const lstat = intercepted("lstat", (async (target: string) => interception.frozen.get(target) ?? await original.lstat(target)) as typeof original.lstat);
-  const mocked = { ...original, lstat, rm: intercepted("rm", original.rm), rename: intercepted("rename", original.rename, 1) };
+  const mocked = { ...original, lstat, rm: intercepted("rm", original.rm), rename: intercepted("rename", original.rename, 1), copyFile: intercepted("copyFile", original.copyFile) };
   return { ...mocked, default: mocked };
 });
 
@@ -77,6 +77,22 @@ async function contents(directory: string, prefix = ""): Promise<Record<string, 
   }
   // Built from entries so that a file named `__proto__` is kept as well.
   return Object.fromEntries(result);
+}
+
+/** Takes every permission away from these files and folders while `run` goes on, so that they cannot be read. */
+async function locked<T>(targets: string[], run: () => Promise<T>): Promise<T> {
+  const modes = await Promise.all(targets.map(async (target) => (await lstat(target)).mode & 0o777));
+  for (const target of targets) await chmod(target, 0o000);
+  try {
+    return await run();
+  } finally {
+    for (const [index, target] of targets.entries()) await chmod(target, modes[index]!);
+  }
+}
+
+/** The paths a snapshot says it could not read. */
+async function unreadable(game: { workspacePath: string; storagePath: string }, commit: string): Promise<string[]> {
+  return (await readCommit(checkpointDirectory(game), commit)).unreadable;
 }
 
 describe("workspace checkpoints", () => {
@@ -241,6 +257,57 @@ describe("workspace checkpoints", () => {
     expect(await store.restore(game, snapshot)).toMatchObject({ changed: [] });
   });
 
+  it("tells when no operation of a project is under way or waiting any more", async () => {
+    const game = await project(Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`src/file-${index}.ts`, `export const value = ${index};\n`])));
+    const store = new CheckpointStore();
+    await store.settled(game);
+    const first = await store.snapshot(game);
+    await write(game.workspacePath, { "src/file-0.ts": "changed" });
+
+    const done: string[] = [];
+    const operations = [
+      store.snapshot(game).then(() => done.push("snapshot")),
+      store.restore(game, first).then(() => done.push("restore")),
+      store.restore(game, "0".repeat(40)).catch(() => done.push("refused")),
+    ];
+    const settled = store.settled(game);
+    // One that is asked for while the others are waited for counts as well.
+    operations.push(store.snapshot(game).then(() => done.push("late")));
+    await settled;
+    expect(done).toEqual(["snapshot", "restore", "refused", "late"]);
+
+    // The project can be removed now: nothing is left that would write its store anew.
+    await rm(game.storagePath, { recursive: true });
+    await Promise.all(operations);
+    expect(existsSync(game.storagePath)).toBe(false);
+  });
+
+  it("fails for a project whose workspace is gone, and does not make its store anew", async () => {
+    const game = await project({ "src/game.ts": "one" });
+    const store = new CheckpointStore();
+    const commit = await store.snapshot(game);
+    await rm(game.storagePath, { recursive: true });
+    await expect(store.snapshot(game)).rejects.toThrow();
+    await expect(store.restore(game, commit)).rejects.toThrow();
+    await expect(store.undo(game, { before: commit, after: commit })).rejects.toThrow();
+    expect(existsSync(game.storagePath)).toBe(false);
+  });
+
+  it("makes no store for a removed project whose workspace is a folder elsewhere, nor for a workspace that is a file", async () => {
+    const elsewhere = await project({ "src/game.ts": "one" });
+    const game = { workspacePath: elsewhere.workspacePath, storagePath: (await project({})).storagePath };
+    const store = new CheckpointStore();
+    await store.snapshot(game);
+    // Removing such a project leaves the user's own folder alone, so a turn that ends late still finds its workspace.
+    await rm(game.storagePath, { recursive: true });
+    await expect(store.snapshot(game)).rejects.toThrow();
+    expect(existsSync(game.storagePath)).toBe(false);
+
+    const file = { workspacePath: path.join(elsewhere.workspacePath, "src/game.ts"), storagePath: elsewhere.storagePath };
+    await expect(store.snapshot(file)).rejects.toThrow("ENOTDIR");
+    expect(existsSync(checkpointDirectory(file))).toBe(false);
+  });
+
   it("trusts its file cache only for files that had time to settle", async () => {
     const game = await project({ "index.html": "<main></main>", "src/game.ts": "one" });
     const cacheFile = path.join(checkpointDirectory(game), "ohmygame-stat-cache.json");
@@ -374,7 +441,7 @@ describe("workspace checkpoints", () => {
     expect(await contents(game.workspacePath)).toEqual({ ...later, "clean.ts": "one" });
 
     await store.restore(game, kept.previous);
-    const overwritten = await store.undo(game, { before, after }, { conflicts: "overwrite" });
+    const overwritten = await store.undo(game, { before, after }, { conflicts: { overwrite: ["added.ts", "edited.ts", "removed.ts"] } });
     expect(overwritten.conflicts).toEqual(["added.ts", "edited.ts", "removed.ts"]);
     expect(overwritten.changed).toEqual(["added.ts", "clean.ts", "edited.ts", "removed.ts"]);
     expect(await contents(game.workspacePath)).toEqual({ "edited.ts": "one", "removed.ts": "one", "clean.ts": "one", "by-hand.ts": "one" });
@@ -405,7 +472,8 @@ describe("workspace checkpoints", () => {
     const current = { ...later, "levels/one.json": "{}" };
 
     const refused = await store.undo(game, { before, after }).catch((error: unknown) => error);
-    expect((refused as CheckpointConflictError).conflicts).toEqual(["enemies/boss.ts", "levels"]);
+    // The files that cannot come back are named, and so are the later files that are in their way.
+    expect((refused as CheckpointConflictError).conflicts).toEqual(["enemies", "enemies/boss.ts", "levels", "levels/two.json"]);
     expect(await contents(game.workspacePath)).toEqual(current);
 
     // Keeping the conflicts still removes what the turn added and nobody changed since.
@@ -414,11 +482,89 @@ describe("workspace checkpoints", () => {
     expect(await contents(game.workspacePath)).toEqual(later);
 
     await store.restore(game, kept.previous);
-    const overwritten = await store.undo(game, { before, after }, { conflicts: "overwrite" });
+    const overwritten = await store.undo(game, { before, after }, { conflicts: { overwrite: ["enemies", "enemies/boss.ts", "levels", "levels/two.json"] } });
     expect(overwritten.changed).toEqual(["enemies", "enemies/boss.ts", "levels", "levels/one.json", "levels/two.json"]);
     expect(await contents(game.workspacePath)).toEqual(files);
     await store.restore(game, overwritten.previous);
     expect(await contents(game.workspacePath)).toEqual(current);
+  });
+
+  it("names the later files in the way of an undo, and overwrites only when it was told of every conflict", async () => {
+    const files = { "old.txt": "old", "src/game.ts": "one" };
+    const game = await project(files);
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(path.join(game.workspacePath, "old.txt"));
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    const after = await store.snapshot(game);
+    // Afterwards a folder takes the name of the removed file, with a file of the user's in it.
+    await write(game.workspacePath, { "old.txt/mine.txt": "mine" });
+    const current = { "old.txt/mine.txt": "mine", "src/game.ts": "two" };
+    const refusedWith = async (overwrite?: string[]) => {
+      const refused = await store.undo(game, { before, after }, overwrite ? { conflicts: { overwrite } } : {}).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(CheckpointConflictError);
+      // Nothing here is in the way for good: the caller may overwrite all of it.
+      expect((refused as CheckpointConflictError).blocked).toEqual([]);
+      return (refused as CheckpointConflictError).conflicts;
+    };
+
+    expect(await refusedWith()).toEqual(["old.txt", "old.txt/mine.txt"]);
+    // A list without the file in the way does not let the undo remove that file.
+    expect(await refusedWith(["old.txt"])).toEqual(["old.txt", "old.txt/mine.txt"]);
+    expect(await contents(game.workspacePath)).toEqual(current);
+
+    // Nor does a list that was made before another file of the turn was changed again.
+    await write(game.workspacePath, { "src/game.ts": "three" });
+    expect(await refusedWith(["old.txt", "old.txt/mine.txt"])).toEqual(["old.txt", "old.txt/mine.txt", "src/game.ts"]);
+    expect(await contents(game.workspacePath)).toEqual({ ...current, "src/game.ts": "three" });
+
+    // A path in the list that is no conflict does not matter.
+    const overwritten = await store.undo(game, { before, after }, { conflicts: { overwrite: ["README.md", "old.txt", "old.txt/mine.txt", "src/game.ts"] } });
+    expect(overwritten).toMatchObject({ changed: ["old.txt", "old.txt/mine.txt", "src/game.ts"], conflicts: ["old.txt", "old.txt/mine.txt", "src/game.ts"] });
+    expect(await contents(game.workspacePath)).toEqual(files);
+    await store.restore(game, overwritten.previous);
+    expect(await contents(game.workspacePath)).toEqual({ ...current, "src/game.ts": "three" });
+  });
+
+  it("tells with the first refusal which conflicts no choice can put back", async () => {
+    const game = await project({ "old.txt": "old", "tools": "all tools in one file", "src/game.ts": "one" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(path.join(game.workspacePath, "old.txt"));
+    await rm(path.join(game.workspacePath, "tools"));
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    const after = await store.snapshot(game);
+    // Afterwards folders take the names of the removed files. Both hold a file of the user's, and one holds dependencies as well.
+    const later = { "old.txt/mine.txt": "mine", "tools/mine.txt": "mine", "tools/node_modules/dep/index.js": "module.exports = 1;\n" };
+    await write(game.workspacePath, later);
+    const conflicts = ["old.txt", "old.txt/mine.txt", "tools", "tools/mine.txt"];
+
+    // A caller that has not chosen yet learns at once that `tools` cannot come back, and need not offer to overwrite it.
+    for (const refused of [store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: conflicts } })]) {
+      const error = await refused.catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(CheckpointConflictError);
+      expect((error as CheckpointConflictError).conflicts).toEqual(conflicts);
+      expect((error as CheckpointConflictError).blocked).toEqual(["tools"]);
+    }
+    expect(await contents(game.workspacePath)).toEqual({ ...later, "src/game.ts": "two" });
+  });
+
+  it("takes nothing but a list of paths for leave to overwrite", async () => {
+    const game = await project({ "a": "one", "b": "one" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "a": "two", "b": "two" });
+    const after = await store.snapshot(game);
+    const current = { "a": "three", "b": "three" };
+    await write(game.workspacePath, current);
+
+    // From code without types anything can come in the place of the list. A text is not the list of its letters.
+    for (const conflicts of [{ overwrite: "ab" }, { overwrite: { a: true, b: true } }, {}, "overwrite", 1, null]) {
+      await expect(store.undo(game, { before, after }, { conflicts } as never)).rejects.toBeInstanceOf(CheckpointConflictError);
+      expect(await contents(game.workspacePath)).toEqual(current);
+    }
+    expect(await store.undo(game, { before: after, after }, { conflicts: null } as never)).toMatchObject({ changed: [], conflicts: [] });
+    expect(await store.undo(game, { before, after }, { conflicts: { overwrite: ["a", "b"] } })).toMatchObject({ changed: ["a", "b"] });
   });
 
   it("leaves excluded files alone when it undoes", async () => {
@@ -498,7 +644,7 @@ describe("workspace checkpoints", () => {
     await mkdir(path.join(game.workspacePath, "levels/world/one"), { recursive: true });
     const current = { ...dependencies, "src/game.ts": "two" };
 
-    for (const refused of [store.restore(game, before), store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: "overwrite" })]) {
+    for (const refused of [store.restore(game, before), store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: ["tools"] } })]) {
       const error = await refused.catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(CheckpointConflictError);
       expect((error as CheckpointConflictError).conflicts).toEqual(["tools"]);
@@ -530,6 +676,8 @@ describe("workspace checkpoints", () => {
     await write(game.workspacePath, later);
     const refused = await store.undo(game, { before, after }).catch((error: unknown) => error);
     expect((refused as CheckpointConflictError).conflicts).toEqual(["Game.ts", "README.md", "game.ts"]);
+    // `Game.ts` comes back once `game.ts` is overwritten. Nothing removes `Readme.md`, which no snapshot holds under the name that is wanted.
+    expect((refused as CheckpointConflictError).blocked).toEqual(["README.md"]);
     expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: [] });
     expect((await readdir(game.workspacePath)).sort()).toEqual(["Readme.md", "game.ts"]);
     expect(await contents(game.workspacePath)).toEqual(later);
@@ -647,6 +795,27 @@ describe("workspace checkpoints", () => {
     expect(await contents(game.workspacePath)).toEqual({ "a.ts": "TWO" });
   });
 
+  it("does not replace a file that had settled and was saved again with the same size", async () => {
+    const game = await project({ "a.ts": "one", "b.ts": "one" });
+    const file = (name: string) => path.join(game.workspacePath, name);
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "a.ts": "two", "b.ts": "two" });
+    const written = Math.max(...await Promise.all(["a.ts", "b.ts"].map(async (name) => (await lstat(file(name))).ctimeMs)));
+    // Three seconds on the files have settled: they are known by their size and times alone, not by their content.
+    vi.useFakeTimers({ toFake: ["Date"], now: written + 3_000 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // Another writer saves a.ts right after the restore has recorded the workspace. The file keeps its size.
+    interception.before = async (operation, target) => {
+      if (operation !== "rename" || path.basename(target) !== "ohmygame-stat-cache.json") return;
+      interception.before = undefined;
+      await writeFile(file("a.ts"), "TWO");
+    };
+    await expect(store.restore(game, before)).rejects.toBeInstanceOf(CheckpointChangedError);
+    expect(await contents(game.workspacePath)).toEqual({ "a.ts": "TWO", "b.ts": "two" });
+  });
+
   it("does not replace a file that is saved while its old content is being written out", async () => {
     const game = await project({ "a.ts": "one" });
     const store = new CheckpointStore();
@@ -718,6 +887,167 @@ describe("workspace checkpoints", () => {
     await write(game.workspacePath, left);
     expect(await store.diff(game, before, await store.snapshot(game))).toEqual([]);
     expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one" });
+  });
+
+  it("keeps the way back to the last whole state when a second operation fails as well", async () => {
+    const game = await project({ "kept.ts": "one" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    const whole = { "kept.ts": "two", "added.ts": "added" };
+    await write(game.workspacePath, whole);
+
+    // No file can be put in place any more, neither by an operation nor when it takes its changes back.
+    interception.before = async (operation, target) => {
+      if (operation === "rename" && target.startsWith(game.workspacePath)) throw new Error("disk failure");
+    };
+    const first = await store.restore(game, before).catch((error: unknown) => error);
+    const previous = (first as CheckpointIncompleteError).previous;
+    expect((first as CheckpointIncompleteError).found).toBe(previous);
+    expect(await contents(game.workspacePath)).toEqual({ "kept.ts": "two" });
+
+    // The restore that is to repair this fails too. It had changed nothing yet, so it has nothing to take back,
+    // and the note still names the state to return to.
+    await expect(store.restore(game, previous)).rejects.toThrow("disk failure");
+    expect(await store.unfinished(game)).toBe(previous);
+
+    // An operation that cannot take back what it changed names that state as well, not the one it started from.
+    await write(game.workspacePath, { "extra.ts": "extra" });
+    const second = await store.restore(game, before).catch((error: unknown) => error);
+    expect(second).toBeInstanceOf(CheckpointIncompleteError);
+    expect((second as CheckpointIncompleteError).previous).toBe(previous);
+    expect(await contents(game.workspacePath)).toEqual({ "kept.ts": "two" });
+    // What was done in between is not in that state. It is in the workspace as the operation found it, which it names too.
+    const found = (second as CheckpointIncompleteError).found;
+    expect(Buffer.from((await store.read(game, found, "extra.ts"))!).toString("utf8")).toBe("extra");
+    expect(await store.read(game, previous, "extra.ts")).toBeUndefined();
+    expect(await new CheckpointStore().unfinished(game)).toBe(previous);
+
+    interception.before = undefined;
+    await store.restore(game, previous);
+    expect(await contents(game.workspacePath)).toEqual(whole);
+    expect(await store.unfinished(game)).toBeUndefined();
+  });
+
+  it("leaves the note of an unfinished restore to stand when it undoes, and removes it after a restore", async () => {
+    const game = await project({ "kept.ts": "one", "src/game.ts": "one" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "kept.ts": "two", "added.ts": "added" });
+    interception.before = async (operation, target) => {
+      if (operation === "rename" && target.startsWith(game.workspacePath)) throw new Error("disk failure");
+    };
+    const failed = await store.restore(game, before).catch((error: unknown) => error);
+    interception.before = undefined;
+    const previous = (failed as CheckpointIncompleteError).previous;
+
+    // An undo starts from the workspace as the failed restore left it and does not make it whole, whether it has
+    // something to change or not. So the note stays.
+    const first = await store.snapshot(game);
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    const second = await store.snapshot(game);
+    expect(await store.undo(game, { before: first, after: first })).toMatchObject({ changed: [] });
+    expect(await store.unfinished(game)).toBe(previous);
+    expect(await store.undo(game, { before: first, after: second })).toMatchObject({ changed: ["src/game.ts"] });
+    expect(await store.unfinished(game)).toBe(previous);
+
+    // After a restore the workspace is a snapshot again, also when the restore had nothing to change.
+    const third = await store.snapshot(game);
+    expect(await store.restore(game, third)).toMatchObject({ changed: [] });
+    expect(await store.unfinished(game)).toBeUndefined();
+
+    // An undo that finds no note writes its own, and removes it when it is done.
+    await write(game.workspacePath, { "src/later.ts": "later" });
+    let during: string | undefined;
+    interception.before = async (operation, target) => {
+      if (operation !== "rm" || target !== path.join(game.workspacePath, "src/later.ts")) return;
+      interception.before = undefined;
+      during = await store.unfinished(game);
+    };
+    const undone = await store.undo(game, { before: third, after: await store.snapshot(game) });
+    expect(during).toBe(undone.previous);
+    expect(await store.unfinished(game)).toBeUndefined();
+  });
+
+  it("takes a note for none unless it names a snapshot the store holds", async () => {
+    const game = await project({ "src/game.ts": "one" });
+    const note = path.join(checkpointDirectory(game), "ohmygame-unfinished.json");
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    // The id of a file's content is not the id of a snapshot, and neither is an id the store does not hold.
+    const blob = createHash("sha1").update("blob 3\0one").digest("hex");
+    for (const content of ["not json", "{}", "{\"previous\":7}", JSON.stringify({ previous: "../../config" }), JSON.stringify({ previous: "0".repeat(40) }), JSON.stringify({ previous: blob })]) {
+      await writeFile(note, content);
+      expect(await store.unfinished(game)).toBeUndefined();
+    }
+    await writeFile(note, JSON.stringify({ previous: before }));
+    expect(await store.unfinished(game)).toBe(before);
+
+    // A note that reads as none does not keep an operation from writing its own.
+    await writeFile(note, JSON.stringify({ previous: "0".repeat(40) }));
+    await write(game.workspacePath, { "src/added.ts": "added" });
+    const after = await store.snapshot(game);
+    let during: string | undefined;
+    interception.before = async (operation, target) => {
+      if (operation !== "rm" || target !== path.join(game.workspacePath, "src/added.ts")) return;
+      interception.before = undefined;
+      during = await store.unfinished(game);
+    };
+    const undone = await store.undo(game, { before, after });
+    expect(during).toBe(undone.previous);
+    expect(await store.unfinished(game)).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("does not take a note it cannot read for none", async () => {
+    const game = await project({ "kept.ts": "one" });
+    const note = path.join(checkpointDirectory(game), "ohmygame-unfinished.json");
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "kept.ts": "two", "added.ts": "added" });
+    interception.before = async (operation, target) => {
+      if (operation === "rename" && target.startsWith(game.workspacePath)) throw new Error("disk failure");
+    };
+    const failed = await store.restore(game, before).catch((error: unknown) => error);
+    interception.before = undefined;
+    const previous = (failed as CheckpointIncompleteError).previous;
+
+    // The note may well name the last whole state. An operation that wrote its own over it would lose the way back.
+    await locked([note], async () => {
+      await expect(store.restore(game, before)).rejects.toThrow("EACCES");
+      await expect(store.undo(game, { before: previous, after: before })).rejects.toThrow("EACCES");
+      // Asking is not an operation, and has nothing to tell while the note cannot be read.
+      expect(await store.unfinished(game)).toBeUndefined();
+    });
+    expect(await contents(game.workspacePath)).toEqual({ "kept.ts": "two" });
+    expect(await store.unfinished(game)).toBe(previous);
+  });
+
+  it("counts a file as changed from the moment it is in place, also when it cannot be looked at afterwards", async () => {
+    const game = await project({ "a.ts": "one", "b.ts": "one" });
+    const file = path.join(game.workspacePath, "a.ts");
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    const current = { "a.ts": "two", "b.ts": "two", "extra.ts": "extra" };
+    await write(game.workspacePath, current);
+
+    // The old content takes the place of a.ts, and the look at the file that follows fails.
+    let placed = false;
+    interception.before = async (operation, target) => {
+      if (target !== file) return;
+      if (operation === "rename") placed = true;
+      if (operation !== "lstat" || !placed) return;
+      interception.before = undefined;
+      throw Object.assign(new Error("input/output error"), { code: "EIO" });
+    };
+    const failed = await store.restore(game, before).catch((error: unknown) => error);
+    // Nothing tells any more that the file is the one that was written, so it is not taken back, and the restore says so.
+    expect(failed).toBeInstanceOf(CheckpointIncompleteError);
+    expect((failed as CheckpointIncompleteError).cause).toMatchObject({ message: "input/output error" });
+    expect(await contents(game.workspacePath)).toEqual({ ...current, "a.ts": "one" });
+
+    const previous = (failed as CheckpointIncompleteError).previous;
+    expect(await store.unfinished(game)).toBe(previous);
+    await store.restore(game, previous);
+    expect(await contents(game.workspacePath)).toEqual(current);
   });
 
   it("does not write a damaged object into the workspace", async () => {
@@ -887,15 +1217,416 @@ describe("workspace checkpoints", () => {
     await chmod(secret, 0o000);
     try {
       const after = await store.snapshot(game);
-      expect(await store.diff(game, before, after)).toEqual([{ path: "secret.key", kind: "removed" }, { path: "src/game.ts", kind: "modified" }]);
-      // The file is still there, so it is in the way of the one the snapshot holds.
+      // The snapshot does not tell what became of the file, so it does not show as removed.
+      expect(await store.diff(game, before, after)).toEqual([{ path: "src/game.ts", kind: "modified" }]);
+      // What the earlier snapshot holds cannot come back in the place of a file that cannot be read.
       const refused = await store.restore(game, before).catch((error: unknown) => error);
       expect((refused as CheckpointConflictError).conflicts).toEqual(["secret.key"]);
-      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: ["secret.key"] });
+      expect((refused as CheckpointConflictError).blocked).toEqual(["secret.key"]);
+      // Nor is the file part of the turn.
+      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: [] });
     } finally {
       await chmod(secret, 0o600);
     }
     expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one", "secret.key": "key" });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("never removes or replaces a file that a snapshot could not read", async () => {
+    const game = await project({ "src/game.ts": "one", "secret.key": "key" });
+    const store = new CheckpointStore();
+    const before = await locked([path.join(game.workspacePath, "secret.key")], () => store.snapshot(game));
+    expect(await unreadable(game, before)).toEqual(["secret.key"]);
+    expect(await store.read(game, before, "secret.key")).toBeUndefined();
+
+    // The file can be read again, so the next snapshot holds it. It was there all the time, and nobody touched it.
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    const after = await store.snapshot(game);
+    expect(await store.read(game, after, "secret.key")).toBeDefined();
+    expect(await store.diff(game, before, after)).toEqual([{ path: "src/game.ts", kind: "modified" }]);
+    expect(await store.diff(game, after, before)).toEqual([{ path: "src/game.ts", kind: "modified" }]);
+
+    expect(await store.undo(game, { before, after })).toMatchObject({ changed: ["src/game.ts"], conflicts: [] });
+    expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one", "secret.key": "key" });
+    // A restore does not take the file for one that was added either, whatever it holds by now.
+    await write(game.workspacePath, { "src/game.ts": "three", "secret.key": "another key" });
+    expect((await store.restore(game, before)).changed).toEqual(["src/game.ts"]);
+    expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one", "secret.key": "another key" });
+  });
+
+  it("leaves out a file that another program holds open, and says so in the snapshot", async () => {
+    const game = await project({ "src/game.ts": "one", "save.db": "data", "vite.config.ts.timestamp.mjs": "temporary" });
+    const held = path.join(game.workspacePath, "save.db");
+    const temporary = path.join(game.workspacePath, "vite.config.ts.timestamp.mjs");
+    const store = new CheckpointStore();
+    interception.before = async (operation, target) => {
+      // What Windows answers for a file that another program has opened for itself alone.
+      if (operation === "lstat" && target === held) throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+      if (operation === "lstat" && target === temporary) await rm(temporary, { force: true });
+    };
+    const before = await store.snapshot(game);
+    interception.before = undefined;
+    // A file that is gone is not one that could not be read: the snapshot says nothing about it.
+    expect(await unreadable(game, before)).toEqual(["save.db"]);
+    expect(await store.read(game, before, "save.db")).toBeUndefined();
+
+    const after = await store.snapshot(game);
+    expect(await unreadable(game, after)).toEqual([]);
+    expect(await store.diff(game, before, after)).toEqual([]);
+    expect(await store.restore(game, before)).toMatchObject({ changed: [] });
+    expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one", "save.db": "data" });
+  });
+
+  it("leaves a path that a snapshot could not read alone under another spelling of its name", async () => {
+    const game = await project({ "src/game.ts": "one", "Secret.key": "key", "cafe\u0301.key": "key", "Saves/slot.db": "data" });
+    const file = (name: string) => path.join(game.workspacePath, name);
+    const store = new CheckpointStore();
+    const held = ["Secret.key", "cafe\u0301.key", "Saves"].map(file);
+    interception.before = async (operation, target) => {
+      if (operation === "lstat" && held.includes(target)) throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+    };
+    const before = await store.snapshot(game);
+    interception.before = undefined;
+    expect(await unreadable(game, before)).toEqual(["Saves", "Secret.key", "cafe\u0301.key"]);
+
+    // Many file systems take names that differ in case, or in how an accented letter is put together, for one name.
+    // Each of the three gets its name in such another spelling, and nobody touches what is in them.
+    await rename(file("Secret.key"), file("secret.key"));
+    await rename(file("Saves"), file("saves"));
+    await rm(file("cafe\u0301.key"));
+    await write(game.workspacePath, { "caf\u00e9.key": "key", "src/game.ts": "two" });
+    const kept = { "secret.key": "key", "caf\u00e9.key": "key", "saves/slot.db": "data" };
+    const after = await store.snapshot(game);
+    expect(await store.diff(game, before, after)).toEqual([{ path: "src/game.ts", kind: "modified" }]);
+
+    expect(await store.undo(game, { before, after })).toMatchObject({ changed: ["src/game.ts"], conflicts: [] });
+    expect(await contents(game.workspacePath)).toEqual({ ...kept, "src/game.ts": "one" });
+    await write(game.workspacePath, { "src/game.ts": "three" });
+    expect((await store.restore(game, before)).changed).toEqual(["src/game.ts"]);
+    expect(await contents(game.workspacePath)).toEqual({ ...kept, "src/game.ts": "one" });
+  });
+
+  it("does not refuse a restore for a file the snapshot holds beside another spelling of its name that it could not read", async () => {
+    const game = await project({ "src/game.ts": "one", "Makefile": "one" });
+    const gitdir = checkpointDirectory(game);
+    const store = new CheckpointStore();
+    const commit = await store.snapshot(game);
+    // A file system that tells such names apart can hold `makefile` beside `Makefile`. This snapshot could not read it.
+    const text = (await readObject(gitdir, commit, "commit")).toString("utf8");
+    const target = await writeObject(gitdir, "commit", Buffer.from(`${text.slice(0, text.indexOf("\n\n") + 2)}checkpoint\n\nunreadable: ["makefile"]\n`));
+    await write(game.workspacePath, { "src/game.ts": "two", "Makefile": "two" });
+
+    // Either spelling is left alone. The place can be read now, so nothing is in the way of the rest.
+    expect(await store.restore(game, target)).toMatchObject({ changed: ["src/game.ts"] });
+    expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one", "Makefile": "two" });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("names what it may not read by the path where reading stopped, and a folder only once", async () => {
+    const game = await project({ "src/game.ts": "one", "secret.key": "key", "private/a.txt": "a", "private/deep/b.txt": "b", "listed/a.txt": "a", "listed/b.txt": "b" });
+    const file = (name: string) => path.join(game.workspacePath, name);
+    const store = new CheckpointStore();
+    // One folder can be listed while nothing in it can be looked at. The other cannot be listed.
+    await chmod(file("listed"), 0o444);
+    const commit = await locked([file("secret.key"), file("private")], () => store.snapshot(game)).finally(() => chmod(file("listed"), 0o755));
+    expect(await unreadable(game, commit)).toEqual(["listed/a.txt", "listed/b.txt", "private", "secret.key"]);
+    expect(await store.read(game, commit, "src/game.ts")).toBeDefined();
+    expect(await store.read(game, commit, "private/a.txt")).toBeUndefined();
+    // Nothing below such a folder shows as added once it can be read, and going back removes none of it.
+    expect(await store.diff(game, commit, await store.snapshot(game))).toEqual([]);
+    expect(await store.restore(game, commit)).toMatchObject({ changed: [] });
+    expect(Object.keys(await contents(game.workspacePath))).toHaveLength(6);
+    // A workspace that cannot be listed is not an empty one: there is no snapshot of it.
+    await expect(locked([game.workspacePath], () => store.snapshot(game))).rejects.toThrow("EACCES");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("names a file it may not read that is too large to hold in memory", async () => {
+    const game = await project({ "src/game.ts": "one" });
+    const asset = path.join(game.workspacePath, "pack.bin");
+    await writeFile(asset, randomBytes(5 * 1024 * 1024));
+    const store = new CheckpointStore();
+    const commit = await locked([asset], () => store.snapshot(game));
+    expect(await unreadable(game, commit)).toEqual(["pack.bin"]);
+    expect(await store.diff(game, commit, await store.snapshot(game))).toEqual([]);
+    expect(await store.restore(game, commit)).toMatchObject({ changed: [] });
+    expect((await lstat(asset)).size).toBe(5 * 1024 * 1024);
+  });
+
+  // Only macOS gives a symbolic link permissions of its own.
+  it.skipIf(process.platform !== "darwin" || process.getuid?.() === 0)("names a symbolic link it may not read", async () => {
+    const game = await project({ "src/game.ts": "one" });
+    const entry = path.join(game.workspacePath, "entry");
+    await symlink("src/game.ts", entry);
+    execFileSync("chmod", ["-h", "000", entry]);
+    const store = new CheckpointStore();
+    const commit = await store.snapshot(game);
+    expect(await unreadable(game, commit)).toEqual(["entry"]);
+    expect(await store.read(game, commit, "entry")).toBeUndefined();
+    expect(await store.snapshot(game)).toBe(commit);
+    expect(await store.restore(game, commit)).toMatchObject({ changed: [] });
+    expect(await readlink(entry).catch((error: NodeJS.ErrnoException) => error.code)).toBe("EACCES");
+  });
+
+  it("writes the paths it could not read into the commit, and a new commit when nothing but they changes", async () => {
+    const game = await project({ "src/game.ts": "one" });
+    const gitdir = checkpointDirectory(game);
+    const store = new CheckpointStore();
+    const message = async (commit: string) => {
+      const text = (await readObject(gitdir, commit, "commit")).toString("utf8");
+      return text.slice(text.indexOf("\n\n") + 2);
+    };
+    const first = await store.snapshot(game);
+    expect(await message(first)).toBe("checkpoint\n");
+
+    // Two files appear that cannot be read. The snapshot holds the same files as the one before and is another one all the same.
+    const held = ["save.db", "cache.db"].map((name) => path.join(game.workspacePath, name));
+    await write(game.workspacePath, { "save.db": "data", "cache.db": "data" });
+    interception.before = async (operation, target) => {
+      if (operation === "lstat" && held.includes(target)) throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+    };
+    const second = await store.snapshot(game);
+    expect(second).not.toBe(first);
+    expect(await message(second)).toBe("checkpoint\n\nunreadable: [\"cache.db\",\"save.db\"]\n");
+    expect(await store.snapshot(game)).toBe(second);
+
+    // The files go away again: the same files once more, and nothing that could not be read.
+    interception.before = undefined;
+    await Promise.all(held.map((file) => rm(file)));
+    const third = await store.snapshot(game);
+    expect(third).not.toBe(second);
+    expect(await message(third)).toBe("checkpoint\n");
+    expect(await store.snapshot(game)).toBe(third);
+  });
+
+  it.skipIf(!hasGit || process.platform === "win32" || process.getuid?.() === 0)("writes a store that git accepts when a snapshot names paths it could not read", async () => {
+    const game = await project({ "src/game.ts": "one", "secret.key": "key", "new\nline.key": "key", "line\u2028separator.key": "key", "private/a.txt": "a" });
+    const store = new CheckpointStore();
+    await store.snapshot(game);
+    const commit = await locked(["secret.key", "new\nline.key", "line\u2028separator.key", "private"].map((name) => path.join(game.workspacePath, name)), () => store.snapshot(game));
+    expect(await unreadable(game, commit)).toEqual(["line\u2028separator.key", "new\nline.key", "private", "secret.key"]);
+
+    const git = (...parameters: string[]) => execFileSync("git", ["--git-dir", checkpointDirectory(game), ...parameters], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    expect(git("fsck", "--strict", "--no-dangling")).toBe("");
+    expect(git("rev-list", "--count", commit).trim()).toBe("2");
+    // A line break in a name does not break the line.
+    expect(git("cat-file", "commit", commit).endsWith("\n\ncheckpoint\n\nunreadable: [\"line\u2028separator.key\",\"new\\nline.key\",\"private\",\"secret.key\"]\n")).toBe(true);
+  });
+
+  it("fails when a commit does not say clearly which paths could not be read", async () => {
+    const game = await project({ "src/game.ts": "one", "save.db": "data" });
+    const gitdir = checkpointDirectory(game);
+    const store = new CheckpointStore();
+    const commit = await store.snapshot(game);
+    const text = (await readObject(gitdir, commit, "commit")).toString("utf8");
+    const withMessage = (message: string) => writeObject(gitdir, "commit", Buffer.from(`${text.slice(0, text.indexOf("\n\n") + 2)}${message}`));
+    expect(await unreadable(game, await withMessage("checkpoint\n\nunreadable: [\"save.db\"]\n"))).toEqual(["save.db"]);
+
+    // Taken for a snapshot that could read everything, any of these would let a restore remove a file.
+    const unclear = ["unreadable: save.db", "unreadable: {\"save.db\":true}", "unreadable: [\"save.db\",1]", "unreadable: [\"save.db\"]\nand more", "Unreadable: [\"save.db\"]"];
+    // Neither does the store write lists like these. A path that is spelled a little off would stand for no file at all.
+    const off = ["[]", " [\"save.db\"]", "[\"save.db\", \"z\"]", "[\"z\",\"save.db\"]", "[\"save.db\",\"save.db\"]", "[\"\"]", "[\"save.db/\"]", "[\"/save.db\"]", "[\"./save.db\"]", "[\"src/../save.db\"]"];
+    for (const message of [...[...unclear, ...off.map((list) => `unreadable: ${list}`)].map((line) => `checkpoint\n\n${line}\n`), "something else\n"]) {
+      const other = await withMessage(message);
+      await expect(store.diff(game, other, commit)).rejects.toThrow("does not say what could not be read");
+      await expect(store.restore(game, other)).rejects.toThrow("does not say what could not be read");
+      await expect(store.undo(game, { before: other, after: commit })).rejects.toThrow("does not say what could not be read");
+    }
+    expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one", "save.db": "data" });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("does not count a file as part of a turn when the snapshot after it could not read the file", async () => {
+    const game = await project({ "src/game.ts": "one", "secret.key": "key", "levels": "all levels in one file" });
+    const file = (name: string) => path.join(game.workspacePath, name);
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    // The turn edits one file and turns another into a folder. Two files cannot be read when it ends.
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    await rm(file("levels"));
+    await write(game.workspacePath, { "levels/one.json": "{}" });
+    const after = await locked([file("secret.key"), file("levels/one.json")], () => store.snapshot(game));
+    expect(await unreadable(game, after)).toEqual(["levels/one.json", "secret.key"]);
+    expect(await store.diff(game, before, after)).toEqual([{ path: "levels", kind: "removed" }, { path: "src/game.ts", kind: "modified" }]);
+    // Afterwards both can be read again, and one of them was saved meanwhile.
+    await write(game.workspacePath, { "secret.key": "another key" });
+    const current = { "src/game.ts": "two", "secret.key": "another key", "levels/one.json": "{}" };
+
+    // `levels` cannot come back. Nothing tells that the file in its place is the turn's, so that file stays, whatever the caller lists.
+    for (const refused of [store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: ["levels", "levels/one.json", "secret.key"] } })]) {
+      const error = await refused.catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(CheckpointConflictError);
+      expect((error as CheckpointConflictError).conflicts).toEqual(["levels"]);
+      expect((error as CheckpointConflictError).blocked).toEqual(["levels"]);
+      expect(await contents(game.workspacePath)).toEqual(current);
+    }
+    expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: ["levels"] });
+    expect(await contents(game.workspacePath)).toEqual({ ...current, "src/game.ts": "one" });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("refuses a restore when what the snapshot holds is in a place that cannot be read now", async () => {
+    const files = { "src/game.ts": "one", "private/a.txt": "a", "private/deep/b.txt": "b" };
+    const game = await project(files);
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    await locked([path.join(game.workspacePath, "private")], async () => {
+      const refused = await store.restore(game, before).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(CheckpointConflictError);
+      expect((refused as CheckpointConflictError).conflicts).toEqual(["private/a.txt", "private/deep/b.txt"]);
+      expect((refused as CheckpointConflictError).blocked).toEqual(["private/a.txt", "private/deep/b.txt"]);
+    });
+    // Nothing was touched, and nothing says a restore is unfinished.
+    expect(await contents(game.workspacePath)).toEqual({ ...files, "src/game.ts": "two" });
+    expect(await store.unfinished(game)).toBeUndefined();
+    expect((await store.restore(game, before)).changed).toEqual(["src/game.ts"]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("keeps a file of the turn that cannot be read now, and refuses to overwrite it", async () => {
+    const game = await project({ "src/game.ts": "one", "edited.key": "one" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    const changed = { "src/game.ts": "two", "edited.key": "two", "added.key": "two" };
+    await write(game.workspacePath, changed);
+    const after = await store.snapshot(game);
+
+    await locked(["edited.key", "added.key"].map((name) => path.join(game.workspacePath, name)), async () => {
+      for (const refused of [store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: ["added.key", "edited.key"] } })]) {
+        const error = await refused.catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(CheckpointConflictError);
+        expect((error as CheckpointConflictError).conflicts).toEqual(["added.key", "edited.key"]);
+        expect((error as CheckpointConflictError).blocked).toEqual(["added.key", "edited.key"]);
+      }
+      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: ["added.key", "edited.key"] });
+    });
+    expect(await contents(game.workspacePath)).toEqual({ ...changed, "src/game.ts": "one" });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("does not put a file back where a folder holds something that cannot be read", async () => {
+    const game = await project({ "levels": "all levels in one file", "tools": "all tools in one file", "src/game.ts": "one" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(path.join(game.workspacePath, "levels"));
+    await rm(path.join(game.workspacePath, "tools"));
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    const after = await store.snapshot(game);
+    // Afterwards folders take the names of the removed files. One holds a file that may not be read, the other a folder that may not be listed.
+    const later = { "levels/secret.json": "{}", "tools/private/key.txt": "key" };
+    await write(game.workspacePath, later);
+
+    await locked(["levels/secret.json", "tools/private"].map((name) => path.join(game.workspacePath, name)), async () => {
+      for (const refused of [store.restore(game, before), store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: ["levels", "tools"] } })]) {
+        const error = await refused.catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(CheckpointConflictError);
+        expect((error as CheckpointConflictError).conflicts).toEqual(["levels", "tools"]);
+        expect((error as CheckpointConflictError).blocked).toEqual(["levels", "tools"]);
+      }
+      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: ["levels", "tools"] });
+    });
+    expect(await contents(game.workspacePath)).toEqual({ ...later, "src/game.ts": "one" });
+  });
+
+  it.skipIf(!caseInsensitive || process.platform === "win32" || process.getuid?.() === 0)("does not put a file back where a folder whose name differs only in case cannot be read", async () => {
+    const game = await project({ "Levels": "all levels in one file", "Tools": "all tools in one file", "src/game.ts": "one" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(path.join(game.workspacePath, "Levels"));
+    await rm(path.join(game.workspacePath, "Tools"));
+    await write(game.workspacePath, { "src/game.ts": "two" });
+    const after = await store.snapshot(game);
+    // Afterwards folders take the names of the removed files in lower case. One holds a folder that may not be listed, the other may not be listed itself.
+    const later = { "levels/private/key.txt": "key", "tools/key.txt": "key" };
+    await write(game.workspacePath, later);
+
+    await locked(["levels/private", "tools"].map((name) => path.join(game.workspacePath, name)), async () => {
+      for (const refused of [store.restore(game, before), store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: ["Levels", "Tools"] } })]) {
+        const error = await refused.catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(CheckpointConflictError);
+        expect((error as CheckpointConflictError).conflicts).toEqual(["Levels", "Tools"]);
+        expect((error as CheckpointConflictError).blocked).toEqual(["Levels", "Tools"]);
+      }
+      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: ["Levels", "Tools"] });
+    });
+    expect(await contents(game.workspacePath)).toEqual({ ...later, "src/game.ts": "one" });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("names a file as blocked when the folder it must come back into cannot be entered", async () => {
+    const game = await project({ "src/game.ts": "one", "listed/removed.txt": "one", "listed/edited.txt": "one" });
+    const file = (name: string) => path.join(game.workspacePath, name);
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(file("listed/removed.txt"));
+    await write(game.workspacePath, { "src/game.ts": "two", "listed/edited.txt": "two" });
+    const after = await store.snapshot(game);
+    // Afterwards the other file of the turn is removed as well, and the folder can still be listed but no longer entered.
+    await rm(file("listed/edited.txt"));
+    const gone = ["listed/edited.txt", "listed/removed.txt"];
+
+    await chmod(file("listed"), 0o444);
+    try {
+      for (const refused of [store.restore(game, before), store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: gone } })]) {
+        const error = await refused.catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(CheckpointConflictError);
+        expect((error as CheckpointConflictError).conflicts).toEqual(gone);
+        expect((error as CheckpointConflictError).blocked).toEqual(gone);
+      }
+      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: gone });
+    } finally {
+      await chmod(file("listed"), 0o755);
+    }
+    expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one" });
+  });
+
+  it("does not clear away a folder that the snapshot after a turn could not read, also when it is empty by now", async () => {
+    const game = await project({ "tools": "all tools in one file", "src/game.ts": "one" });
+    const file = (name: string) => path.join(game.workspacePath, name);
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(file("tools"));
+    await write(game.workspacePath, { "tools/private/key.txt": "key", "src/game.ts": "two" });
+    interception.before = async (operation, target) => {
+      if (operation === "lstat" && target === file("tools/private")) throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+    };
+    const after = await store.snapshot(game);
+    interception.before = undefined;
+    expect(await unreadable(game, after)).toEqual(["tools/private"]);
+    // Empty folders are not worth keeping otherwise. But nothing tells that this one is the turn's.
+    await rm(file("tools/private/key.txt"));
+
+    const refused = await store.undo(game, { before, after }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(CheckpointConflictError);
+    expect((refused as CheckpointConflictError).blocked).toEqual(["tools"]);
+    expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: ["tools"] });
+    expect(await readdir(file("tools"))).toEqual(["private"]);
+  });
+
+  it("names a file that cannot be looked at again after it was read", async () => {
+    const game = await project({ "src/game.ts": "one", "save.db": "data" });
+    const file = path.join(game.workspacePath, "save.db");
+    let looks = 0;
+    interception.before = async (operation, target) => {
+      if (operation !== "lstat" || target !== file) return;
+      looks += 1;
+      // The second look is the one that tells whether the file held still while it was read.
+      if (looks === 2) throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+    };
+    const store = new CheckpointStore();
+    const commit = await store.snapshot(game);
+    expect(await unreadable(game, commit)).toEqual(["save.db"]);
+    expect(await store.read(game, commit, "save.db")).toBeUndefined();
+  });
+
+  it("names a file that does not hold still and cannot be copied either", async () => {
+    const game = await project({ "src/game.ts": "one" });
+    const file = path.join(game.workspacePath, "pack.bin");
+    await writeFile(file, randomBytes(5 * 1024 * 1024));
+    // The file looks a byte longer than it is, as one that is being written can, so every read of it comes up short.
+    const stats = await lstat(file);
+    interception.frozen.set(file, Object.assign(stats, { size: stats.size + 1 }));
+    interception.before = async (operation, target) => {
+      if (operation === "copyFile" && target === file) throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+    };
+    const store = new CheckpointStore();
+    const commit = await store.snapshot(game);
+    expect(await unreadable(game, commit)).toEqual(["pack.bin"]);
+    expect(await store.read(game, commit, "pack.bin")).toBeUndefined();
+    expect((await readdir(checkpointDirectory(game))).filter((name) => name.startsWith("tmp_"))).toEqual([]);
   });
 
   it.skipIf(process.platform === "win32")("does not take an excluded file for one it removes when both are the same file", async () => {
@@ -912,6 +1643,32 @@ describe("workspace checkpoints", () => {
     const refused = await store.undo(game, { before, after }).catch((error: unknown) => error);
     expect((refused as CheckpointConflictError).conflicts).toEqual(["levels"]);
     expect(await contents(game.workspacePath)).toEqual(current);
+  });
+
+  it.skipIf(process.platform === "win32")("does not take a file that a snapshot could not read for one it removes when both are the same file", async () => {
+    const game = await project({ "levels": "a file" });
+    const file = (name: string) => path.join(game.workspacePath, name);
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(file("levels"));
+    await write(game.workspacePath, { "levels/one.json": "{}" });
+    await link(file("levels/one.json"), file("levels/held.db"));
+    interception.before = async (operation, target) => {
+      if (operation === "lstat" && target === file("levels/held.db")) throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    };
+    const after = await store.snapshot(game);
+    interception.before = undefined;
+    expect(await unreadable(game, after)).toEqual(["levels/held.db"]);
+    const current = { "levels/one.json": "{}", "levels/held.db": "{}" };
+
+    const refused = await store.undo(game, { before, after }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(CheckpointConflictError);
+    expect((refused as CheckpointConflictError).conflicts).toEqual(["levels"]);
+    expect(await contents(game.workspacePath)).toEqual(current);
+    // The two names are still one file.
+    expect((await lstat(file("levels/one.json"))).ino).toBe((await lstat(file("levels/held.db"))).ino);
+    expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["levels/one.json"], conflicts: ["levels"] });
+    expect(await contents(game.workspacePath)).toEqual({ "levels/held.db": "{}" });
   });
 
   it.skipIf(process.platform === "win32")("keeps a symbolic link whose target is not text", async () => {
