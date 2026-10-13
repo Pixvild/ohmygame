@@ -62,7 +62,8 @@ const en = {
     keyLocal: "Your key stays on this machine.",
     chooseProvider: "Choose your provider.",
     loadingProviders: "Loading providers…",
-    readyWith: "Ready with {{name}}",
+    readyWith: "Ready with",
+    defaultModel: "Default model",
     needsLanguageModel:
       "Choose a provider with an enabled language model, or add one in Settings.",
     welcome: "Welcome to OhMyGame",

@@ -82,15 +82,27 @@ current step across restarts. Completing setup requires a language model in
 the same enabled, visible catalog used by the home composer. This checks
 configuration and catalog availability, without sending an inference request.
 The provider screen enables **Start creating** only when a language model is
-available; it records `completed`. The separate **Skip and start** action
-is a text button without a hover background. It records `skipped` and allows
-configuration later in Settings. **Next** and the provider screen's actions
-sit near the bottom, above the step indicators. Saved built-in
-and custom connections show **Connected** instead of offering setup again.
-Disabled connections offer **Enable** without changing credentials. Before
-starting or retrying setup, the renderer refreshes the provider's saved state to avoid
-reopening a connection that changed since the list loaded. Existing provider
-credentials and models can be edited from Settings.
+available; it records `completed`. Until then, a separate **Skip and start**
+text button without a hover background records `skipped` and allows
+configuration later in Settings; it is hidden once a model is ready.
+**Next** and the provider screen's actions sit near the bottom, above the
+step indicators.
+
+The provider list shows language providers only. Without a search, connected
+providers come first, then the popular providers shared with Settings, and
+the rest stay under **More providers**. Searching lists every match. Saved
+built-in and custom connections show **Connected** instead of offering setup
+again. Disabled connections offer **Enable** without changing credentials.
+Before starting or retrying setup, the renderer refreshes the provider's saved
+state to avoid reopening a connection that changed since the list loaded.
+Existing provider credentials and models can be edited from Settings.
+
+Connecting, adding, or enabling a provider during setup makes its recommended
+language model the global default. The recommendation mirrors Pi's
+per-provider defaults for the popular providers and falls back to the
+provider's first visible model. The ready line names the default model and its
+provider; with more than one model available, it is a menu that changes the
+default.
 
 An installation with no preference but existing projects or a configured
 language provider is marked completed once. Media credentials alone do not

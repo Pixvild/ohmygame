@@ -39,11 +39,11 @@ import { accountCloudState, cloudQuotaSummary, CloudQuotaDetails } from "./cloud
 import { getCloudQuotas, MODELS_CHANGED_EVENT } from "./api.js";
 import { HYPER3D_CONNECTION_ID } from "../shared/cloud-models.js";
 import { isLocalModelProvider, LOCAL_MODEL_PROVIDERS, withLocalModelProviders, type LocalModelProviderId } from "./local-model-providers.js";
+import { POPULAR_PROVIDER_IDS } from "./popular-providers.js";
 import { t } from "./i18n.js";
 
 export type ModelsView = { page: "providers" } | { page: "provider"; provider: ProviderSummary };
 
-const POPULAR_PROVIDER_IDS = ["openrouter", "openai", "anthropic", "meshy", "tripo"];
 const SEEDANCE_PROVIDER_IDS = new Set(["volcengine-ark", "byteplus-modelark"]);
 const PROVIDER_CAPABILITY_FILTERS: Array<{ value: "all" | ProviderCapability; label: string }> = [
   { value: "all", label: t("common.all") },
