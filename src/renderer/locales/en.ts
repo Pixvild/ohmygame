@@ -1437,6 +1437,74 @@ const en = {
       usedToolsNamed: "used {{name}} tools",
     },
   },
+  checkpoints: {
+    kind: { added: "Added", modified: "Modified", removed: "Removed" },
+    state: { changed: "Changed later", undone: "Already put back" },
+    filesChanged_one: "{{count}} file changed",
+    filesChanged_other: "{{count}} files changed",
+    undo: "Undo",
+    undoRest: "Undo the rest",
+    partlyUndone: "Partly undone",
+    undone: "Changes undone",
+    loadingChanges: "Loading changes...",
+    noChanges: "No changed files to show.",
+    loadingFile: "Loading file...",
+    undoChanges: "Undo changes",
+    allBack: "Every file is already back to how it was before this turn.",
+    confirm_one:
+      "The file goes back to how it was before this turn; the conversation stays as it is.",
+    confirm_other:
+      "The {{count}} files go back to how they were before this turn; the conversation stays as it is.",
+    andMore: "and {{count}} more",
+    everythingListed:
+      "Everything that changed in the project during this turn is listed, also what you changed yourself.",
+    renewed:
+      "More files were changed in the meantime, so nothing was overwritten.",
+    blockedIntro:
+      "These files cannot be put back because other files are in their place:",
+    conflictsIntro: "These files were changed again after this turn:",
+    blockedHint:
+      "Undo the rest leaves them, and every file changed after this turn, as they are.",
+    conflictsHint:
+      "Keep them to put back only the other files, or overwrite them and lose what was changed later.",
+    keep: "Keep them",
+    overwrite: "Overwrite them",
+    binary: "Binary file",
+    emptyFile: "Empty file",
+    samePart:
+      "The part shown does not differ. The file is longer than what is shown.",
+    sameLines:
+      "The lines are the same. Only line endings or file permissions changed.",
+    truncated: "Only the beginning of this file is shown.",
+    nonePutBack: "No files were put back.",
+    putBack_one: "{{count}} file was put back.",
+    putBack_other: "{{count}} files were put back.",
+    kept_one: "{{count}} file was left as it is.",
+    kept_other: "{{count}} files were left as they are.",
+    restoreToMessage: "Restore to before this message",
+    restoreConfirm:
+      "Restore the project to before this message?\n\nEvery file change made since then, including your own, and the messages after it will be removed.",
+    unfinished: {
+      interrupted:
+        "Putting files back was interrupted, so the project's files may be partly changed.",
+      alreadyBack:
+        "The files are already as they were before the interruption.",
+      ok: "OK",
+      willPutBack_one:
+        "{{count}} file will be put back to how it was before the interruption. Later changes to this file will be lost.",
+      willPutBack_other:
+        "{{count}} files will be put back to how they were before the interruption. Later changes to these files will be lost.",
+      kind: {
+        added: "Comes back",
+        modified: "Changed back",
+        removed: "Removed",
+      },
+      putBack_one: "Put {{count}} file back",
+      putBack_other: "Put {{count}} files back",
+      notNow: "Not now",
+      putFilesBack: "Put the files back",
+    },
+  },
   api: {
     runtimeUnreachable: "Could not reach the local runtime",
     requestFailed: "Request failed with {{status}}",

@@ -15,6 +15,7 @@ import type {
   CheckpointUndoRequest,
   TurnChanges,
 } from "../shared/contracts.js";
+import { t } from "./i18n.js";
 import { lineDiff } from "./line-diff.js";
 
 type ConflictChoice = NonNullable<CheckpointUndoRequest["conflicts"]>;
@@ -82,16 +83,6 @@ interface FooterViews {
 const CLOSED: FooterView = { open: false, files: {}, submitting: false };
 /** How many files the undo confirmation names before it only counts them. */
 const NAMED_FILES = 10;
-const KIND_LABELS = {
-  added: "Added",
-  modified: "Modified",
-  removed: "Removed",
-} as const;
-const STATE_LABELS = {
-  applied: undefined,
-  changed: "Changed later",
-  undone: "Already put back",
-} as const;
 const LINE_SIGNS = { same: " ", added: "+", removed: "-" } as const;
 const FooterViewsContext = createContext<FooterViews | undefined>(undefined);
 
@@ -175,13 +166,13 @@ export function TurnChangesFooter({
   const listed = view.list?.status === "ready" ? view.list.value : undefined;
   // An undone turn can be undone again: for the files that were kept, and when the list shows a change of it in place again.
   const offer = !changes.undone
-    ? "Undo"
+    ? "undo"
     : changes.kept
-      ? "Undo the rest"
+      ? "undoRest"
       : listed?.some(
             (item) => item.state === "applied" || item.state === "changed",
           )
-        ? "Undo"
+        ? "undo"
         : undefined;
   const listWanted = view.open || Boolean(view.undo);
 
@@ -229,15 +220,13 @@ export function TurnChangesFooter({
           aria-expanded={view.open}
           onClick={toggleList}
         >
-          <span>
-            {changes.files === 1
-              ? "1 file changed"
-              : `${changes.files} files changed`}
-          </span>
+          <span>{t("checkpoints.filesChanged", { count: changes.files })}</span>
           <ChevronRight className="turn-changes-chevron" size={12} />
         </button>
-        {offer === "Undo the rest" ? (
-          <span className="turn-changes-undone">Partly undone</span>
+        {offer === "undoRest" ? (
+          <span className="turn-changes-undone">
+            {t("checkpoints.partlyUndone")}
+          </span>
         ) : null}
         {offer ? (
           <button
@@ -254,10 +243,10 @@ export function TurnChangesFooter({
               }))
             }
           >
-            {offer}
+            {t(`checkpoints.${offer}`)}
           </button>
         ) : (
-          <span className="turn-changes-undone">Changes undone</span>
+          <span className="turn-changes-undone">{t("checkpoints.undone")}</span>
         )}
       </div>
       {view.result ? (
@@ -291,13 +280,13 @@ export function TurnChangesFooter({
       ) : null}
       {view.open ? (
         !view.list || view.list.status === "loading" ? (
-          <p className="turn-changes-note">Loading changes...</p>
+          <p className="turn-changes-note">{t("checkpoints.loadingChanges")}</p>
         ) : view.list.status === "failed" ? (
           <p className="turn-changes-error" role="alert">
             {view.list.message}
           </p>
         ) : view.list.value.length === 0 ? (
-          <p className="turn-changes-note">No changed files to show.</p>
+          <p className="turn-changes-note">{t("checkpoints.noChanges")}</p>
         ) : (
           <ul className="turn-changes-list">
             {view.list.value.map((item) => (
@@ -336,7 +325,7 @@ function UndoPanel({
 }) {
   const cancel = (
     <button type="button" disabled={submitting} onClick={onCancel}>
-      Cancel
+      {t("common.cancel")}
     </button>
   );
   if (step.step === "confirm") {
@@ -349,7 +338,7 @@ function UndoPanel({
       <div
         className="turn-changes-panel"
         role="group"
-        aria-label="Undo changes"
+        aria-label={t("checkpoints.undoChanges")}
       >
         {!files ? (
           list?.status === "failed" ? (
@@ -357,39 +346,38 @@ function UndoPanel({
               {list.message}
             </p>
           ) : (
-            <p className="turn-changes-note">Loading changes...</p>
+            <p className="turn-changes-note">
+              {t("checkpoints.loadingChanges")}
+            </p>
           )
         ) : files.length === 0 ? (
-          <p>Every file is already back to how it was before this turn.</p>
+          <p>{t("checkpoints.allBack")}</p>
         ) : (
           <>
-            <p>
-              {files.length === 1
-                ? "The file goes back to how it was before this turn; the conversation stays as it is."
-                : `The ${files.length} files go back to how they were before this turn; the conversation stays as it is.`}
-            </p>
+            <p>{t("checkpoints.confirm", { count: files.length })}</p>
             <ul className="turn-changes-files">
               {files.slice(0, NAMED_FILES).map((item) => (
                 <li key={item.path}>
                   <span className={`turn-change-kind turn-change-${item.kind}`}>
-                    {KIND_LABELS[item.kind]}
+                    {t(`checkpoints.kind.${item.kind}`)}
                   </span>
                   <span className="turn-changes-file-path">{item.path}</span>
                   {item.state === "changed" ? (
                     <span className="turn-change-badge">
-                      {STATE_LABELS.changed}
+                      {t("checkpoints.state.changed")}
                     </span>
                   ) : null}
                 </li>
               ))}
               {files.length > NAMED_FILES ? (
-                <li>and {files.length - NAMED_FILES} more</li>
+                <li>
+                  {t("checkpoints.andMore", {
+                    count: files.length - NAMED_FILES,
+                  })}
+                </li>
               ) : null}
             </ul>
-            <p>
-              Everything that changed in the project during this turn is listed,
-              also what you changed yourself.
-            </p>
+            <p>{t("checkpoints.everythingListed")}</p>
           </>
         )}
         <div className="turn-changes-actions">
@@ -399,11 +387,11 @@ function UndoPanel({
             disabled={disabled || !files}
             onClick={() => onUndo()}
           >
-            Undo changes
+            {t("checkpoints.undoChanges")}
           </button>
           {list?.status === "failed" ? (
             <button type="button" onClick={onReload}>
-              Try again
+              {t("common.tryAgain")}
             </button>
           ) : null}
           {cancel}
@@ -412,16 +400,16 @@ function UndoPanel({
     );
   }
   return (
-    <div className="turn-changes-panel" role="group" aria-label="Undo changes">
-      {step.renewed ? (
-        <p>
-          More files were changed in the meantime, so nothing was overwritten.
-        </p>
-      ) : null}
+    <div
+      className="turn-changes-panel"
+      role="group"
+      aria-label={t("checkpoints.undoChanges")}
+    >
+      {step.renewed ? <p>{t("checkpoints.renewed")}</p> : null}
       <p>
         {step.blocked
-          ? "These files cannot be put back because other files are in their place:"
-          : "These files were changed again after this turn:"}
+          ? t("checkpoints.blockedIntro")
+          : t("checkpoints.conflictsIntro")}
       </p>
       <ul className="turn-changes-conflicts">
         {step.paths.map((path) => (
@@ -430,8 +418,8 @@ function UndoPanel({
       </ul>
       <p>
         {step.blocked
-          ? "Undo the rest leaves them, and every file changed after this turn, as they are."
-          : "Keep them to put back only the other files, or overwrite them and lose what was changed later."}
+          ? t("checkpoints.blockedHint")
+          : t("checkpoints.conflictsHint")}
       </p>
       <div className="turn-changes-actions">
         {step.blocked ? (
@@ -441,7 +429,7 @@ function UndoPanel({
             disabled={disabled}
             onClick={() => onUndo("keep")}
           >
-            Undo the rest
+            {t("checkpoints.undoRest")}
           </button>
         ) : (
           <>
@@ -451,14 +439,14 @@ function UndoPanel({
               disabled={disabled}
               onClick={() => onUndo("keep")}
             >
-              Keep them
+              {t("checkpoints.keep")}
             </button>
             <button
               type="button"
               disabled={disabled}
               onClick={() => onUndo("overwrite", step.paths)}
             >
-              Overwrite them
+              {t("checkpoints.overwrite")}
             </button>
           </>
         )}
@@ -484,7 +472,10 @@ function ChangedFile({
   const { path } = item;
   const open = Boolean(state?.open);
   const content = state?.content;
-  const label = item.state ? STATE_LABELS[item.state] : undefined;
+  const label =
+    item.state && item.state !== "applied"
+      ? t(`checkpoints.state.${item.state}`)
+      : undefined;
 
   useEffect(() => {
     if (!open || content) return;
@@ -502,7 +493,7 @@ function ChangedFile({
     <li className="turn-change">
       <div className="turn-change-row">
         <span className={`turn-change-kind turn-change-${item.kind}`}>
-          {KIND_LABELS[item.kind]}
+          {t(`checkpoints.kind.${item.kind}`)}
         </span>
         <button
           className="turn-change-path"
@@ -525,7 +516,7 @@ function ChangedFile({
       </div>
       {open ? (
         !content || content.status === "loading" ? (
-          <p className="turn-changes-note">Loading file...</p>
+          <p className="turn-changes-note">{t("checkpoints.loadingFile")}</p>
         ) : content.status === "failed" ? (
           <p className="turn-changes-error" role="alert">
             {content.message}
@@ -550,7 +541,8 @@ function FileChanges({ view }: { view: CheckpointFileView }) {
         : lineDiff(view.before?.content ?? "", view.after?.content ?? ""),
     [view, binary],
   );
-  if (binary) return <p className="turn-changes-note">Binary file</p>;
+  if (binary)
+    return <p className="turn-changes-note">{t("checkpoints.binary")}</p>;
   return (
     <>
       {hunks.length ? (
@@ -577,16 +569,14 @@ function FileChanges({ view }: { view: CheckpointFileView }) {
       ) : (
         <p className="turn-changes-note">
           {!view.before || !view.after
-            ? "Empty file"
+            ? t("checkpoints.emptyFile")
             : truncated
-              ? "The part shown does not differ. The file is longer than what is shown."
-              : "The lines are the same. Only line endings or file permissions changed."}
+              ? t("checkpoints.samePart")
+              : t("checkpoints.sameLines")}
         </p>
       )}
       {truncated && hunks.length ? (
-        <p className="turn-changes-note">
-          Only the beginning of this file is shown.
-        </p>
+        <p className="turn-changes-note">{t("checkpoints.truncated")}</p>
       ) : null}
     </>
   );
@@ -661,12 +651,10 @@ function resultText({
 }): string {
   const put =
     changed === 0
-      ? "No files were put back."
-      : changed === 1
-        ? "1 file was put back."
-        : `${changed} files were put back.`;
+      ? t("checkpoints.nonePutBack")
+      : t("checkpoints.putBack", { count: changed });
   if (kept === 0) return put;
-  return `${put} ${kept === 1 ? "1 file was left as it is." : `${kept} files were left as they are.`}`;
+  return `${put} ${t("checkpoints.kept", { count: kept })}`;
 }
 
 function errorMessage(error: unknown): string {

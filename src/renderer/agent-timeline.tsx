@@ -323,7 +323,7 @@ function UserInput({ item, controls }: { item: Extract<ThreadItem, { type: "user
               </button>
             ) : null}
             {controls.onRestore && item.checkpointId ? (
-              <button type="button" aria-label="Restore to before this message" title="Restore to before this message" onClick={() => controls.onRestore!(item.checkpointId!)} disabled={controls.disabled}>
+              <button type="button" aria-label={t("checkpoints.restoreToMessage")} title={t("checkpoints.restoreToMessage")} onClick={() => controls.onRestore!(item.checkpointId!)} disabled={controls.disabled}>
                 <Undo2 size={13} />
               </button>
             ) : null}

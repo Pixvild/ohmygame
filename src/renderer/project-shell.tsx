@@ -97,8 +97,6 @@ interface ProjectShellProps {
 const CanvasWorkspace = lazy(() => import("./canvas-workspace.js").then((module) => ({ default: module.CanvasWorkspace })));
 const GODOT_WORKSPACE_OPEN_STORAGE_KEY = "ohmygame-godot-workspace-open";
 const EMPTY_CAPABILITIES: ConversationCapabilities = { plugins: [], skills: [] };
-/** What happens to a file when a restore or an undo that was cut off is taken back. */
-const UNFINISHED_LABELS = { added: "Comes back", modified: "Changed back", removed: "Removed" } as const;
 /** How many of those files are named before they are only counted. */
 const NAMED_UNFINISHED_FILES = 10;
 
@@ -527,7 +525,7 @@ export function ProjectShell({
 
   const restoreToMessage = useCallback((checkpointId: string) => {
     if (!project || !conversation || agentBusy || state.pendingPrompts.length > 0 || state.connection !== "open") return;
-    if (!window.confirm("Restore the project to before this message?\n\nEvery file change made since then, including your own, and the messages after it will be removed.")) return;
+    if (!window.confirm(t("checkpoints.restoreConfirm"))) return;
     dispatch({ type: "notice", message: undefined });
     void (async () => {
       try {
@@ -985,26 +983,24 @@ function UnfinishedRestoreBanner({ projectId, disabled, workspaceRevision, onClo
 
   return (
     <div className="unfinished-restore" role="status">
-      <p>Putting files back was interrupted, so the project's files may be partly changed.</p>
+      <p>{t("checkpoints.unfinished.interrupted")}</p>
       {error ? <p className="unfinished-restore-error" role="alert">{error}</p> : null}
       {changes?.length === 0 ? <>
-        <p>The files are already as they were before the interruption.</p>
+        <p>{t("checkpoints.unfinished.alreadyBack")}</p>
         <div className="unfinished-restore-actions">
-          <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => { await restoreUnfinished(projectId); onClose(); })}>OK</button>
+          <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => { await restoreUnfinished(projectId); onClose(); })}>{t("checkpoints.unfinished.ok")}</button>
         </div>
       </> : changes ? <>
-        <p>{changes.length === 1
-          ? "1 file will be put back to how it was before the interruption. Later changes to this file will be lost."
-          : `${changes.length} files will be put back to how they were before the interruption. Later changes to these files will be lost.`}</p>
+        <p>{t("checkpoints.unfinished.willPutBack", { count: changes.length })}</p>
         <ul className="unfinished-restore-files">
-          {changes.slice(0, NAMED_UNFINISHED_FILES).map((change) => <li key={change.path}><span>{UNFINISHED_LABELS[change.kind]}</span>{change.path}</li>)}
-          {changes.length > NAMED_UNFINISHED_FILES ? <li>and {changes.length - NAMED_UNFINISHED_FILES} more</li> : null}
+          {changes.slice(0, NAMED_UNFINISHED_FILES).map((change) => <li key={change.path}><span>{t(`checkpoints.unfinished.kind.${change.kind}`)}</span>{change.path}</li>)}
+          {changes.length > NAMED_UNFINISHED_FILES ? <li>{t("checkpoints.andMore", { count: changes.length - NAMED_UNFINISHED_FILES })}</li> : null}
         </ul>
         <div className="unfinished-restore-actions">
-          <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => { await restoreUnfinished(projectId); onClose(); })}>{changes.length === 1 ? "Put 1 file back" : `Put ${changes.length} files back`}</button>
-          <button type="button" disabled={busy} onClick={onClose}>Not now</button>
+          <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => { await restoreUnfinished(projectId); onClose(); })}>{t("checkpoints.unfinished.putBack", { count: changes.length })}</button>
+          <button type="button" disabled={busy} onClick={onClose}>{t("checkpoints.unfinished.notNow")}</button>
         </div>
-      </> : <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => setChanges(await getUnfinishedChanges(projectId)))}>Put the files back</button>}
+      </> : <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => setChanges(await getUnfinishedChanges(projectId)))}>{t("checkpoints.unfinished.putFilesBack")}</button>}
     </div>
   );
 }
