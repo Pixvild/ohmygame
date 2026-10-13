@@ -324,6 +324,7 @@ One save slot:
 ```json
 {
   "version": 1,
+  "graphVersion": 1,
   "graphSignature": "…",
   "savedAt": "…",
   "currentNodeId": "archive",
@@ -342,8 +343,9 @@ One save slot:
   leaving the current node. A menu starts a new game with `reset()` then its
   `start` Signal.
 - `restart()` resets and enters `entryNodeId`.
-- `continue()` restores the save. `graphSignature` hashes `graph.json`, so a
-  code-only edit keeps the save. A save whose signature no longer matches is
+- `continue()` restores the save. `graphVersion` is the graph's `version`,
+  and `graphSignature` hashes `graph.json`, so a code-only edit keeps the
+  save. A save whose graph version or signature no longer matches is
   reported as incompatible (`save.incompatible`) rather than loaded partially.
 
 ## Story Map
@@ -414,6 +416,7 @@ The Runtime publishes a serializable snapshot to the host:
 ```json
 {
   "status": "running",
+  "policy": "follow",
   "currentNodeId": "archive",
   "backStack": ["main-menu"],
   "state": {},
@@ -425,6 +428,7 @@ The Runtime publishes a serializable snapshot to the host:
       "at": "…"
     }
   ],
+  "reports": [],
   "stateAccess": { "archive": { "read": ["roundsCompleted"], "wrote": [] } },
   "errors": [
     { "nodeId": "archive", "code": "undeclared-asset", "message": "…" }
@@ -433,7 +437,9 @@ The Runtime publishes a serializable snapshot to the host:
 }
 ```
 
-`recentSignals` and `errors` are bounded histories. `stateAccess` powers the
+`recentSignals`, `reports`, and `errors` are bounded histories. `reports`
+holds what the `report` [preview policy](#preview-policy) reported, and stays
+empty under `follow`. `stateAccess` powers the
 Workbench's "State used" section; calling `get()` without a key records
 `"*"`.
 
@@ -442,8 +448,8 @@ Workbench's "State used" section; calling `get()` without a key records
 In preview builds, the compiler adds an inert `data-ohmygame-source`
 attribute to each element written in node HTML. On request, the sandbox host
 enters pick mode and returns the picked element description defined in
-[authoring.md](authoring.md#element-picking). Capture uses the desktop host's
-page capture of the preview frame.
+[authoring.md](authoring.md#element-picking-text-editing-and-moving). Capture
+uses the desktop host's page capture of the preview frame.
 
 ## Compiler
 
@@ -483,7 +489,8 @@ actionable `message`. It checks that:
 - `initialState` is a JSON object;
 - every key in `variables` exists in `initialState`;
 - modes are only `replace` and `push`;
-- in `publish` mode, every declared Signal has an edge.
+- in `publish` mode, every declared Signal other than navigation ones has an
+  edge.
 
 Limits: 500 nodes, 2,000 edges, 1,000 assets, 100 Signals per node, 500 asset dependencies per surface, 5 MiB per source file, and
 16 MiB per compiled surface.
