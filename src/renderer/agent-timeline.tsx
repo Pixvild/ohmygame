@@ -9,6 +9,7 @@ import {
   Image,
   LoaderCircle,
   Pencil,
+  Undo2,
   Plug,
   Search,
   Terminal,
@@ -35,6 +36,7 @@ import { GodotIcon } from "./godot-icon.js";
 import { MarkdownContent } from "./markdown-content.js";
 import { LazyDetails } from "./lazy-details.js";
 import { agentErrorDiagnosticRows, agentErrorDiagnosticText, agentErrorPresentation } from "./agent-error-presentation.js";
+import { TurnChangesFooter, TurnChangesViews, type TurnChangesControls } from "./turn-changes.js";
 
 type ToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" | "mcpToolCall" }>;
 
@@ -45,6 +47,12 @@ interface AgentTimelineProps {
   onOpenWorkspaceFile?: (path: string) => void;
   revisionDisabled?: boolean;
   onRevise?: (prompt: string) => Promise<boolean>;
+  /** Puts the project back to before the message the checkpoint was taken for. */
+  onRestore?: (checkpointId: string) => void;
+  /** Shows under each finished turn what it changed in the workspace, with a way to undo it. */
+  changeControls?: TurnChangesControls;
+  /** Changes whenever the files of the workspace may have changed, so that what the turns show of them is read again. */
+  workspaceRevision?: number;
   onAddToChat?: (text: string) => void;
   waitingForInput?: boolean;
 }
@@ -59,7 +67,7 @@ function turnDisplay(turn: ThreadTurn): TurnDisplay {
   return display;
 }
 
-export const AgentTimeline = memo(function AgentTimeline({ turns: sourceTurns, projectId = "", workspacePath, onOpenWorkspaceFile, revisionDisabled, onRevise, onAddToChat, waitingForInput = false }: AgentTimelineProps) {
+export const AgentTimeline = memo(function AgentTimeline({ turns: sourceTurns, projectId = "", workspacePath, onOpenWorkspaceFile, revisionDisabled, onRevise, onRestore, changeControls, workspaceRevision, onAddToChat, waitingForInput = false }: AgentTimelineProps) {
   const [selectionRoot, setSelectionRoot] = useState<HTMLDivElement | null>(null);
   const [editingItemId, setEditingItemId] = useState<string>();
   const [draft, setDraft] = useState("");
@@ -122,32 +130,36 @@ export const AgentTimeline = memo(function AgentTimeline({ turns: sourceTurns, p
   return (
     <WorkspaceLinkContext.Provider value={workspaceLinks}>
       <div className="agent-timeline-selection-root" ref={setSelectionRoot}>
-        {turns.map((turn, index) => (
-          <Turn
-            key={turn.id}
-            projectId={projectId}
-            turn={turn}
-            waitingForInput={turn.status === "inProgress" && waitingForInput}
-            steeringPending={steeringPending && index === latestSteeringIndex}
-            assistantControls={{
-              copiedItemId: copiedAssistantId,
-              latestItemId: latestAssistantId,
-              onCopy: copyAssistant,
-            }}
-            userControls={{
-              editing: displays[index].user?.id === editingItemId && editingItemId === latestUserId,
-              draft: displays[index].user?.id === editingItemId ? draft : "",
-              copied: displays[index].user?.id === copiedItemId,
-              canEdit: Boolean(onRevise && displays[index].user?.text && displays[index].user?.id === latestUserId),
-              disabled: Boolean(revisionDisabled || submitting),
-              onCopy: copy,
-              onEdit: edit,
-              onDraftChange: setDraft,
-              onCancel: cancelEdit,
-              onSubmit: submitRevision,
-            }}
-          />
-        ))}
+        <TurnChangesViews key={turns[0]?.conversationId} workspaceRevision={workspaceRevision}>
+          {turns.map((turn, index) => (
+            <Turn
+              key={turn.id}
+              projectId={projectId}
+              turn={turn}
+              waitingForInput={turn.status === "inProgress" && waitingForInput}
+              steeringPending={steeringPending && index === latestSteeringIndex}
+              changeControls={changeControls}
+              assistantControls={{
+                copiedItemId: copiedAssistantId,
+                latestItemId: latestAssistantId,
+                onCopy: copyAssistant,
+              }}
+              userControls={{
+                editing: displays[index].user?.id === editingItemId && editingItemId === latestUserId,
+                draft: displays[index].user?.id === editingItemId ? draft : "",
+                copied: displays[index].user?.id === copiedItemId,
+                canEdit: Boolean(onRevise && displays[index].user?.text && displays[index].user?.id === latestUserId),
+                disabled: Boolean(revisionDisabled || submitting),
+                onRestore,
+                onCopy: copy,
+                onEdit: edit,
+                onDraftChange: setDraft,
+                onCancel: cancelEdit,
+                onSubmit: submitRevision,
+              }}
+            />
+          ))}
+        </TurnChangesViews>
         {onAddToChat ? <SelectedTextMenu root={selectionRoot} onAdd={onAddToChat} /> : null}
       </div>
     </WorkspaceLinkContext.Provider>
@@ -160,6 +172,7 @@ interface UserControls {
   canEdit: boolean;
   disabled: boolean;
   draft: string;
+  onRestore?: (checkpointId: string) => void;
   onCopy: (item: Extract<ThreadItem, { type: "userMessage" }>) => void;
   onEdit: (item: Extract<ThreadItem, { type: "userMessage" }>) => void;
   onDraftChange: (value: string) => void;
@@ -173,13 +186,14 @@ interface AssistantControls {
   onCopy: (id: string, text: string) => void;
 }
 
-const Turn = memo(function Turn({ turn, projectId, waitingForInput, steeringPending = false, userControls, assistantControls }: {
+const Turn = memo(function Turn({ turn, projectId, waitingForInput, steeringPending = false, userControls, assistantControls, changeControls }: {
   turn: ThreadTurn;
   projectId: string;
   waitingForInput: boolean;
   steeringPending?: boolean;
   userControls: UserControls;
   assistantControls: AssistantControls;
+  changeControls?: TurnChangesControls;
 }) {
   const [now, setNow] = useState(Date.now());
   const active = turn.status === "inProgress";
@@ -199,12 +213,17 @@ const Turn = memo(function Turn({ turn, projectId, waitingForInput, steeringPend
       {display.finalMessages.length > 0
         ? <FinalResponse projectId={projectId} items={display.finalMessages} artifacts={display.artifacts} controls={assistantControls} />
         : display.artifacts.length > 0 ? <ArtifactPreviews projectId={projectId} artifacts={display.artifacts} /> : null}
+      {/* Not part of the final response: a failed or stopped turn has none, but may have changed files. */}
+      {changeControls && display.status !== "inProgress" && display.user?.checkpointId && display.user.changes && display.user.changes.files > 0
+        ? <TurnChangesFooter checkpointId={display.user.checkpointId} changes={display.user.changes} controls={changeControls} />
+        : null}
       {steeringPending ? <SteeringActivity /> : null}
     </article>
   );
 }, (previous, next) => previous.turn === next.turn && previous.projectId === next.projectId &&
   previous.waitingForInput === next.waitingForInput && previous.steeringPending === next.steeringPending &&
-  equalControls(previous.userControls, next.userControls) && equalControls(previous.assistantControls, next.assistantControls));
+  equalControls(previous.userControls, next.userControls) && equalControls(previous.assistantControls, next.assistantControls) &&
+  previous.changeControls === next.changeControls);
 
 function equalControls<T extends object>(previous: T, next: T): boolean {
   return (Object.keys(previous) as (keyof T)[]).every((key) => previous[key] === next[key]);
@@ -300,6 +319,11 @@ function UserInput({ item, controls }: { item: Extract<ThreadItem, { type: "user
             {controls.canEdit ? (
               <button type="button" aria-label="Edit message" title="Edit" onClick={() => controls.onEdit(item)} disabled={controls.disabled}>
                 <Pencil size={13} />
+              </button>
+            ) : null}
+            {controls.onRestore && item.checkpointId ? (
+              <button type="button" aria-label="Restore to before this message" title="Restore to before this message" onClick={() => controls.onRestore!(item.checkpointId!)} disabled={controls.disabled}>
+                <Undo2 size={13} />
               </button>
             ) : null}
           </div>

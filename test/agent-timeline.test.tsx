@@ -1104,6 +1104,70 @@ describe("AgentTimeline", () => {
     expect(html.match(/aria-label="Edit message"/g)).toHaveLength(1);
   });
 
+  it("offers restore on every user message that has a checkpoint", () => {
+    const items = [
+      { ...user(), checkpointId: "checkpoint-1" },
+      { ...user(), id: "user-2", turnId: "turn-2", text: "Second" },
+      { ...user(), id: "user-3", turnId: "turn-3", text: "Third", checkpointId: "checkpoint-3" },
+    ];
+    const html = renderToStaticMarkup(<AgentTimeline items={items} onRestore={() => {}} />);
+
+    expect(html.match(/aria-label="Restore to before this message"/g)).toHaveLength(2);
+    expect(renderToStaticMarkup(<AgentTimeline items={items} />)).not.toContain("Restore to before this message");
+    expect(renderToStaticMarkup(<AgentTimeline items={items} onRestore={() => {}} revisionDisabled />).match(/aria-label="Restore to before this message"[^>]*disabled/g)).toHaveLength(2);
+  });
+
+  it("shows what a finished turn changed, with a way to undo it", () => {
+    const items = [
+      { ...user(), checkpointId: "checkpoint-1", changes: { files: 1 } },
+      assistant("final-1", "Done", "final_answer"),
+      { ...user(), id: "user-2", turnId: "turn-2", text: "Second", checkpointId: "checkpoint-2", changes: { files: 3 } },
+      { ...user(), id: "user-3", turnId: "turn-3", text: "Third", checkpointId: "checkpoint-3", changes: { files: 0 } },
+      { ...user(), id: "user-4", turnId: "turn-4", text: "Fourth", changes: { files: 2 } },
+      { ...user(), id: "user-5", turnId: "turn-5", text: "Fifth", checkpointId: "checkpoint-5", changes: { files: 5 } },
+    ];
+    const html = renderToStaticMarkup(<AgentTimeline items={items} activeTurnId="turn-5" failedTurnId="turn-2" changeControls={changeControls()} />);
+
+    expect(html.match(/class="turn-changes"/g)).toHaveLength(2);
+    expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*><span>1 file changed<\/span>/);
+    expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*><span>3 files changed<\/span>/);
+    expect(html.match(/<button[^>]*>Undo<\/button>/g)).toHaveLength(2);
+    expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Undo<\/button>/);
+    // The footer closes the turn, below the answer.
+    expect(html.indexOf("1 file changed")).toBeGreaterThan(html.indexOf("Done"));
+    expect(html.indexOf("1 file changed")).toBeLessThan(html.indexOf("Second"));
+    expect(html).not.toContain("0 files changed");
+    expect(html).not.toContain("2 files changed");
+    expect(html).not.toContain("5 files changed");
+    // Nothing is listed before the user asks for it.
+    expect(html).not.toContain("turn-changes-list");
+    expect(html).not.toContain("Loading changes");
+    expect(renderToStaticMarkup(<AgentTimeline items={items} />)).not.toContain("turn-changes");
+  });
+
+  it("offers no undo for changes that were undone, and none while the agent is busy", () => {
+    const items = [
+      { ...user(), checkpointId: "checkpoint-1", changes: { files: 2, undone: true } },
+      { ...user(), id: "user-2", turnId: "turn-2", text: "Second", checkpointId: "checkpoint-2", changes: { files: 3 } },
+    ];
+    const html = renderToStaticMarkup(<AgentTimeline items={items} changeControls={changeControls(true)} />);
+
+    expect(html.match(/Changes undone/g)).toHaveLength(1);
+    expect(html.match(/<button[^>]*>Undo<\/button>/g)).toHaveLength(1);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Undo<\/button>/);
+    // The list can still be opened.
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*><span>3 files changed/);
+  });
+
+  it("offers to undo the rest of a turn that was undone in part", () => {
+    const items = [{ ...user(), checkpointId: "checkpoint-1", changes: { files: 3, undone: true, kept: 1 } }];
+    const html = renderToStaticMarkup(<AgentTimeline items={items} changeControls={changeControls()} />);
+
+    expect(html).toContain("Partly undone");
+    expect(html).not.toContain("Changes undone");
+    expect(html.match(/<button[^>]*>Undo the rest<\/button>/g)).toHaveLength(1);
+  });
+
   it("offers copy on final responses and keeps only the latest action visible", () => {
     const html = renderToStaticMarkup(<AgentTimeline items={[
       user(),
@@ -1283,6 +1347,15 @@ describe("AgentTimeline", () => {
 });
 
 type ThreadItemOf<T extends ThreadItem["type"]> = Extract<ThreadItem, { type: T }>;
+
+function changeControls(disabled = false): NonNullable<ComponentProps<typeof ThreadTimeline>["changeControls"]> {
+  return {
+    disabled,
+    load: async () => [],
+    file: async (_checkpointId, path) => ({ path, before: null, after: null }),
+    undo: async () => ({ status: "done", changed: [], conflicts: [] }),
+  };
+}
 
 function user(): ThreadItemOf<"userMessage"> {
   return { id: "user", turnId: "turn-1", type: "userMessage", text: "Build", timestamp: Date.now() - 1_000 };

@@ -7,6 +7,10 @@ import {
   type AgentModelCatalog,
   type AgentModelRef,
   type AgentReasoningLevel,
+  type CheckpointChangeItem,
+  type CheckpointFileView,
+  type CheckpointUndoRequest,
+  type CheckpointUndoResponse,
   type ConversationAgentSettings,
   type ConversationCapabilities,
   type CreateLibraryImageRequest,
@@ -822,6 +826,57 @@ export async function reviseLastPrompt(
   });
 }
 
+/** Puts the workspace and the conversation back to just before the message the checkpoint was taken for. */
+export async function restoreCheckpoint(projectId: string, conversationId: string, checkpointId: string): Promise<void> {
+  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/restore`, { method: "POST" });
+}
+
+/** Lists the files the turn of the checkpoint's message changed. */
+export async function getCheckpointChanges(projectId: string, conversationId: string, checkpointId: string): Promise<CheckpointChangeItem[]> {
+  const { changes } = await request<{ changes: CheckpointChangeItem[] }>(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/changes`);
+  return changes;
+}
+
+/** Reads one of those files as it was before the turn and as the turn left it. */
+export async function getCheckpointFile(projectId: string, conversationId: string, checkpointId: string, filePath: string): Promise<CheckpointFileView> {
+  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/file?path=${encodeURIComponent(filePath)}`);
+}
+
+/**
+ * Takes back the file changes of one turn and keeps the conversation. Without
+ * `conflicts` it rejects with status 409 and the paths in `ApiError.conflicts`
+ * when files were changed again after the turn. To overwrite them, `expected`
+ * names the paths the user was shown; it rejects the same way when other files
+ * were changed by now.
+ */
+export async function undoCheckpoint(projectId: string, conversationId: string, checkpointId: string, conflicts?: CheckpointUndoRequest["conflicts"], expected?: string[]): Promise<CheckpointUndoResponse> {
+  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/undo`, {
+    method: "POST",
+    body: JSON.stringify({ conflicts, expected } satisfies CheckpointUndoRequest),
+  });
+}
+
+/** Whether a restore or an undo was cut off and may have left the project's files partly changed. */
+export async function getUnfinishedRestore(projectId: string): Promise<boolean> {
+  const { unfinished } = await request<{ unfinished: boolean }>(`/projects/${projectId}/checkpoints/unfinished`);
+  return unfinished;
+}
+
+/**
+ * Lists what putting the files back after a restore or an undo that was cut
+ * off would do: "added" brings a file back, "removed" takes it away. The
+ * items say nothing about how a file stands.
+ */
+export async function getUnfinishedChanges(projectId: string): Promise<CheckpointChangeItem[]> {
+  const { changes } = await request<{ changes: CheckpointChangeItem[] }>(`/projects/${projectId}/checkpoints/unfinished/changes`);
+  return changes;
+}
+
+/** Puts the files back as they were before the restore or undo that was cut off. */
+export async function restoreUnfinished(projectId: string): Promise<void> {
+  return request(`/projects/${projectId}/checkpoints/unfinished/restore`, { method: "POST" });
+}
+
 export async function removePendingPrompt(projectId: string, conversationId: string, turnId: string): Promise<void> {
   await request(`/projects/${projectId}/conversations/${conversationId}/queue/${turnId}`, { method: "DELETE" });
 }
@@ -854,6 +909,10 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    /** The workspace paths the request was refused for. */
+    readonly conflicts?: string[],
+    /** Those paths cannot be put back, whatever the request says to do with them. */
+    readonly blocked?: boolean,
   ) {
     super(message);
   }
@@ -874,8 +933,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
 }
 
 async function responseError(response: Response): Promise<ApiError> {
-  const body = await response.json().catch(() => ({})) as { error?: string; message?: string; code?: string };
-  return new ApiError(body.message ?? body.error ?? `Request failed with ${response.status}`, response.status, body.code);
+  const body = await response.json().catch(() => ({})) as { error?: string; message?: string; code?: string; conflicts?: unknown; blocked?: unknown };
+  const conflicts = Array.isArray(body.conflicts) && body.conflicts.every((path) => typeof path === "string") ? body.conflicts as string[] : undefined;
+  return new ApiError(body.message ?? body.error ?? `Request failed with ${response.status}`, response.status, body.code, conflicts, body.blocked === true || undefined);
 }
 
 async function streamProjectEvents(

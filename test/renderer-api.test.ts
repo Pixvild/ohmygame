@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { approvePlan, cancelPlan, compactConversation, createConversation, createLibraryImage, createProject, deleteWorkspaceEntry, deleteLibraryAsset, deleteProject, duplicateProject, forceDeleteLibraryAsset, getConversation, getConversationCapabilities, getConversationContextUsage, getExploreGameCover, getHomeComposerCapabilities, getLibraryAsset, getOpenAIEndpointSettings, getNodeCodebase, getProjectCover, getWorkspaceAsset, getWorkspaceFile, inspectPluginSource, installPlugin, listLibraryAssetReferences, listLibraryAssets, listModels, listPlugins, listProjects, listWorkspaceFiles, publishProject, readPlugin, readPluginSkill, refinePlan, removePendingPrompt, renameWorkspaceEntry, renameConversation, renameLibraryAsset, renameProject, reviseLastPrompt, sendPrompt, setConversationModel, setConversationReasoning, setProjectCover, steerPendingPrompt, subscribeToProject, uninstallPlugin, updateAgentDefaults, updateOpenAIEndpointSettings, updateNodeCodebase, updatePluginSettings, updateProjectRunSettings, updateProjectStartupDirectory, uploadLibraryAsset } from "../src/renderer/api.js";
+import { approvePlan, cancelPlan, compactConversation, createConversation, createLibraryImage, createProject, deleteWorkspaceEntry, deleteLibraryAsset, deleteProject, duplicateProject, forceDeleteLibraryAsset, getCheckpointChanges, getCheckpointFile, getConversation, getConversationCapabilities, getConversationContextUsage, getExploreGameCover, getHomeComposerCapabilities, getLibraryAsset, getOpenAIEndpointSettings, getNodeCodebase, getProjectCover, getUnfinishedChanges, getUnfinishedRestore, getWorkspaceAsset, getWorkspaceFile, inspectPluginSource, installPlugin, listLibraryAssetReferences, listLibraryAssets, listModels, listPlugins, listProjects, listWorkspaceFiles, publishProject, readPlugin, readPluginSkill, refinePlan, removePendingPrompt, renameWorkspaceEntry, renameConversation, renameLibraryAsset, renameProject, restoreCheckpoint, restoreUnfinished, reviseLastPrompt, sendPrompt, setConversationModel, setConversationReasoning, setProjectCover, steerPendingPrompt, subscribeToProject, undoCheckpoint, uninstallPlugin, updateAgentDefaults, updateOpenAIEndpointSettings, updateNodeCodebase, updatePluginSettings, updateProjectRunSettings, updateProjectStartupDirectory, uploadLibraryAsset } from "../src/renderer/api.js";
 import { cancelToolJob, getProjectCoverState, listToolJobs, restoreAutomaticProjectCover, retryToolJob, startToolJob } from "../src/renderer/api.js";
 import type { RuntimeEvent } from "../src/shared/contracts.js";
 
@@ -486,6 +486,102 @@ describe("renderer project API", () => {
       "/api/projects/project-1/conversations/conversation-1/revise-last",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ prompt: "Build a platformer" }) }),
     );
+  });
+
+  it("restores a checkpoint and reports a refusal", async () => {
+    installWindow();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await restoreCheckpoint("project-1", "conversation-1", "checkpoint 1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/project-1/conversations/conversation-1/checkpoints/checkpoint%201/restore",
+      expect.objectContaining({ method: "POST" }),
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Wait for the agent to finish before restoring" }, { status: 409 })));
+    await expect(restoreCheckpoint("project-1", "conversation-1", "checkpoint-1")).rejects.toMatchObject({ status: 409, message: "Wait for the agent to finish before restoring" });
+  });
+
+  it("reads the changes of a turn and one of its files", async () => {
+    installWindow();
+    const changes = [{ path: "src/a b.js", kind: "modified", state: "applied" }];
+    const file = { path: "src/a b.js", before: { binary: false, content: "old\n" }, after: { binary: false, content: "new\n" } };
+    const fetchMock = vi.fn(async (url: string) => Response.json(url.includes("/file?") ? file : { changes }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCheckpointChanges("project-1", "conversation-1", "checkpoint 1")).resolves.toEqual(changes);
+    await expect(getCheckpointFile("project-1", "conversation-1", "checkpoint 1", "src/a b.js")).resolves.toEqual(file);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects/project-1/conversations/conversation-1/checkpoints/checkpoint%201/changes", { headers: {} });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/projects/project-1/conversations/conversation-1/checkpoints/checkpoint%201/file?path=src%2Fa%20b.js", { headers: {} });
+  });
+
+  it("undoes a turn with a JSON body whether or not conflicts are decided", async () => {
+    installWindow();
+    const result = { changed: ["src/a.js"], conflicts: ["src/b.js"] };
+    const fetchMock = vi.fn(async () => Response.json(result));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(undoCheckpoint("project-1", "conversation-1", "checkpoint 1")).resolves.toEqual(result);
+    await undoCheckpoint("project-1", "conversation-1", "checkpoint 1", "keep");
+    // To overwrite, the files the user was shown go along.
+    await undoCheckpoint("project-1", "conversation-1", "checkpoint 1", "overwrite", ["src/b.js"]);
+
+    const url = "/api/projects/project-1/conversations/conversation-1/checkpoints/checkpoint%201/undo";
+    expect(fetchMock).toHaveBeenNthCalledWith(1, url, expect.objectContaining({ method: "POST", body: "{}", headers: { "content-type": "application/json" } }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, url, expect.objectContaining({ method: "POST", body: JSON.stringify({ conflicts: "keep" }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, url, expect.objectContaining({ method: "POST", body: JSON.stringify({ conflicts: "overwrite", expected: ["src/b.js"] }) }));
+  });
+
+  it("keeps the conflicts of a refused undo on the error", async () => {
+    installWindow();
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Files were changed after this turn", conflicts: ["src/a.js", "src/b.js"] }, { status: 409 })));
+    const refused = await undoCheckpoint("project-1", "conversation-1", "checkpoint-1").catch((error: unknown) => error);
+    expect(refused).toMatchObject({ status: 409, message: "Files were changed after this turn", conflicts: ["src/a.js", "src/b.js"] });
+    expect(refused).not.toHaveProperty("blocked", true);
+
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Some files cannot be put back", conflicts: ["src/a.js"], blocked: true }, { status: 409 })));
+    await expect(undoCheckpoint("project-1", "conversation-1", "checkpoint-1", "overwrite")).rejects.toMatchObject({ status: 409, conflicts: ["src/a.js"], blocked: true });
+
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "The workspace was left partly changed", code: "CHECKPOINT_INCOMPLETE" }, { status: 409 })));
+    const incomplete = await undoCheckpoint("project-1", "conversation-1", "checkpoint-1").catch((error: unknown) => error);
+    expect(incomplete).toMatchObject({ status: 409, code: "CHECKPOINT_INCOMPLETE" });
+    expect(incomplete).toHaveProperty("conflicts", undefined);
+
+    // Anything but a list of paths and a plain true is left out.
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Refused", conflicts: ["src/a.js", 2], blocked: "yes" }, { status: 409 })));
+    const malformed = await undoCheckpoint("project-1", "conversation-1", "checkpoint-1").catch((error: unknown) => error);
+    expect(malformed).toMatchObject({ status: 409, message: "Refused" });
+    expect(malformed).toHaveProperty("conflicts", undefined);
+    expect(malformed).toHaveProperty("blocked", undefined);
+  });
+
+  it("asks for an unfinished restore and puts the files back", async () => {
+    installWindow();
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit = {}) => init.method === "POST" ? new Response(null, { status: 204 }) : Response.json({ unfinished: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getUnfinishedRestore("project-1")).resolves.toBe(true);
+    await expect(restoreUnfinished("project-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects/project-1/checkpoints/unfinished", { headers: {} });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/projects/project-1/checkpoints/unfinished/restore", expect.objectContaining({ method: "POST" }));
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Wait for the agent to finish" }, { status: 409 })));
+    await expect(restoreUnfinished("project-1")).rejects.toMatchObject({ status: 409, message: "Wait for the agent to finish" });
+  });
+
+  it("reads what putting the files back would do", async () => {
+    installWindow();
+    const changes = [{ path: "src/a.js", kind: "added" }, { path: "src/b.js", kind: "removed" }];
+    const fetchMock = vi.fn(async () => Response.json({ changes }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getUnfinishedChanges("project-1")).resolves.toEqual(changes);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects/project-1/checkpoints/unfinished/changes", { headers: {} });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "No restore or undo was left unfinished" }, { status: 404 })));
+    await expect(getUnfinishedChanges("project-1")).rejects.toMatchObject({ status: 404 });
   });
 
   it("sends image attachments with a prompt", async () => {
