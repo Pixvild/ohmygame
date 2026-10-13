@@ -282,11 +282,69 @@ projects/<project-id>/
 ├── cover.webp     custom cover; its presence stops automatic replacement
 ├── cover-auto.webp last automatic cover, retained when a custom cover is applied
 ├── preview-origin.json stable local preview port
+├── checkpoints/   snapshots of the workspace, one bare Git repository
 ├── workspace/     the project files (or an existing folder in the desktop app)
 └── session/       Pi session files, one per conversation
 ```
 
 Removing a project never deletes an existing folder used as its workspace.
+
+## Checkpoints
+
+Web Game, General Game and Interactive Story projects record the workspace
+around every Agent turn, so that what a turn did to the files can be seen and
+taken back.
+
+A snapshot is taken before each user message reaches the model, including
+queued and steering messages, and again when the run ends. The two snapshots
+enclose the turn. They are commits in `checkpoints/`, a bare Git repository
+beside the workspace that the daemon writes itself. It never uses the
+workspace's own `.git` or `.gitignore`, and writes nothing into the workspace.
+A snapshot of an unchanged workspace is the commit that is already there.
+
+A message whose turn changed files shows **N files changed** below it. The row
+opens a list of the files that were added, modified or removed, and each file
+opens a line diff. Text is shown up to 256 KiB a side; images, audio, video and
+3D models are listed without content. The list is the difference between the
+two snapshots, so it holds everything that changed in the project during the
+turn, including edits made by hand or by another conversation.
+
+![A turn's changed files with the line diff of one of them](assets/turn-changes.webp)
+
+**Undo** takes back the files of one turn and leaves the conversation as it
+is. Files that still are as the turn left them are put back. Files that are
+already back are left alone. A file that was changed again afterwards, or that
+cannot come back because something newer is in its place, is a conflict: the
+undo then changes nothing and asks whether to keep those files and undo the
+rest, or to overwrite them. Overwriting is refused when more files have become
+conflicts since the list was shown. The Agent is told which files went back
+by a note in the conversation that starts no turn, so that its next reply does
+not build on files that are gone. A turn that was undone says so, and a turn
+with files that were kept can be undone the rest of the way later.
+
+![Undo asking what to do with a file that was changed again after the turn](assets/turn-undo-conflict.webp)
+
+**Restore to before this message** is a separate action on a user message. It
+puts the whole workspace back to the snapshot taken before that message and
+removes the message and everything after it from the conversation. Editing a
+message does neither: it leaves the workspace as it is.
+
+Both actions first record the workspace as it is, so nothing they replace is
+lost from the store, and both are refused while an Agent is working in the
+project. If the app quits in the middle of one, the project offers to put the
+files back to how they were before it started the next time it is opened.
+
+These paths are not part of a snapshot and are never written or removed by an
+undo or a restore:
+
+- `node_modules` and `.git`, at any depth.
+- `dist`, `build`, `out`, `.ohmygame`, `.ohmygame-install-pending` and
+  `.data/agent-attachments`, at the workspace root.
+- A file or folder the daemon is not allowed to read.
+
+Limits: Asset Canvas and Godot projects have no checkpoints, because part of
+their state lives outside the workspace. The store only grows; nothing removes
+old snapshots yet. Permission bits other than "executable" are not recorded.
 
 Project covers are saved independently of publishing. Selecting an image in the
 publish dialog previews it; **Apply cover** saves it and stops automatic cover
