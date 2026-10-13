@@ -1,6 +1,14 @@
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -23,7 +31,10 @@ export interface TreeEntry {
 
 /** A file to store could not be read. `code` is the file system's error code. */
 export class SourceError extends Error {
-  constructor(readonly code: string | undefined, cause: unknown) {
+  constructor(
+    readonly code: string | undefined,
+    cause: unknown,
+  ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
   }
 }
@@ -61,22 +72,37 @@ const inflateBuffer = promisify(inflate);
 
 /** Marks a failure as one of reading the files to store, so that it is not taken for a failure of the store. */
 export async function fromSource<T>(operation: Promise<T>): Promise<T> {
-  return await operation.catch((error: NodeJS.ErrnoException) => { throw new SourceError(error.code, error); });
+  return await operation.catch((error: NodeJS.ErrnoException) => {
+    throw new SourceError(error.code, error);
+  });
 }
 
 export async function initialize(gitdir: string): Promise<void> {
   if (await exists(path.join(gitdir, "HEAD"))) return;
   // The folder the store is in is not made along with it: where that folder is gone, the project was removed.
-  await mkdir(gitdir).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
+  await mkdir(gitdir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "EEXIST") throw error;
+  });
   await mkdir(path.join(gitdir, "objects"), { recursive: true });
   await mkdir(path.join(gitdir, "refs", "heads"), { recursive: true });
-  await writeAtomically(gitdir, path.join(gitdir, "config"), "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n");
-  await writeAtomically(gitdir, path.join(gitdir, "HEAD"), `ref: ${HEAD_REF}\n`);
+  await writeAtomically(
+    gitdir,
+    path.join(gitdir, "config"),
+    "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n",
+  );
+  await writeAtomically(
+    gitdir,
+    path.join(gitdir, "HEAD"),
+    `ref: ${HEAD_REF}\n`,
+  );
 }
 
 /** The newest commit, or undefined when there is none yet. */
 export async function readHead(gitdir: string): Promise<string | undefined> {
-  const oid = await readFile(path.join(gitdir, HEAD_REF), "utf8").then((text) => text.trim(), () => undefined);
+  const oid = await readFile(path.join(gitdir, HEAD_REF), "utf8").then(
+    (text) => text.trim(),
+    () => undefined,
+  );
   return oid && isOid(oid) ? oid : undefined;
 }
 
@@ -84,27 +110,46 @@ export async function writeHead(gitdir: string, commit: string): Promise<void> {
   await writeAtomically(gitdir, path.join(gitdir, HEAD_REF), `${commit}\n`);
 }
 
-export async function writeObject(gitdir: string, type: "blob" | "tree" | "commit", content: Buffer): Promise<string> {
+export async function writeObject(
+  gitdir: string,
+  type: "blob" | "tree" | "commit",
+  content: Buffer,
+): Promise<string> {
   const header = Buffer.from(`${type} ${content.length}\0`);
   const oid = createHash("sha1").update(header).update(content).digest("hex");
   const target = objectPath(gitdir, oid);
   if (!(await stored(target))) {
-    const deflated = await deflateBuffer(Buffer.concat([header, content]), COMPRESSION);
-    await storeObject(target, (temporary) => writeFile(temporary, deflated, { flag: "wx" }));
+    const deflated = await deflateBuffer(
+      Buffer.concat([header, content]),
+      COMPRESSION,
+    );
+    await storeObject(target, (temporary) =>
+      writeFile(temporary, deflated, { flag: "wx" }),
+    );
   }
   return oid;
 }
 
 /** Stores a file's content as a blob. Content the store already holds is not compressed and written again. */
-export async function writeFileBlob(gitdir: string, file: string, size: number): Promise<string> {
-  if (size <= BUFFERED_BYTES) return await writeObject(gitdir, "blob", await fromSource(readFile(file)));
+export async function writeFileBlob(
+  gitdir: string,
+  file: string,
+  size: number,
+): Promise<string> {
+  if (size <= BUFFERED_BYTES)
+    return await writeObject(gitdir, "blob", await fromSource(readFile(file)));
   const oid = await fileBlobId(file, size);
   const target = objectPath(gitdir, oid);
   if (await stored(target)) return oid;
   await storeObject(target, async (temporary) => {
     const written = createHash("sha1");
-    await pipeline(fileBlob(file, size, written), createDeflate(COMPRESSION), createWriteStream(temporary, { flags: "wx" }));
-    if (written.digest("hex") !== oid) throw new FileChangedError(`${file} changed while it was read`);
+    await pipeline(
+      fileBlob(file, size, written),
+      createDeflate(COMPRESSION),
+      createWriteStream(temporary, { flags: "wx" }),
+    );
+    if (written.digest("hex") !== oid)
+      throw new FileChangedError(`${file} changed while it was read`);
   });
   return oid;
 }
@@ -113,16 +158,25 @@ export async function writeFileBlob(gitdir: string, file: string, size: number):
 export async function fileBlobId(file: string, size: number): Promise<string> {
   if (size <= BUFFERED_BYTES) return blobId(await fromSource(readFile(file)));
   const hash = createHash("sha1");
-  for await (const _ of fileBlob(file, size, hash)) { /* Reading it through is what finds the id. */ }
+  for await (const _ of fileBlob(file, size, hash)) {
+    /* Reading it through is what finds the id. */
+  }
   return hash.digest("hex");
 }
 
 export function blobId(content: Buffer): string {
-  return createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex");
+  return createHash("sha1")
+    .update(`blob ${content.length}\0`)
+    .update(content)
+    .digest("hex");
 }
 
 /** A large file as a blob with its header. Exactly `size` bytes are read, so a file that grows meanwhile still gives an object that matches its header. */
-async function* fileBlob(file: string, size: number, hash: Hash): AsyncGenerator<Buffer> {
+async function* fileBlob(
+  file: string,
+  size: number,
+  hash: Hash,
+): AsyncGenerator<Buffer> {
   const header = Buffer.from(`blob ${size}\0`);
   hash.update(header);
   yield header;
@@ -130,7 +184,11 @@ async function* fileBlob(file: string, size: number, hash: Hash): AsyncGenerator
   const stream = createReadStream(file, { end: size - 1 });
   try {
     const chunks = stream[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
-    for (let next = await fromSource(chunks.next()); !next.done; next = await fromSource(chunks.next())) {
+    for (
+      let next = await fromSource(chunks.next());
+      !next.done;
+      next = await fromSource(chunks.next())
+    ) {
       hash.update(next.value);
       read += next.value.length;
       yield next.value;
@@ -138,11 +196,15 @@ async function* fileBlob(file: string, size: number, hash: Hash): AsyncGenerator
   } finally {
     stream.destroy();
   }
-  if (read !== size) throw new FileChangedError(`${file} changed while it was read`);
+  if (read !== size)
+    throw new FileChangedError(`${file} changed while it was read`);
 }
 
 /** Stores a file that does not hold still, from a copy that does. */
-export async function writeFileCopyBlob(gitdir: string, file: string): Promise<string> {
+export async function writeFileCopyBlob(
+  gitdir: string,
+  file: string,
+): Promise<string> {
   const copy = temporaryPath(gitdir);
   try {
     await fromSource(copyFile(file, copy));
@@ -152,26 +214,55 @@ export async function writeFileCopyBlob(gitdir: string, file: string): Promise<s
   }
 }
 
-export async function readObject(gitdir: string, oid: string, type: "blob" | "tree" | "commit"): Promise<Buffer> {
-  const stored = await readFile(objectPath(gitdir, oid)).catch((error: NodeJS.ErrnoException) => {
-    throw error.code === "ENOENT" ? new Error(`Checkpoint object ${oid} does not exist`) : error;
+export async function readObject(
+  gitdir: string,
+  oid: string,
+  type: "blob" | "tree" | "commit",
+): Promise<Buffer> {
+  const stored = await readFile(objectPath(gitdir, oid)).catch(
+    (error: NodeJS.ErrnoException) => {
+      throw error.code === "ENOENT"
+        ? new Error(`Checkpoint object ${oid} does not exist`)
+        : error;
+    },
+  );
+  const object = await inflateBuffer(stored).catch(() => {
+    throw new DamagedObjectError(oid);
   });
-  const object = await inflateBuffer(stored).catch(() => { throw new DamagedObjectError(oid); });
   const end = object.indexOf(0);
-  if (createHash("sha1").update(object).digest("hex") !== oid) throw new DamagedObjectError(oid);
-  if (object.toString("latin1", 0, end) !== `${type} ${object.length - end - 1}`) throw new Error(`Checkpoint object ${oid} is not a ${type}`);
+  if (createHash("sha1").update(object).digest("hex") !== oid)
+    throw new DamagedObjectError(oid);
+  if (
+    object.toString("latin1", 0, end) !== `${type} ${object.length - end - 1}`
+  )
+    throw new Error(`Checkpoint object ${oid} is not a ${type}`);
   return object.subarray(end + 1);
 }
 
 /** Writes a blob's content into a new file, which is created with the given permissions. */
-export async function writeBlobTo(gitdir: string, oid: string, target: string, mode?: number): Promise<void> {
-  const size = await lstat(objectPath(gitdir, oid)).then((stats) => stats.size, () => 0);
+export async function writeBlobTo(
+  gitdir: string,
+  oid: string,
+  target: string,
+  mode?: number,
+): Promise<void> {
+  const size = await lstat(objectPath(gitdir, oid)).then(
+    (stats) => stats.size,
+    () => 0,
+  );
   if (size <= BUFFERED_OBJECT_BYTES) {
-    await writeFile(target, await readObject(gitdir, oid, "blob"), { flag: "wx", mode });
+    await writeFile(target, await readObject(gitdir, oid, "blob"), {
+      flag: "wx",
+      mode,
+    });
     return;
   }
   try {
-    await streamBlob(gitdir, oid, createWriteStream(target, { flags: "wx", mode }));
+    await streamBlob(
+      gitdir,
+      oid,
+      createWriteStream(target, { flags: "wx", mode }),
+    );
   } catch (error) {
     await rm(target, { force: true });
     throw error;
@@ -180,7 +271,9 @@ export async function writeBlobTo(gitdir: string, oid: string, target: string, m
 
 /** Reads a blob through and throws `DamagedObjectError` when it is missing or not whole. */
 export async function verifyBlob(gitdir: string, oid: string): Promise<void> {
-  await streamBlob(gitdir, oid).catch((error: NodeJS.ErrnoException) => { throw error.code === "ENOENT" ? new DamagedObjectError(oid) : error; });
+  await streamBlob(gitdir, oid).catch((error: NodeJS.ErrnoException) => {
+    throw error.code === "ENOENT" ? new DamagedObjectError(oid) : error;
+  });
 }
 
 /** Removes an object that turned out to be damaged, so that it is written anew when its content is stored again. */
@@ -189,9 +282,15 @@ export async function removeObject(gitdir: string, oid: string): Promise<void> {
 }
 
 /** Streams a blob's content, to a file when one is given, and checks it against its id. */
-async function streamBlob(gitdir: string, oid: string, destination?: NodeJS.WritableStream): Promise<void> {
+async function streamBlob(
+  gitdir: string,
+  oid: string,
+  destination?: NodeJS.WritableStream,
+): Promise<void> {
   const hash = createHash("sha1");
-  async function* content(chunks: AsyncIterable<Buffer>): AsyncGenerator<Buffer> {
+  async function* content(
+    chunks: AsyncIterable<Buffer>,
+  ): AsyncGenerator<Buffer> {
     let header = true;
     for await (const chunk of chunks) {
       hash.update(chunk);
@@ -205,37 +304,79 @@ async function streamBlob(gitdir: string, oid: string, destination?: NodeJS.Writ
   }
   const source = createReadStream(objectPath(gitdir, oid));
   try {
-    if (destination) await pipeline(source, createInflate(), content, destination);
-    else await pipeline(source, createInflate(), content, async (chunks: AsyncIterable<Buffer>) => { for await (const _ of chunks) { /* Reading it is the check. */ } });
+    if (destination)
+      await pipeline(source, createInflate(), content, destination);
+    else
+      await pipeline(
+        source,
+        createInflate(),
+        content,
+        async (chunks: AsyncIterable<Buffer>) => {
+          for await (const _ of chunks) {
+            /* Reading it is the check. */
+          }
+        },
+      );
   } catch (error) {
     // Only the inflating can tell that the object is damaged; other failures, such as a full disk, are what they are.
-    throw String((error as NodeJS.ErrnoException).code).startsWith("Z_") ? new DamagedObjectError(oid) : error;
+    throw String((error as NodeJS.ErrnoException).code).startsWith("Z_")
+      ? new DamagedObjectError(oid)
+      : error;
   }
   if (hash.digest("hex") !== oid) throw new DamagedObjectError(oid);
 }
 
-export async function writeTree(gitdir: string, entries: TreeEntry[]): Promise<string> {
+export async function writeTree(
+  gitdir: string,
+  entries: TreeEntry[],
+): Promise<string> {
   // Git orders a tree by name, with a folder compared as if its name ended in a slash.
   const sorted = entries
-    .map((entry) => ({ entry, key: Buffer.from(entry.mode === TREE_MODE ? `${entry.name}/` : entry.name) }))
+    .map((entry) => ({
+      entry,
+      key: Buffer.from(
+        entry.mode === TREE_MODE ? `${entry.name}/` : entry.name,
+      ),
+    }))
     .sort((left, right) => Buffer.compare(left.key, right.key));
-  return await writeObject(gitdir, "tree", Buffer.concat(sorted.flatMap(({ entry }) => [Buffer.from(`${entry.mode} ${entry.name}\0`), Buffer.from(entry.oid, "hex")])));
+  return await writeObject(
+    gitdir,
+    "tree",
+    Buffer.concat(
+      sorted.flatMap(({ entry }) => [
+        Buffer.from(`${entry.mode} ${entry.name}\0`),
+        Buffer.from(entry.oid, "hex"),
+      ]),
+    ),
+  );
 }
 
-export async function readTree(gitdir: string, oid: string): Promise<TreeEntry[]> {
+export async function readTree(
+  gitdir: string,
+  oid: string,
+): Promise<TreeEntry[]> {
   const content = await readObject(gitdir, oid, "tree");
   const entries: TreeEntry[] = [];
   for (let cursor = 0; cursor < content.length;) {
     const space = content.indexOf(0x20, cursor);
     const end = content.indexOf(0, space);
-    entries.push({ mode: content.toString("latin1", cursor, space), name: content.toString("utf8", space + 1, end), oid: content.toString("hex", end + 1, end + 21) });
+    entries.push({
+      mode: content.toString("latin1", cursor, space),
+      name: content.toString("utf8", space + 1, end),
+      oid: content.toString("hex", end + 1, end + 21),
+    });
     cursor = end + 21;
   }
   return entries;
 }
 
 /** Writes a commit. The paths that could not be read go into its message. */
-export async function writeCommit(gitdir: string, tree: string, parent: string | undefined, unreadable: string[]): Promise<string> {
+export async function writeCommit(
+  gitdir: string,
+  tree: string,
+  parent: string | undefined,
+  unreadable: string[],
+): Promise<string> {
   const signature = `OhMyGame <checkpoints@ohmygame.local> ${Math.floor(Date.now() / 1000)} +0000`;
   const text = `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author ${signature}\ncommitter ${signature}\n\n${messageFor(unreadable)}`;
   return await writeObject(gitdir, "commit", Buffer.from(text));
@@ -243,21 +384,33 @@ export async function writeCommit(gitdir: string, tree: string, parent: string |
 
 /** The message of a commit. The paths are in it as JSON, so that a name with a line break stays on one line. */
 function messageFor(unreadable: string[]): string {
-  return unreadable.length ? `${MESSAGE}\nunreadable: ${JSON.stringify(unreadable)}\n` : MESSAGE;
+  return unreadable.length
+    ? `${MESSAGE}\nunreadable: ${JSON.stringify(unreadable)}\n`
+    : MESSAGE;
 }
 
-export async function readCommitTree(gitdir: string, commit: string): Promise<string> {
+export async function readCommitTree(
+  gitdir: string,
+  commit: string,
+): Promise<string> {
   return (await readObject(gitdir, commit, "commit")).toString("latin1", 5, 45);
 }
 
 /** Reads a commit's tree and the paths that could not be read when it was written. */
-export async function readCommit(gitdir: string, commit: string): Promise<Commit> {
+export async function readCommit(
+  gitdir: string,
+  commit: string,
+): Promise<Commit> {
   const text = (await readObject(gitdir, commit, "commit")).toString("utf8");
   const message = text.slice(text.indexOf("\n\n") + 2);
-  const unreadable = message === MESSAGE ? [] : pathList(UNREADABLE_LINE.exec(message)?.[1] ?? "");
+  const unreadable =
+    message === MESSAGE
+      ? []
+      : pathList(UNREADABLE_LINE.exec(message)?.[1] ?? "");
   // A message that cannot be made out must not read as one without a list: every path would then count as one that was
   // read. Nor is a list taken that is not written as `writeCommit` writes it, where a path could stand for no file at all.
-  if (!unreadable || messageFor(unreadable) !== message) throw new Error(`Checkpoint ${commit} does not say what could not be read`);
+  if (!unreadable || messageFor(unreadable) !== message)
+    throw new Error(`Checkpoint ${commit} does not say what could not be read`);
   return { tree: text.slice(5, 45), unreadable };
 }
 
@@ -265,16 +418,30 @@ export async function readCommit(gitdir: string, commit: string): Promise<Commit
 function pathList(json: string): string[] | undefined {
   try {
     const paths: unknown = JSON.parse(json);
-    const follows = (entry: unknown, index: number, entries: unknown[]): boolean => typeof entry === "string"
-      && (index === 0 || (entries[index - 1] as string) < entry) && entry.split("/").every((name) => name !== "" && name !== "." && name !== "..");
-    return Array.isArray(paths) && paths.every(follows) ? paths as string[] : undefined;
+    const follows = (
+      entry: unknown,
+      index: number,
+      entries: unknown[],
+    ): boolean =>
+      typeof entry === "string" &&
+      (index === 0 || (entries[index - 1] as string) < entry) &&
+      entry
+        .split("/")
+        .every((name) => name !== "" && name !== "." && name !== "..");
+    return Array.isArray(paths) && paths.every(follows)
+      ? (paths as string[])
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
 /** Writes a small file of the store, such as its branch, so that it is either the old or the new one. */
-export async function writeAtomically(gitdir: string, target: string, content: string): Promise<void> {
+export async function writeAtomically(
+  gitdir: string,
+  target: string,
+  content: string,
+): Promise<void> {
   const temporary = temporaryPath(gitdir);
   try {
     await writeFile(temporary, content, { flag: "wx" });
@@ -285,7 +452,10 @@ export async function writeAtomically(gitdir: string, target: string, content: s
   }
 }
 
-async function storeObject(target: string, write: (temporary: string) => Promise<void>): Promise<void> {
+async function storeObject(
+  target: string,
+  write: (temporary: string) => Promise<void>,
+): Promise<void> {
   await mkdir(path.dirname(target), { recursive: true });
   // The name git gives its own unfinished objects, which it knows to ignore.
   const temporary = path.join(path.dirname(target), `tmp_obj_${randomUUID()}`);
@@ -295,7 +465,8 @@ async function storeObject(target: string, write: (temporary: string) => Promise
   } catch (error) {
     await rm(temporary, { force: true });
     // The same content stored at the same moment by another operation is as good.
-    if (error instanceof FileChangedError || !(await stored(target))) throw error;
+    if (error instanceof FileChangedError || !(await stored(target)))
+      throw error;
   }
 }
 
@@ -315,9 +486,15 @@ function temporaryPath(gitdir: string): string {
 
 /** Whether an object is in the store. An empty file is what a power cut can leave of one, and counts as none. */
 async function stored(target: string): Promise<boolean> {
-  return await lstat(target).then((stats) => stats.size > 0, () => false);
+  return await lstat(target).then(
+    (stats) => stats.size > 0,
+    () => false,
+  );
 }
 
 async function exists(target: string): Promise<boolean> {
-  return await lstat(target).then(() => true, () => false);
+  return await lstat(target).then(
+    () => true,
+    () => false,
+  );
 }
