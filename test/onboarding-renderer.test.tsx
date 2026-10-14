@@ -606,6 +606,147 @@ describe("first-run screens", () => {
     expect(container.textContent).not.toContain("Skip and start");
   });
 
+  it("keeps setup busy while saving the connected provider's default across catalog refreshes", async () => {
+    const save = deferred<void>();
+    const finish = vi.fn();
+    const models: AgentModelCatalog["models"] = [
+      {
+        provider: provider.id,
+        providerName: provider.name,
+        id: "test-model",
+        name: "Test model",
+        reasoningLevels: ["medium"],
+      },
+    ];
+    await act(async () =>
+      root.render(
+        <Onboarding step="connect" onStepChange={vi.fn()} onFinish={finish} />,
+      ),
+    );
+    await act(async () => providerButton(provider.name, "API key").click());
+    api.listProviders.mockResolvedValue([
+      { ...provider, configured: true, status: "connected" },
+    ]);
+    api.listModels.mockResolvedValue({ ...catalog, models });
+    api.updateAgentDefaults.mockReturnValue(save.promise);
+    api.notifyAgentModelsChanged.mockImplementation(() => {
+      window.dispatchEvent(new Event("ohmygame-models-changed"));
+    });
+
+    await event({ type: "completed" });
+    expect(api.updateAgentDefaults).toHaveBeenCalledOnce();
+    expect(button("Start creating").disabled).toBe(true);
+    expect(stepButton("welcome").disabled).toBe(true);
+    await act(async () => button("Start creating").click());
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () => save.resolve());
+    expect(button("Start creating").disabled).toBe(false);
+  });
+
+  it("retries saving the connected provider's default without repeating authorization", async () => {
+    const models: AgentModelCatalog["models"] = [
+      {
+        provider: provider.id,
+        providerName: provider.name,
+        id: "test-model",
+        name: "Test model",
+        reasoningLevels: ["medium"],
+      },
+    ];
+    await act(async () =>
+      root.render(
+        <Onboarding step="connect" onStepChange={vi.fn()} onFinish={vi.fn()} />,
+      ),
+    );
+    await act(async () => providerButton(provider.name, "API key").click());
+    api.listProviders.mockResolvedValue([
+      { ...provider, configured: true, status: "connected" },
+    ]);
+    api.listModels.mockResolvedValue({ ...catalog, models });
+    api.updateAgentDefaults.mockRejectedValueOnce(
+      new Error("Saving default failed"),
+    );
+
+    await event({ type: "completed" });
+    expect(container.textContent).toContain("Saving default failed");
+    await act(async () => button("Retry").click());
+    expect(api.updateAgentDefaults).toHaveBeenCalledTimes(2);
+    expect(api.startModelProviderLogin).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("Saving default failed");
+  });
+
+  it("retries selecting a re-enabled provider's default after the enable has already succeeded", async () => {
+    api.listProviders.mockResolvedValue([
+      { ...provider, configured: true, enabled: false },
+    ]);
+    api.listModels.mockResolvedValue({
+      ...catalog,
+      models: [
+        {
+          provider: provider.id,
+          providerName: provider.name,
+          id: "test-model",
+          name: "Test model",
+          reasoningLevels: ["medium"],
+        },
+      ],
+    });
+    api.setProviderEnabled.mockImplementation(async () => {
+      api.listProviders.mockResolvedValue([
+        { ...provider, configured: true, enabled: true },
+      ]);
+    });
+    api.updateAgentDefaults.mockRejectedValueOnce(
+      new Error("Saving default failed"),
+    );
+    await act(async () =>
+      root.render(
+        <Onboarding step="connect" onStepChange={vi.fn()} onFinish={vi.fn()} />,
+      ),
+    );
+
+    await act(async () => providerButton(provider.name, "Enable").click());
+    expect(container.textContent).toContain("Saving default failed");
+    await act(async () => button("Retry").click());
+    expect(api.updateAgentDefaults).toHaveBeenCalledTimes(2);
+    expect(api.setProviderEnabled).toHaveBeenCalledOnce();
+  });
+
+  it("finishes saving a custom provider's default after the provider form has stopped saving", async () => {
+    const saveDefault = deferred<void>();
+    await act(async () =>
+      root.render(
+        <Onboarding step="connect" onStepChange={vi.fn()} onFinish={vi.fn()} />,
+      ),
+    );
+    await openCustomProvider();
+    await fillCustomProvider();
+    api.listModels.mockResolvedValue({
+      ...catalog,
+      models: [
+        {
+          provider: customProvider.id,
+          providerName: customProvider.name,
+          id: "test-model",
+          name: "Test model",
+          reasoningLevels: ["off"],
+        },
+      ],
+    });
+    api.updateAgentDefaults.mockReturnValue(saveDefault.promise);
+
+    await act(async () => button("Add provider").click());
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(api.saveCustomProvider).toHaveBeenCalledOnce();
+    expect(api.updateAgentDefaults).toHaveBeenCalledOnce();
+    expect(button("Start creating").disabled).toBe(true);
+    expect(stepButton("welcome").disabled).toBe(true);
+
+    await act(async () => saveDefault.resolve());
+    expect(button("Start creating").disabled).toBe(false);
+  });
+
   it("changes the default model from the ready line", async () => {
     const models: AgentModelCatalog["models"] = [
       {

@@ -29,6 +29,7 @@ import {
 } from "./icons.js";
 import { ActiveProviderAuth } from "./models-settings.js";
 import { CustomProviderForm } from "./custom-provider-dialog.js";
+import { groupModelsByProvider } from "./model-selector.js";
 import { PROVIDER_ICONS } from "./provider-icons.js";
 import { POPULAR_PROVIDER_IDS } from "./popular-providers.js";
 import { useReadyRuntimeGeneration } from "./runtime-connection.js";
@@ -57,7 +58,9 @@ export function Onboarding({
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string>();
   const [loadError, setLoadError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [savingProvider, setSavingProvider] = useState(false);
+  const busy = running || savingProvider;
   const failedAction = useRef<(() => Promise<void>) | undefined>(undefined);
   const [connection, setConnection] = useState<Connection>();
   const [adding, setAdding] = useState(false);
@@ -107,8 +110,8 @@ export function Onboarding({
   }, [step, generation, refresh]);
 
   async function run(action: () => Promise<void>) {
-    if (busy) return;
-    setBusy(true);
+    if (running) return;
+    setRunning(true);
     setError(undefined);
     try {
       await action();
@@ -117,7 +120,7 @@ export function Onboarding({
       failedAction.current = action;
       setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      setRunning(false);
     }
   }
 
@@ -129,8 +132,8 @@ export function Onboarding({
     if (chatConnected(current)) {
       if (current.enabled === false) {
         await setProviderEnabled(current.id, true);
-        await selectProviderModel(current.id);
       }
+      await selectProviderModel(current.id);
       setRefresh((value) => value + 1);
     } else if (current.custom) {
       setCustomSettings(await getCustomProvider(current.id));
@@ -163,12 +166,14 @@ export function Onboarding({
 
   function completed(providerId: string) {
     setConnection(undefined);
-    setError(undefined);
-    failedAction.current = undefined;
     setPhase("loading");
-    void selectProviderModel(providerId)
-      .catch((cause) => setError(errorMessage(cause)))
-      .finally(() => setRefresh((value) => value + 1));
+    void run(async () => {
+      try {
+        await selectProviderModel(providerId);
+      } finally {
+        setRefresh((value) => value + 1);
+      }
+    });
   }
 
   function navigate(next: OnboardingStep) {
@@ -200,7 +205,7 @@ export function Onboarding({
       <CustomProviderForm
         settings={customSettings}
         onClose={() => setAdding(false)}
-        onSavingChange={setBusy}
+        onSavingChange={setSavingProvider}
         onSaved={(saved) => {
           setAdding(false);
           completed(saved.id);
@@ -416,7 +421,7 @@ function ReadyModel({
   busy: boolean;
   onChange: (model: AgentModelCatalog["models"][number]) => void;
 }) {
-  const providers = [...new Set(models.map((item) => item.providerName))];
+  const groups = groupModelsByProvider(models);
   return (
     <div className="onboarding-ready" role="status">
       <Check size={16} />
@@ -434,18 +439,16 @@ function ReadyModel({
               if (next) onChange(next);
             }}
           >
-            {providers.map((name) => (
-              <optgroup label={name} key={name}>
-                {models
-                  .filter((item) => item.providerName === name)
-                  .map((item) => (
-                    <option
-                      value={`${item.provider}/${item.id}`}
-                      key={`${item.provider}/${item.id}`}
-                    >
-                      {item.name}
-                    </option>
-                  ))}
+            {groups.map((group) => (
+              <optgroup label={group.providerName} key={group.provider}>
+                {group.models.map((item) => (
+                  <option
+                    value={`${item.provider}/${item.id}`}
+                    key={`${item.provider}/${item.id}`}
+                  >
+                    {item.name}
+                  </option>
+                ))}
               </optgroup>
             ))}
           </select>
