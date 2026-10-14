@@ -82,15 +82,39 @@ current step across restarts. Completing setup requires a language model in
 the same enabled, visible catalog used by the home composer. This checks
 configuration and catalog availability, without sending an inference request.
 The provider screen enables **Start creating** only when a language model is
-available; it records `completed`. The separate **Skip and start** action
-is a text button without a hover background. It records `skipped` and allows
-configuration later in Settings. **Next** and the provider screen's actions
-sit near the bottom, above the step indicators. Saved built-in
-and custom connections show **Connected** instead of offering setup again.
-Disabled connections offer **Enable** without changing credentials. Before
-starting or retrying setup, the renderer refreshes the provider's saved state to avoid
-reopening a connection that changed since the list loaded. Existing provider
-credentials and models can be edited from Settings.
+available; it records `completed`. Until then, a separate **Skip and start**
+text button without a hover background records `skipped` and allows
+configuration later in Settings; it is hidden once a model is ready.
+**Next** and the provider screen's actions sit near the bottom, above the
+step indicators.
+
+Settings → Providers and the setup list share one grouping. Every working
+connection, including free cloud and local services, is under **Connected
+providers**. Unconnected providers follow as **Free cloud**, **Popular
+providers** (OpenAI, Anthropic, OpenRouter, Google, DeepSeek, Meshy, Tripo,
+filtered by capability), **Local providers**, and the collapsed **More
+providers**.
+
+The setup list shows language providers only. Without a search, connected and
+popular providers come first, and the rest, including local services, stay
+under **More providers**. The legacy OpenAI Codex entry is hidden unless it is
+already connected, because OpenAI sign-in covers ChatGPT subscriptions.
+Searching lists every match. Saved
+built-in and custom connections show **Connected** instead of offering setup
+again. Disabled connections offer **Enable** without changing credentials.
+Before starting or retrying setup, the renderer refreshes the provider's saved
+state to avoid reopening a connection that changed since the list loaded.
+Existing provider credentials and models can be edited from Settings.
+
+Connecting, adding, or enabling a provider during setup makes its recommended
+language model the global default. Navigation and completion stay disabled
+until the default is saved, including during catalog refreshes. If saving
+fails, **Retry** saves the default again without repeating authorization.
+The recommendation mirrors Pi's
+per-provider defaults for the popular providers and falls back to the
+provider's first visible model. The ready line names the default model and its
+provider; with more than one model available, it is a menu that changes the
+default.
 
 An installation with no preference but existing projects or a configured
 language provider is marked completed once. Media credentials alone do not
