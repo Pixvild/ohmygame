@@ -53,6 +53,7 @@ import { openAIImageConnection, registerOpenAIImageRoutes } from "./openai-image
 import { RESPONSES_TRANSPORT_MODES, type ResponsesTransportSettings } from "../shared/contracts.js";
 import { NetworkSettingsService } from "./network-settings.js";
 import type { NetworkSettings } from "../shared/network-settings.js";
+import { migrateAzureProviderId } from "./azure-provider-migration.js";
 import { normalizeCustomProvider, normalizeCustomProviderModel, ProviderModelSettingsStore } from "./provider-model-settings.js";
 import { discoverProviderModels } from "./provider-model-discovery.js";
 import { customModelCatalog } from "./custom-model-capabilities.js";
@@ -789,6 +790,8 @@ export function createApp(options: AppOptions = {}) {
   const loadOpenAIImages = () => openAIImages.load().catch((err) => app.log.warn({ err }, "Could not load OpenAI image settings"));
   app.addHook("onReady", async () => {
     await networkSettings.load();
+    // Runs before any model lookup so saved Azure sign-ins resolve under Pi's current provider ID.
+    await migrateAzureProviderId(piAgentDirectory, dataDirectory).catch((err) => app.log.warn({ err }, "Could not migrate Azure provider settings"));
     // A damaged welcome preference must not prevent projects from opening.
     await onboarding.load().catch((err) => app.log.warn({ err }, "Could not load onboarding state"));
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {

@@ -48,7 +48,7 @@ export const PROVIDER_ICONS: Readonly<Partial<Record<string, ProviderIcon>>> = {
   "amazon-bedrock": color(amazonBedrock),
   "ant-ling": color(antGroup),
   anthropic: monochrome(anthropic),
-  "azure-openai-responses": color(azureAI),
+  azure: color(azureAI),
   baseten: monochrome(baseten),
   cerebras: color(cerebras),
   "cloudflare-ai-gateway": color(cloudflare),
