@@ -6,7 +6,8 @@ when the run settles. A compact summary below each finished turn shows the file
 count and green/red added/removed line counts in a subtle bordered panel,
 collapsed by default. Select the summary or its right-hand arrow to expand the
 file list and reveal **Undo** / **Reapply** below it. Long lists scroll within
-280px; select a path to open or close its diff.
+280px; select anywhere on a file row, including its counts or arrow, to open or
+close its diff. Hover and keyboard focus highlight the whole row.
 Added text files show `+N -0`; the response copy button and timestamp follow
 the panel. Failed and cancelled turns also capture their partial file changes.
 If either checkpoint

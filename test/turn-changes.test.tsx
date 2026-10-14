@@ -90,7 +90,7 @@ const button = (name: string) =>
     (candidate) => (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
   );
 const buttons = () =>
-  [...container.querySelectorAll("button:not(.turn-change-path)")].map(
+  [...container.querySelectorAll("button:not(.turn-change-row)")].map(
     (candidate) => candidate.textContent,
   );
 const click = (name: string) => act(async () => button(name)!.click());
@@ -119,10 +119,15 @@ describe("TurnChangesFooter", () => {
     expect(value.load).toHaveBeenCalledTimes(1);
     expect(container.querySelector(".turn-changes-summary .turn-changes-undo")).toBeNull();
     expect(container.querySelector(".turn-changes-controls")!.textContent).toBe("Undo");
-    await click(items[0].path);
+    await act(async () =>
+      container.querySelector<HTMLElement>(".turn-change-row .change-count-added")!.click(),
+    );
     expect(value.file).toHaveBeenCalledWith("checkpoint-1", items[0].path);
     expect(container.querySelector(".turn-change-diff")).not.toBeNull();
-    await click(items[0].path);
+    await act(async () =>
+      container.querySelector(".turn-change-row .turn-change-chevron")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
     expect(texts(".turn-change-path")).toHaveLength(6);
     expect(container.querySelector(".turn-change-diff")).toBeNull();
     await click("6 files changed");

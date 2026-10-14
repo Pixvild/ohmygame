@@ -507,25 +507,26 @@ function ChangedFile({
 
   return (
     <li className="turn-change">
-      <div className="turn-change-row">
-        <button
-          className="turn-change-path"
-          type="button"
-          title={path}
-          aria-expanded={open}
-          onClick={() =>
-            update((current) =>
-              withFile(current, path, (file) => ({
-                open: !file.open,
-                content:
-                  file.content?.status === "failed" ? undefined : file.content,
-              })),
-            )
-          }
-        >
+      <button
+        className="turn-change-row"
+        type="button"
+        title={path}
+        aria-label={path}
+        aria-expanded={open}
+        onClick={() =>
+          update((current) =>
+            withFile(current, path, (file) => ({
+              open: !file.open,
+              content:
+                file.content?.status === "failed" ? undefined : file.content,
+            })),
+          )
+        }
+      >
+        <span className="turn-change-path">
           <FilePenLine size={12} aria-hidden="true" />
           <span>{path}</span>
-        </button>
+        </span>
         {item.lines ? (
           <ChangeCounts lines={item.lines} />
         ) : (
@@ -543,7 +544,7 @@ function ChangedFile({
           size={12}
           aria-hidden="true"
         />
-      </div>
+      </button>
       {open ? (
         !content || content.status === "loading" ? (
           <p className="turn-changes-note">{t("checkpoints.loadingFile")}</p>

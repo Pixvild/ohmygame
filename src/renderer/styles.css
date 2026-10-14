@@ -9872,9 +9872,19 @@ button {
 
 .turn-change-row {
   display: flex;
+  width: 100%;
   min-height: 26px;
   align-items: center;
   gap: 8px;
+  padding: 0 3px;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.turn-changes .turn-change-row:hover,
+.turn-changes .turn-change-row:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .turn-change-kind {
@@ -9908,8 +9918,7 @@ button {
   white-space: nowrap;
 }
 
-.turn-change-path:hover,
-.turn-change-path[aria-expanded="true"] {
+.turn-change-row[aria-expanded="true"] .turn-change-path {
   color: var(--text);
 }
 
