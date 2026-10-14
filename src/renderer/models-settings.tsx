@@ -39,7 +39,7 @@ import { accountCloudState, cloudQuotaSummary, CloudQuotaDetails } from "./cloud
 import { getCloudQuotas, MODELS_CHANGED_EVENT } from "./api.js";
 import { HYPER3D_CONNECTION_ID } from "../shared/cloud-models.js";
 import { isLocalModelProvider, LOCAL_MODEL_PROVIDERS, withLocalModelProviders, type LocalModelProviderId } from "./local-model-providers.js";
-import { POPULAR_PROVIDER_IDS } from "./popular-providers.js";
+import { groupProviders } from "./provider-groups.js";
 import { t } from "./i18n.js";
 
 export type ModelsView = { page: "providers" } | { page: "provider"; provider: ProviderSummary };
@@ -132,15 +132,14 @@ function ProviderList({ onProvider }: { onProvider: (provider: ProviderSummary) 
       ...provider.capabilities.map((item) => PROVIDER_CAPABILITY_LABELS[item]),
     ].some((value) => value.toLowerCase().includes(normalizedQuery)))
   ));
-  const localProviders = visibleProviders.filter(isLocalModelProvider);
-  const freeProviders = visibleProviders.filter((provider) => provider.managed === "free_cloud" || provider.id === "hyper3d");
-  const connectedProviders = visibleProviders.filter((provider) => !freeProviders.includes(provider) && provider.status === "connected" && !isLocalModelProvider(provider));
-  const remainingProviders = visibleProviders.filter((provider) => !freeProviders.includes(provider) && provider.status !== "connected" && !isLocalModelProvider(provider));
-  const popularProviders = remainingProviders
-    .filter((provider) => POPULAR_PROVIDER_IDS.includes(provider.id))
-    .sort((first, second) => POPULAR_PROVIDER_IDS.indexOf(first.id) - POPULAR_PROVIDER_IDS.indexOf(second.id));
-  const moreProviders = remainingProviders.filter((provider) => !POPULAR_PROVIDER_IDS.includes(provider.id));
-  const filteredProviders = [...freeProviders, ...connectedProviders, ...popularProviders, ...localProviders, ...moreProviders];
+  const {
+    connected: connectedProviders, free: freeProviders, popular: popularProviders, local: localProviders, more: moreProviders,
+  } = groupProviders(visibleProviders, {
+    isConnected: (provider) => provider.status === "connected",
+    isFree: (provider) => provider.managed === "free_cloud" || provider.id === "hyper3d",
+    isLocal: isLocalModelProvider,
+  });
+  const filteredProviders = [...connectedProviders, ...freeProviders, ...popularProviders, ...localProviders, ...moreProviders];
   const filtering = capability !== "all" || Boolean(normalizedQuery);
   return (
     <section className="settings-panel settings-overview-panel">
@@ -166,8 +165,8 @@ function ProviderList({ onProvider }: { onProvider: (provider: ProviderSummary) 
         {loading ? <div className="settings-loading"><LoaderCircle className="spin" size={18} />{t("providers.loadingProviders")}</div> : null}
         {!loading && visibleProviders.length === 0 ? <p className="settings-empty">{t("providers.noMatch")}</p> : null}
         {filtering && filteredProviders.length ? <ProviderGroup {...rowActions} title={t("providers.group.providers")} providers={filteredProviders} onProvider={openProvider} /> : null}
-        {!filtering && freeProviders.length ? <ProviderGroup {...rowActions} title={t("providers.group.free")} providers={freeProviders} onProvider={openProvider} /> : null}
         {!filtering && connectedProviders.length ? <ProviderGroup {...rowActions} title={t("providers.group.connected")} providers={connectedProviders} onProvider={openProvider} /> : null}
+        {!filtering && freeProviders.length ? <ProviderGroup {...rowActions} title={t("providers.group.free")} providers={freeProviders} onProvider={openProvider} /> : null}
         {!filtering && popularProviders.length ? <ProviderGroup {...rowActions} title={t("providers.group.popular")} providers={popularProviders} onProvider={openProvider} /> : null}
         {!filtering && localProviders.length ? <ProviderGroup {...rowActions} title={t("providers.group.local")} providers={localProviders} onProvider={openProvider} /> : null}
         {!filtering && moreProviders.length ? (

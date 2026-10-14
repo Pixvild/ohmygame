@@ -31,7 +31,7 @@ import { ActiveProviderAuth } from "./models-settings.js";
 import { CustomProviderForm } from "./custom-provider-dialog.js";
 import { groupModelsByProvider } from "./model-selector.js";
 import { PROVIDER_ICONS } from "./provider-icons.js";
-import { POPULAR_PROVIDER_IDS } from "./popular-providers.js";
+import { groupProviders } from "./provider-groups.js";
 import { useReadyRuntimeGeneration } from "./runtime-connection.js";
 import { WindowDragRegion } from "./window-drag-region.js";
 import { OnboardingDemo } from "./onboarding-demo.js";
@@ -72,8 +72,11 @@ export function Onboarding({
     phase === "ready"
       ? preferredAgentModel(catalog.models, undefined, catalog.defaultModel)
       : undefined;
-  const languageProviders = providers.filter((provider) =>
-    provider.capabilities.includes("language"),
+  const languageProviders = providers.filter(
+    (provider) =>
+      provider.capabilities.includes("language") &&
+      // Signing in to OpenAI covers ChatGPT subscriptions; keep the legacy entry only once saved.
+      (provider.id !== "openai-codex" || chatConnected(provider)),
   );
   useEffect(() => {
     if (!adding) heading.current?.focus({ preventScroll: true });
@@ -481,20 +484,12 @@ function ProviderPicker({
       .toLowerCase()
       .includes(query.trim().toLowerCase()),
   );
-  const connected = visible.filter(chatConnected);
-  const popular = visible
-    .filter(
-      (provider) =>
-        !chatConnected(provider) && POPULAR_PROVIDER_IDS.includes(provider.id),
-    )
-    .sort(
-      (first, second) =>
-        POPULAR_PROVIDER_IDS.indexOf(first.id) -
-        POPULAR_PROVIDER_IDS.indexOf(second.id),
-    );
-  const more = visible.filter(
-    (provider) => !connected.includes(provider) && !popular.includes(provider),
-  );
+  // Setup has no free or local groups; those providers stay under More.
+  const { connected, popular, more } = groupProviders(visible, {
+    isConnected: chatConnected,
+    isFree: () => false,
+    isLocal: () => false,
+  });
   const featured = [...connected, ...popular];
   const collapsed = !filtering && featured.length > 0 && more.length > 0;
   const row = (provider: ProviderSummary) => (
