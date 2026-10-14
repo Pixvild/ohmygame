@@ -1994,7 +1994,7 @@ describe("AgentManager", () => {
 
     // With nothing but files to leave alone, nothing was undone: the turn is not marked.
     const kept = { previous, changed: [], conflicts: ["src/game.ts"] };
-    await expect(manager.undoCheckpoint(project, conversation, "checkpoint-1", async () => kept)).resolves.toBe(kept);
+    await expect(manager.undoCheckpoint(project, conversation, "checkpoint-1", async () => kept)).resolves.toMatchObject(kept);
     const refusal = new Error("These files cannot be put back");
     await expect(manager.undoCheckpoint(project, conversation, "checkpoint-1", async () => { throw refusal; })).rejects.toBe(refusal);
     await expect(manager.undoCheckpoint(project, conversation, "checkpoint-9", async () => kept)).rejects.toThrow("Checkpoint not found");
@@ -2003,7 +2003,7 @@ describe("AgentManager", () => {
     const changed = Array.from({ length: 23 }, (_, index) => `src/file-${index}.ts`);
     const undo = vi.fn(async () => ({ previous, changed, conflicts: ["src/game.ts"] }));
     await manager.undoCheckpoint(project, conversation, "checkpoint-1", undo);
-    expect(undo).toHaveBeenCalledExactlyOnceWith({ before: "a".repeat(40), after: "b".repeat(40) });
+    expect(undo).toHaveBeenCalledExactlyOnceWith({ before: "a".repeat(40), after: "b".repeat(40) }, undefined);
     expect(entries.at(-1)).toMatchObject({ customType: CHECKPOINT_UNDONE_ENTRY, data: { version: 1, checkpoint: "checkpoint-1", previous, kept: 1 } });
     await manager.undoCheckpoint(project, conversation, "checkpoint-1", async () => ({ previous, changed: [], conflicts: [] }));
     expect(entries.at(-1)).toMatchObject({ customType: CHECKPOINT_UNDONE_ENTRY, data: { kept: 0 } });

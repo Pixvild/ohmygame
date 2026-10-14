@@ -1162,6 +1162,7 @@ describe("AgentTimeline", () => {
     expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Undo<\/button>/);
     // The footer closes the turn, below the answer.
     expect(html.indexOf("1 file changed")).toBeGreaterThan(html.indexOf("Done"));
+    expect(html.indexOf("1 file changed")).toBeLessThan(html.indexOf("assistant-response-footer"));
     expect(html.indexOf("1 file changed")).toBeLessThan(html.indexOf("Second"));
     expect(html).not.toContain("0 files changed");
     expect(html).not.toContain("2 files changed");
@@ -1179,7 +1180,7 @@ describe("AgentTimeline", () => {
     ];
     const html = renderToStaticMarkup(<AgentTimeline items={items} changeControls={changeControls(true)} />);
 
-    expect(html.match(/Changes undone/g)).toHaveLength(1);
+    expect(html.match(/>Reapply<\/button>/g)).toHaveLength(1);
     expect(html.match(/<button[^>]*>Undo<\/button>/g)).toHaveLength(1);
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Undo<\/button>/);
     // The list can still be opened.
@@ -1380,6 +1381,7 @@ function changeControls(disabled = false): NonNullable<ComponentProps<typeof Thr
     disabled,
     load: async () => [],
     file: async (_checkpointId, path) => ({ path, before: null, after: null }),
+    reapply: async () => ({ status: "done", changed: [], conflicts: [], undone: false }),
     undo: async () => ({ status: "done", changed: [], conflicts: [] }),
   };
 }

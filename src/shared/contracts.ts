@@ -993,6 +993,9 @@ export interface CheckpointUndoRequest {
 }
 
 export interface CheckpointUndoResponse {
+  /** Remaining reversible Undo state, also returned by Reapply. */
+  undone?: boolean;
+  kept?: number;
   /** Workspace paths that were put back. */
   changed: string[];
   /** Workspace paths that were left as they are. */
@@ -1162,7 +1165,8 @@ export interface RuntimeEventData {
   "checkpoint.created": { checkpointId: string };
   "checkpoint.completed": { checkpointId: string } & Pick<TurnChanges, "files" | "items">;
   "workspace.restored": { version: string; changed: string[]; recovery?: boolean; checkpointId?: string };
-  "workspace.undone": { checkpointId: string; kept: number };
+  "workspace.undone": { checkpointId: string; kept: number; undone?: boolean };
+  "workspace.reapplied": { checkpointId: string; undone: boolean; kept: number };
   "plan.mode.changed": PlanSessionState;
   "item.started": { item: ThreadItem };
   "item.updated": { item: ThreadItem };
@@ -1193,6 +1197,7 @@ export const RUNTIME_EVENT_TYPES = [
   "checkpoint.completed",
   "workspace.restored",
   "workspace.undone",
+  "workspace.reapplied",
   "item.started",
   "item.updated",
   "item.completed",

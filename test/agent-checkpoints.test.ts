@@ -830,12 +830,12 @@ describe("Agent turn changes", () => {
     ] });
 
     // Each turn lists its own files only. The second turn changed the notes again after the first one.
-    expect(await changes(first.checkpointId!)).toEqual([
+    expect(await changes(first.checkpointId!)).toMatchObject([
       { path: "notes.txt", kind: "added", state: "changed" },
       { path: "old.txt", kind: "removed", state: "applied" },
       { path: "player.txt", kind: "modified", state: "applied" },
     ]);
-    expect(await changes(second.checkpointId!)).toEqual([
+    expect(await changes(second.checkpointId!)).toMatchObject([
       { path: "extra/added.txt", kind: "added", state: "applied" },
       { path: "notes.txt", kind: "modified", state: "applied" },
     ]);
@@ -871,7 +871,7 @@ describe("Agent turn changes", () => {
 
     const undone = await undo(second.checkpointId!);
     expect(undone.statusCode, undone.body).toBe(200);
-    expect(undone.json()).toEqual({
+    expect(undone.json()).toMatchObject({
       changed: ["extra/added.txt", "notes.txt"],
       conflicts: [],
     });
@@ -922,7 +922,7 @@ describe("Agent turn changes", () => {
     const first = await ended("Write the notes");
     await send("Write another file");
     await ended("Write another file");
-    expect((await undo(first.checkpointId!)).json()).toEqual({
+    expect((await undo(first.checkpointId!)).json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -967,7 +967,7 @@ describe("Agent turn changes", () => {
     const first = await ended("Write the notes");
     await send("Write another file");
     const second = await ended("Write another file");
-    expect((await undo(first.checkpointId!)).json()).toEqual({
+    expect((await undo(first.checkpointId!)).json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -1008,7 +1008,7 @@ describe("Agent turn changes", () => {
 
     const kept = await undo(first.checkpointId!, "keep");
     expect(kept.statusCode, kept.body).toBe(200);
-    expect(kept.json()).toEqual({
+    expect(kept.json()).toMatchObject({
       changed: ["other.txt"],
       conflicts: ["notes.txt"],
     });
@@ -1025,7 +1025,7 @@ describe("Agent turn changes", () => {
       "notes.txt",
     ]);
     expect(overwritten.statusCode, overwritten.body).toBe(200);
-    expect(overwritten.json()).toEqual({
+    expect(overwritten.json()).toMatchObject({
       changed: ["notes.txt", "other.txt"],
       conflicts: [],
     });
@@ -1072,7 +1072,7 @@ describe("Agent turn changes", () => {
 
     const kept = await undo(turn.checkpointId!, "keep");
     expect(kept.statusCode, kept.body).toBe(200);
-    expect(kept.json()).toEqual({
+    expect(kept.json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: ["old.txt"],
     });
@@ -1108,11 +1108,11 @@ describe("Agent turn changes", () => {
     expect(
       (await changes(second.checkpointId!)).map((change) => change.path),
     ).toEqual(["extra.txt"]);
-    expect((await undo(second.checkpointId!)).json()).toEqual({
+    expect((await undo(second.checkpointId!)).json()).toMatchObject({
       changed: ["extra.txt"],
       conflicts: [],
     });
-    expect((await undo(first.checkpointId!)).json()).toEqual({
+    expect((await undo(first.checkpointId!)).json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -1145,7 +1145,7 @@ describe("Agent turn changes", () => {
       "cancelled",
     ]);
     expect(turn.changes).toMatchObject({ files: 1 });
-    expect((await undo(turn.checkpointId!)).json()).toEqual({
+    expect((await undo(turn.checkpointId!)).json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -1164,7 +1164,7 @@ describe("Agent turn changes", () => {
     ]);
     expect(await file("notes.txt")).toBe("first");
     expect(turn.changes).toMatchObject({ files: 1 });
-    expect((await undo(turn.checkpointId!)).json()).toEqual({
+    expect((await undo(turn.checkpointId!)).json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -1201,14 +1201,14 @@ describe("Agent turn changes", () => {
       // Both messages were handled in one run, and each turn ends where the next one starts.
       const second = await ended("Write the second file");
       const first = await ended("Write the first file");
-      expect(await changes(first.checkpointId!)).toEqual([
+      expect(await changes(first.checkpointId!)).toMatchObject([
         { path: "first.txt", kind: "added", state: "applied" },
       ]);
-      expect(await changes(second.checkpointId!)).toEqual([
+      expect(await changes(second.checkpointId!)).toMatchObject([
         { path: "second.txt", kind: "added", state: "applied" },
       ]);
 
-      expect((await undo(first.checkpointId!)).json()).toEqual({
+      expect((await undo(first.checkpointId!)).json()).toMatchObject({
         changed: ["first.txt"],
         conflicts: [],
       });
@@ -1245,7 +1245,7 @@ describe("Agent turn changes", () => {
     expect(
       (await userMessages(restarted)).map((message) => message.changes),
     ).toMatchObject([{ files: 1 }, { files: 2 }]);
-    expect(await changes(second.checkpointId!, restarted)).toEqual([
+    expect(await changes(second.checkpointId!, restarted)).toMatchObject([
       { path: "extra/added.txt", kind: "added", state: "applied" },
       { path: "notes.txt", kind: "modified", state: "applied" },
     ]);
@@ -1257,7 +1257,7 @@ describe("Agent turn changes", () => {
 
     const undone = await undo(second.checkpointId!, undefined, restarted);
     expect(undone.statusCode, undone.body).toBe(200);
-    expect(undone.json()).toEqual({
+    expect(undone.json()).toMatchObject({
       changed: ["extra/added.txt", "notes.txt"],
       conflicts: [],
     });
@@ -1296,7 +1296,7 @@ describe("Agent turn changes", () => {
       "other.txt": "applied",
     });
 
-    expect((await undo(turn.checkpointId!, "keep")).json()).toEqual({
+    expect((await undo(turn.checkpointId!, "keep")).json()).toMatchObject({
       changed: ["other.txt"],
       conflicts: ["notes.txt"],
     });
@@ -1304,7 +1304,7 @@ describe("Agent turn changes", () => {
       "notes.txt": "changed",
       "other.txt": "undone",
     });
-    expect((await undo(turn.checkpointId!, ["notes.txt"])).json()).toEqual({
+    expect((await undo(turn.checkpointId!, ["notes.txt"])).json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -1463,7 +1463,7 @@ describe("Agent turn changes", () => {
     expect(busy.statusCode, busy.body).toBe(409);
     expect(await file("notes.txt")).toBe("second");
     // The files do not hold still, so the list does not say how they stand.
-    expect(await changes(first.checkpointId!)).toEqual([
+    expect(await changes(first.checkpointId!)).toMatchObject([
       { path: "notes.txt", kind: "added" },
     ]);
     await app.inject({
@@ -1607,14 +1607,14 @@ describe("Agent turn changes", () => {
     await write("b.txt", "after b");
     const overwritten = await undo(turn.checkpointId!, ["a.txt", "gone.txt"]);
     expect(overwritten.statusCode, overwritten.body).toBe(200);
-    expect(overwritten.json()).toEqual({
+    expect(overwritten.json()).toMatchObject({
       changed: ["a.txt", "b.txt"],
       conflicts: [],
     });
     expect(await file("a.txt")).toBe("before a");
     expect(await file("b.txt")).toBe("before b");
     // With nothing in the way there is nothing to overwrite, and the undo is the plain one.
-    expect((await undo(turn.checkpointId!, ["a.txt"])).json()).toEqual({
+    expect((await undo(turn.checkpointId!, ["a.txt"])).json()).toMatchObject({
       changed: [],
       conflicts: [],
     });
@@ -1633,7 +1633,7 @@ describe("Agent turn changes", () => {
       "edited by the player",
     );
 
-    expect((await undo(turn.checkpointId!, "keep")).json()).toEqual({
+    expect((await undo(turn.checkpointId!, "keep")).json()).toMatchObject({
       changed: ["other.txt"],
       conflicts: ["notes.txt"],
     });
@@ -1642,7 +1642,7 @@ describe("Agent turn changes", () => {
       undone: true,
       kept: 1,
     });
-    expect((await undo(turn.checkpointId!, ["notes.txt"])).json()).toEqual({
+    expect((await undo(turn.checkpointId!, ["notes.txt"])).json()).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -1679,7 +1679,7 @@ describe("Agent turn changes", () => {
 
     // Nothing was put back: the turn is not marked, and the project is as it was.
     const before = await updatedAt();
-    expect((await undo(turn.checkpointId!, "keep")).json()).toEqual({
+    expect((await undo(turn.checkpointId!, "keep")).json()).toMatchObject({
       changed: [],
       conflicts: ["notes.txt", "other.txt"],
     });
@@ -1689,7 +1689,7 @@ describe("Agent turn changes", () => {
     // One file went back and one was kept: the project changed.
     await rm(path.join(project.workspacePath, "other.txt"));
     await writeFile(path.join(project.workspacePath, "other.txt"), "other");
-    expect((await undo(turn.checkpointId!, "keep")).json()).toEqual({
+    expect((await undo(turn.checkpointId!, "keep")).json()).toMatchObject({
       changed: ["other.txt"],
       conflicts: ["notes.txt"],
     });
@@ -1698,7 +1698,7 @@ describe("Agent turn changes", () => {
 
     // The player removed the last file themselves, so there is nothing left to put back, and the turn says so.
     await rm(path.join(project.workspacePath, "notes.txt"));
-    expect((await undo(turn.checkpointId!)).json()).toEqual({
+    expect((await undo(turn.checkpointId!)).json()).toMatchObject({
       changed: [],
       conflicts: [],
     });
@@ -2195,7 +2195,7 @@ describe("The end of a turn", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(answered).toBe(false);
     closing.release();
-    expect((await reading).json()).toEqual({
+    expect((await reading).json()).toMatchObject({
       changes: [{ path: "notes.txt", kind: "added", state: "applied" }],
     });
   });
@@ -2257,7 +2257,7 @@ describe("The end of a turn", () => {
     closing.release();
     const response = await reading;
     expect(response.statusCode, response.body).toBe(200);
-    expect(response.json()).toEqual({
+    expect(response.json()).toMatchObject({
       changes: [{ path: "notes.txt", kind: "added", state: "applied" }],
     });
   });
@@ -2330,10 +2330,10 @@ describe("The end of a turn", () => {
         expect(await file("other.txt")).toBe("Another title");
       }
       // The first turn can still be looked at and undone.
-      expect(await changes(first.checkpointId!)).toEqual([
+      expect(await changes(first.checkpointId!)).toMatchObject([
         { path: "notes.txt", kind: "added", state: "applied" },
       ]);
-      expect((await undo(first.checkpointId!)).json()).toEqual({
+      expect((await undo(first.checkpointId!)).json()).toMatchObject({
         changed: ["notes.txt"],
         conflicts: [],
       });

@@ -897,7 +897,16 @@ export async function getCheckpointFile(projectId: string, conversationId: strin
  * were changed by now.
  */
 export async function undoCheckpoint(projectId: string, conversationId: string, checkpointId: string, conflicts?: CheckpointUndoRequest["conflicts"], expected?: string[]): Promise<CheckpointUndoResponse> {
-  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/undo`, {
+  return changeCheckpointFiles("undo", projectId, conversationId, checkpointId, conflicts, expected);
+}
+
+/** Reapplies only undone paths, with the same conflict checks as Undo. */
+export async function reapplyCheckpoint(projectId: string, conversationId: string, checkpointId: string, conflicts?: CheckpointUndoRequest["conflicts"], expected?: string[]): Promise<CheckpointUndoResponse> {
+  return changeCheckpointFiles("reapply", projectId, conversationId, checkpointId, conflicts, expected);
+}
+
+function changeCheckpointFiles(direction: "undo" | "reapply", projectId: string, conversationId: string, checkpointId: string, conflicts?: CheckpointUndoRequest["conflicts"], expected?: string[]): Promise<CheckpointUndoResponse> {
+  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/${direction}`, {
     method: "POST",
     body: JSON.stringify({ conflicts, expected } satisfies CheckpointUndoRequest),
   });

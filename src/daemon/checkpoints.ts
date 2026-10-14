@@ -76,6 +76,8 @@ export interface CheckpointRange {
 }
 
 export interface CheckpointUndoOptions {
+  /** Restore only these undone paths to their actual pre-undo snapshots. */
+  reapply?: Record<string, string>;
   /**
    * What to do with conflicts: leave those paths as they are, or overwrite the ones that are listed. A file that
    * became a conflict after the list was made is not in it, and so refuses the undo. A path that is in the list is
@@ -462,16 +464,58 @@ export class CheckpointStore {
           ? new Set<string>(options.conflicts.overwrite)
           : undefined;
       const current = await this.#snapshot(project);
-      const { changes, changedAgain, unreadable } = await this.#undoing(
-        gitdir,
+      const groups = new Map<string, Set<string>>();
+      for (const [file, commit] of Object.entries(options.reapply ?? {})) {
+        const scope = groups.get(commit) ?? new Set<string>();
+        scope.add(file);
+        groups.set(commit, scope);
+      }
+      const targets = await Promise.all(
+        [...groups].map(async ([commit, scope]) => ({
+          snapshot: await readCommit(gitdir, commit),
+          scope,
+        })),
+      );
+      const protectedCommits = [
         before,
         after,
-        current,
+        ...targets.map((target) => target.snapshot),
+      ];
+      const plan = async (overwrite: boolean) => {
+        const plans = options.reapply
+          ? await Promise.all(
+              targets.map(({ snapshot, scope }) =>
+                this.#undoing(
+                  gitdir,
+                  snapshot,
+                  before,
+                  current,
+                  overwrite,
+                  scope,
+                ),
+              ),
+            )
+          : [await this.#undoing(gitdir, before, after, current, overwrite)];
+        return {
+          changes: [
+            ...new Map(
+              plans
+                .flatMap((plan) => plan.changes)
+                .map((change) => [change.path, change]),
+            ).values(),
+          ],
+          changedAgain: [
+            ...new Set(plans.flatMap((plan) => plan.changedAgain)),
+          ],
+          unreadable: [...new Set(plans.flatMap((plan) => plan.unreadable))],
+        };
+      };
+      const { changes, changedAgain, unreadable } = await plan(
         overwrite !== undefined,
       );
       const blocked = [
         ...unreadable,
-        ...(await this.#blocked(project, current, changes, [before, after])),
+        ...(await this.#blocked(project, current, changes, protectedCommits)),
       ].sort(compare);
       const conflicts = [...new Set([...changedAgain, ...blocked])].sort(
         compare,
@@ -482,21 +526,17 @@ export class CheckpointStore {
         : conflicts.length > 0 && options.conflicts !== "keep";
       if (refused && !overwrite) {
         // What no choice can put back shows only when the conflicts are overwritten: while they are kept, more is in the way.
-        const overwriting = await this.#undoing(
-          gitdir,
-          before,
-          after,
-          current,
-          true,
-        );
+        const overwriting = await plan(true);
         throw new CheckpointConflictError(
           conflicts,
           [
             ...unreadable,
-            ...(await this.#blocked(project, current, overwriting.changes, [
-              before,
-              after,
-            ])),
+            ...(await this.#blocked(
+              project,
+              current,
+              overwriting.changes,
+              protectedCommits,
+            )),
           ].sort(compare),
         );
       }
@@ -520,6 +560,7 @@ export class CheckpointStore {
     after: Commit,
     current: Commit,
     overwrite: boolean,
+    scope?: Set<string>,
   ): Promise<{
     changes: Change[];
     changedAgain: string[];
@@ -532,7 +573,9 @@ export class CheckpointStore {
         this.#compare(gitdir, after, current, [before]),
         this.#compare(gitdir, current, before, [after]),
       ]);
-    const inRange = new Set(paths(ranged));
+    const inRange = new Set(
+      paths(ranged).filter((file) => !scope || scope.has(file)),
+    );
     const edited = new Set(paths(since));
     // What it takes to bring the files of the range back; files that are already back are not in it.
     const wanted = back.filter((change) => inRange.has(change.path));
@@ -588,7 +631,7 @@ export class CheckpointStore {
     return {
       changes: [...changes.values()],
       changedAgain,
-      unreadable: paths(ranged).filter((file) => within(file, now)),
+      unreadable: [...inRange].filter((file) => within(file, now)),
     };
   }
 

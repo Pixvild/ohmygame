@@ -2998,3 +2998,103 @@ describe("workspace checkpoints", () => {
     ).toEqual([]);
   });
 });
+
+describe("Reapply plans", () => {
+  it("restores added, deleted, binary, permissions and file-folder changes from the pre-undo snapshot", async () => {
+    const game = await project({
+      removed: "old",
+      shape: "file",
+      "script.sh": "before",
+    });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await rm(path.join(game.workspacePath, "removed"));
+    await rm(path.join(game.workspacePath, "shape"));
+    await write(game.workspacePath, {
+      "shape/child": "child",
+      "script.sh": "after",
+    });
+    await writeFile(
+      path.join(game.workspacePath, "binary.bin"),
+      Buffer.from([0, 255, 1]),
+    );
+    if (process.platform !== "win32")
+      await chmod(path.join(game.workspacePath, "script.sh"), 0o755);
+    const after = await store.snapshot(game);
+    const undone = await store.undo(game, { before, after });
+    const reapply = Object.fromEntries(
+      undone.changed.map((file) => [file, undone.previous]),
+    );
+    await store.undo(game, { before, after }, { reapply });
+    expect(await contents(game.workspacePath)).toMatchObject({
+      "shape/child": "child",
+      "script.sh": "after",
+    });
+    await expect(
+      readFile(path.join(game.workspacePath, "removed")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(game.workspacePath, "binary.bin"))).toEqual(
+      Buffer.from([0, 255, 1]),
+    );
+    if (process.platform !== "win32")
+      expect(
+        (await lstat(path.join(game.workspacePath, "script.sh"))).mode & 0o111,
+      ).toBe(0o111);
+    expect(await store.diff(game, after, await store.snapshot(game))).toEqual(
+      [],
+    );
+  });
+
+  it("rolls back the whole Reapply when writing a later snapshot group fails", async () => {
+    const game = await project({ "a.txt": "before a", "b.txt": "before b" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "a.txt": "after a", "b.txt": "after b" });
+    const after = await store.snapshot(game);
+    await write(game.workspacePath, { "b.txt": "later b" });
+    const first = await store.undo(
+      game,
+      { before, after },
+      { conflicts: "keep" },
+    );
+    const rest = await store.undo(
+      game,
+      { before, after },
+      { conflicts: { overwrite: ["b.txt"] } },
+    );
+    let failed = false;
+    interception.before = async (operation, target) => {
+      if (
+        !failed &&
+        operation === "rename" &&
+        target === path.join(game.workspacePath, "b.txt")
+      ) {
+        failed = true;
+        throw new Error("disk failure during Reapply");
+      }
+    };
+    await expect(
+      store.undo(
+        game,
+        { before, after },
+        { reapply: { "a.txt": first.previous, "b.txt": rest.previous } },
+      ),
+    ).rejects.toThrow("disk failure during Reapply");
+    interception.before = undefined;
+    expect(failed).toBe(true);
+    expect(await contents(game.workspacePath)).toEqual({
+      "a.txt": "before a",
+      "b.txt": "before b",
+    });
+    expect(await store.unfinished(game)).toBeUndefined();
+    await store.undo(
+      game,
+      { before, after },
+      { reapply: { "a.txt": first.previous, "b.txt": rest.previous } },
+    );
+    expect(await contents(game.workspacePath)).toEqual({
+      "a.txt": "after a",
+      "b.txt": "later b",
+    });
+  });
+});

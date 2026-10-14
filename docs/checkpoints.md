@@ -1,9 +1,12 @@
-# Turn file changes and Undo
+# Turn file changes, Undo and Reapply
 
 Each consumed user message has a checkpoint before model/tool execution. Its
 turn ends at the next consumed message's checkpoint, or at the final snapshot
 when the run settles. A compact summary below each finished turn shows up to
-three changed paths and green/red added/removed line counts. **Show more files**
+three changed paths and green/red added/removed line counts in a subtle
+bordered panel.
+Added text files show `+N -0`; the response copy button and timestamp follow
+the panel. **Show more files**
 expands the list; select a path to inspect its diff, or **View changes** to open
 the first file and the full list. Failed and
 cancelled turns also capture their partial file changes. If either checkpoint
@@ -11,7 +14,9 @@ fails, the range is unavailable; a failed before checkpoint prevents inference
 and tool execution.
 
 Tool groups expand into an internally scrolling list capped at 280px. Successful
-`edit` and `write` calls show their own line counts on the right, when available.
+`edit` and `write` calls show their own line counts next to the tool label and its
+arrow, when available. Counts match the label color at rest and turn green/red on hover or
+keyboard focus.
 They appear as soon as that call completes, while the rest of the turn can still
 be running. Expanding the call shows its actual Diff with the same green/red
 view as the turn summary. Tool previews retain up to 300 lines and 32,768 text characters;
@@ -22,14 +27,23 @@ These counts describe individual calls; the turn summary describes the net file
 changes, including changes made outside tools during the turn. Counts are saved
 with the turn end, so showing history does not scan the current workspace. Older
 sessions can still load their file list on demand. Binary and oversized files
-show their change type without line counts.
+show a dash in place of unavailable line counts; they do not invent counts.
+The file list endpoint also computes statistics for older sessions on demand.
 
 **Edit message** changes the conversation branch and sends the replacement
 prompt using the current workspace. It preserves files. **Undo** is a
 separate, explicit action that preserves the conversation. It saves the current
 editor first, stops the preview, restores the selected turn's changed paths,
 and reloads workspace editors. The model receives a persistent notice to inspect
-the current files before continuing.
+the current files before continuing. Ordinary Undo runs directly; only conflicts
+require a choice. **Reapply** restores the files actually undone to their exact
+contents immediately before Undo, including later edits that were explicitly
+overwritten. It preserves the conversation and files left alone by Undo. After
+Reapply, Undo is available again. Partial Undo and **Undo the rest** keep a
+separate pre-undo snapshot target for each affected path, so Reapply can restore
+both operations together. Repeating Undo on a file/folder replacement updates
+related paths to the latest pre-undo structure. Targets persist across daemon
+restarts.
 
 ## Later edits and running work
 
@@ -39,14 +53,18 @@ The user can keep those paths and undo the others, or explicitly overwrite the
 conflicts. Overwrite names the conflict paths the user was shown; new conflicts
 require another confirmation. **Undo the rest** handles paths kept by a partial
 undo. A turn can also be undone again if its changes were brought back by a later
-restore. Its original Diff remains available.
+restore. Its original Diff remains available. Reapply compares undone paths with
+the
+turn's before checkpoint and uses the same keep/explicit overwrite choices if
+files changed after Undo. Keeping Reapply conflicts leaves those paths available
+for a later attempt; paths already at their target are cleared without writes.
 
 **Restore to before this message** independently restores the whole workspace and
-rewinds only the selected conversation to before that message. Both actions
-require confirmation. Editing a message always preserves the workspace.
+rewinds only the selected conversation to before that message. This action
+requires confirmation. Editing a message always preserves the workspace.
 
-Undo is unavailable while agents, generation jobs, or publishing are running in
-the project. Agent turns in different conversations of one project run one at a
+Undo and Reapply are unavailable while agents, generation jobs, or publishing
+are running in the project. Agent turns in different conversations of one project run one at a
 time. Queued and steering messages get their before checkpoint when consumed,
 not when enqueued. Each range is linked by checkpoint entry IDs, which remain
 the same when the live conversation is reloaded from disk.
@@ -54,10 +72,10 @@ the same when the live conversation is reloaded from disk.
 Checkpoint boundaries drain daemon HTTP handlers and canvas generation callbacks,
 including callbacks whose job already reports cancellation. They temporarily
 stop preview processes and resume an existing active preview afterward. Explicit
-Undo leaves the preview stopped until the user resumes it.
+Undo and Reapply leave the preview stopped until the user resumes it.
 
-Daemon project requests use `x-workspace-version`. Undo changes this version and
-emits `workspace.restored` with the version and changed paths. These events are
+Daemon project requests use `x-workspace-version`. Undo and Reapply change this
+version and emit `workspace.restored` with the version and changed paths. These events are
 sent after the workspace lock is released, so editors can remount and read the
 restored files; delayed writes carry the version of the editor that
 created them and receive `409 workspace_stale` after restoration. Unsaved canvas
@@ -83,7 +101,11 @@ exclude `node_modules` and `.git` anywhere, and these paths at the workspace roo
 generation history, and conversation session files are preserved. Snapshot
 metadata uses `ohmygame-checkpoint`, `ohmygame-turn-end`, and
 `ohmygame-checkpoint-undone` entries in the Pi session. These are the single
-record format used by the agent, API, and UI.
+record format used by the agent, API, and UI. Undo records optionally carry a
+`reapply` map from path to its pre-undo snapshot; an empty map marks a completed
+Reapply. Legacy Undo records without this map can reapply only turn paths still
+at their before contents, using the earliest recorded pre-undo snapshot. Paths
+edited after a legacy Undo cannot be reliably identified and are left alone.
 
 The Diff lists binary and large files, but text preview is limited to UTF-8 files
 without NUL bytes and up to 256 KiB per side, with a truncation notice. The limit is enforced while
@@ -124,14 +146,18 @@ The routes under `/projects/:projectId` are:
 - `GET conversations/:conversationId/checkpoints/:checkpointId/changes`
 - `GET conversations/:conversationId/checkpoints/:checkpointId/file?path=...`
 - `POST conversations/:conversationId/checkpoints/:checkpointId/undo`
+- `POST conversations/:conversationId/checkpoints/:checkpointId/reapply`
 - `POST conversations/:conversationId/checkpoints/:checkpointId/restore`
 - `GET checkpoints/unfinished` and `GET checkpoints/unfinished/changes`
 - `POST checkpoints/unfinished/restore`
 
-Undo accepts `{ conflicts?: "keep" | "overwrite", expected?: string[] }`;
-`expected` is required for overwrite. `workspace.undone` updates the selected
-turn. `workspace.restored` carries the new workspace version and changed paths
-to every editor; a conversation ID and checkpoint ID additionally identify a
+Undo and Reapply accept `{ conflicts?: "keep" | "overwrite", expected?: string[] }`;
+`expected` is required for overwrite. Responses include `changed`, `conflicts`,
+`undone` (whether reversible paths remain), and `kept` (turn paths still outside
+the before state while Undo remains active). `workspace.undone` and
+`workspace.reapplied` update the selected turn without reloading the
+conversation. `workspace.restored` carries the new workspace version and changed
+paths to every editor; a conversation ID and checkpoint ID additionally identify a
 conversation rewind. Unreadable paths are recorded in snapshots and stay outside
 Diff and restoration, including descendants and case variants. A malformed or
 unreadable recovery record is an error that blocks creative writes.

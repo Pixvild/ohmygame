@@ -19,7 +19,10 @@ import {
 } from "./checkpoints.js";
 import { CheckpointFileTooLargeError } from "./checkpoint-objects.js";
 import { ProjectWriteError, ProjectWrites } from "./project-writes.js";
-import { turnRange } from "./checkpoint-extension.js";
+import {
+  turnRange,
+  type StoredCheckpointUndone,
+} from "./checkpoint-extension.js";
 import {
   readWorkspaceNotice,
   writeWorkspaceNotice,
@@ -140,7 +143,7 @@ export function registerCheckpointRoutes(
 
   type AfterUnlock = (notify: () => void) => void;
   type WorkspaceChange = {
-    kind: "undo" | "restore" | "recovery";
+    kind: "undo" | "reapply" | "restore" | "recovery";
     checkpointId?: string;
     conversationId?: string;
   };
@@ -158,7 +161,7 @@ export function registerCheckpointRoutes(
     const version = writes.changed(project.id);
     // One durable project notice is injected into every later model request,
     // including other conversations and sessions loaded after a restart.
-    const content = `The user ${recovery ? "recovered an interrupted file restore" : restore ? "restored the workspace and rewound one conversation" : "undid file changes from an earlier turn"}. ${restore ? "Other conversations were preserved." : "The conversation was preserved."} Inspect the current files before continuing. Changed workspace paths: ${JSON.stringify(changed)}.`;
+    const content = `The user ${recovery ? "recovered an interrupted file restore" : restore ? "restored the workspace and rewound one conversation" : context.kind === "reapply" ? "reapplied previously undone file changes" : "undid file changes from an earlier turn"}. ${restore ? "Other conversations were preserved." : "The conversation was preserved."} Inspect the current files before continuing. Changed workspace paths: ${JSON.stringify(changed)}.`;
     try {
       await writeWorkspaceNotice(project, content, version);
     } finally {
@@ -290,7 +293,9 @@ export function registerCheckpointRoutes(
           request.params.conversationId,
           request.params.checkpointId,
         );
-        const changes = await store.diff(project, range.before, range.after);
+        const changes =
+          (await store.summarize(project, range.before, range.after)).items ??
+          [];
         if (agents.isProjectBusy(project.id) || options.busy(project.id))
           return { changes };
         const now = await options.snapshot(project);
@@ -388,88 +393,153 @@ export function registerCheckpointRoutes(
     },
   );
 
-  app.post<{ Params: CheckpointParams; Body: CheckpointUndoRequest }>(
-    `${checkpointBase}/undo`,
-    {
-      schema: {
-        body: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            conflicts: { enum: ["keep", "overwrite"] },
-            expected: { type: "array", items: { type: "string" } },
+  for (const direction of ["undo", "reapply"] as const)
+    app.post<{ Params: CheckpointParams; Body: CheckpointUndoRequest }>(
+      `${checkpointBase}/${direction}`,
+      {
+        schema: {
+          body: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              conflicts: { enum: ["keep", "overwrite"] },
+              expected: { type: "array", items: { type: "string" } },
+            },
           },
         },
       },
-    },
-    async (request, reply) => {
-      const { conflicts, expected } = request.body ?? {};
-      if (conflicts === "overwrite" && !expected)
-        return reply
-          .code(400)
-          .send({ error: "The files to overwrite are required" });
-      try {
-        return await protect(
-          request.params.projectId,
-          async (project, track, afterUnlock) => {
-            const { conversation, range } = await target(
-              project.id,
-              request.params.conversationId,
-              request.params.checkpointId,
-            );
-            const undo = async () => {
-              const result = await store.undo(project, range, {
-                conflicts:
-                  conflicts === "overwrite"
-                    ? { overwrite: expected! }
-                    : conflicts,
-              });
-              track(result.changed);
-              return {
-                ...result,
-                conflicts: result.conflicts.filter(
-                  (file) => !result.changed.includes(file),
-                ),
-              };
-            };
-            const result = await agents.undoCheckpoint(
-              project,
-              conversation,
-              request.params.checkpointId,
-              undo,
-            );
-            if (result.changed.length || !result.conflicts.length)
-              afterUnlock(() =>
-                events.publish(
-                  project.id,
-                  "workspace.undone",
-                  {
-                    checkpointId: request.params.checkpointId,
-                    kept: result.conflicts.length,
-                  },
-                  { conversationId: conversation.summary.id },
-                ),
+      async (request, reply) => {
+        const { conflicts, expected } = request.body ?? {};
+        if (conflicts === "overwrite" && !expected)
+          return reply
+            .code(400)
+            .send({ error: "The files to overwrite are required" });
+        try {
+          return await protect(
+            request.params.projectId,
+            async (project, track, afterUnlock) => {
+              const { conversation, range } = await target(
+                project.id,
+                request.params.conversationId,
+                request.params.checkpointId,
               );
-            return { changed: result.changed, conflicts: result.conflicts };
-          },
-          { kind: "undo" },
-        );
-      } catch (cause) {
-        if (cause instanceof CheckpointConflictError) {
-          const blocked = cause.blocked.length > 0;
-          return reply.code(409).send({
-            error: cause.message,
-            conflicts:
-              conflicts === "overwrite" && blocked
-                ? cause.blocked
-                : cause.conflicts,
-            ...(blocked ? { blocked: true } : {}),
-          });
+              const changeFiles = async (
+                _range: { before: string; after: string },
+                state?: StoredCheckpointUndone,
+              ) => {
+                let pending = new Map(Object.entries(state?.reapply ?? {}));
+                if (state && state.reapply === undefined) {
+                  // Old records lack path targets. Only paths still at the before
+                  // snapshot can be identified as undone without guessing.
+                  const now = await store.snapshot(project);
+                  const changed = new Set(
+                    (await store.diff(project, range.before, now)).map(
+                      (file) => file.path,
+                    ),
+                  );
+                  pending = new Map(
+                    (await store.diff(project, range.before, range.after))
+                      .filter((file) => !changed.has(file.path))
+                      .map((file) => [file.path, state.previous]),
+                  );
+                }
+                const result = await store.undo(project, range, {
+                  ...(direction === "reapply"
+                    ? { reapply: Object.fromEntries(pending) }
+                    : {}),
+                  conflicts:
+                    conflicts === "overwrite"
+                      ? { overwrite: expected! }
+                      : conflicts,
+                });
+                track(result.changed);
+                const kept = result.conflicts.filter(
+                  (file) => !result.changed.includes(file),
+                );
+                if (direction === "reapply")
+                  for (const file of pending.keys()) {
+                    if (!kept.includes(file)) pending.delete(file);
+                  }
+                else
+                  for (const file of result.changed)
+                    pending.set(file, result.previous);
+                let remaining = 0;
+                if (pending.size) {
+                  const turnPaths = new Set(
+                    (await store.diff(project, range.before, range.after)).map(
+                      (file) => file.path,
+                    ),
+                  );
+                  remaining = (
+                    await store.diff(
+                      project,
+                      range.before,
+                      await store.snapshot(project),
+                    )
+                  ).filter((file) => turnPaths.has(file.path)).length;
+                }
+                return {
+                  ...result,
+                  kept: remaining,
+                  reapply: Object.fromEntries(pending),
+                  conflicts: kept,
+                };
+              };
+              const result = await agents.undoCheckpoint(
+                project,
+                conversation,
+                request.params.checkpointId,
+                changeFiles,
+                direction,
+              );
+              if (result.changed.length || !result.conflicts.length)
+                afterUnlock(() => {
+                  const status = {
+                    checkpointId: request.params.checkpointId,
+                    kept: result.kept ?? result.conflicts.length,
+                  };
+                  const scope = { conversationId: conversation.summary.id };
+                  const undone = Object.keys(result.reapply ?? {}).length > 0;
+                  if (direction === "undo")
+                    events.publish(
+                      project.id,
+                      "workspace.undone",
+                      { ...status, ...(!undone ? { undone: false } : {}) },
+                      scope,
+                    );
+                  else
+                    events.publish(
+                      project.id,
+                      "workspace.reapplied",
+                      { ...status, undone },
+                      scope,
+                    );
+                });
+              return {
+                changed: result.changed,
+                conflicts: result.conflicts,
+                undone: Object.keys(result.reapply ?? {}).length > 0,
+                kept: result.kept,
+              };
+            },
+            { kind: direction },
+          );
+        } catch (cause) {
+          if (cause instanceof CheckpointConflictError) {
+            const blocked = cause.blocked.length > 0;
+            return reply.code(409).send({
+              error: cause.message,
+              conflicts:
+                conflicts === "overwrite" && blocked
+                  ? cause.blocked
+                  : cause.conflicts,
+              ...(blocked ? { blocked: true } : {}),
+            });
+          }
+          return failure(cause, reply);
         }
-        return failure(cause, reply);
-      }
-    },
-  );
+      },
+    );
 
   app.post<{ Params: CheckpointParams }>(
     `${checkpointBase}/restore`,

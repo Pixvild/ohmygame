@@ -262,16 +262,11 @@ describe("checkpoints in the project shell", () => {
 
     await click("2 files changed");
     expect(texts(".turn-change-row")).toEqual([
-      "a.jsModifiedChanged later",
-      "b.jsAdded",
+      "a.js—Changed later",
+      "b.js—",
     ]);
 
     await click("Undo");
-    expect(texts(".turn-changes-files li")).toEqual([
-      "Modifieda.jsChanged later",
-      "Addedb.js",
-    ]);
-    await click("Undo changes");
     expect(texts(".turn-changes-conflicts li")).toEqual(["a.js"]);
 
     await click("Keep them");
@@ -324,6 +319,73 @@ describe("checkpoints in the project shell", () => {
     expect(button("2 files changed")!.getAttribute("aria-expanded")).toBe(
       "true",
     );
+  });
+
+  it("reapplies a turn, updates editors through SSE, and keeps the current conversation", async () => {
+    const daemon = await openProject((route) => {
+      if (route === `${BASE}/undo`)
+        return Response.json({
+          changed: ["a.js", "b.js"],
+          conflicts: [],
+          undone: true,
+          kept: 0,
+        });
+      if (route === `${BASE}/reapply`)
+        return Response.json({
+          changed: ["a.js", "b.js"],
+          conflicts: [],
+          undone: false,
+          kept: 0,
+        });
+      return undefined;
+    });
+    await click("Undo");
+    expect(button("Reapply")).toBeDefined();
+    await act(async () =>
+      daemon.send(
+        1,
+        "workspace.undone",
+        { checkpointId: "checkpoint-1", kept: 0 },
+        "conversation",
+      ),
+    );
+    await settle();
+    await click("Reapply");
+    expect(
+      daemon.requests.filter((request) => request.route === `${BASE}/reapply`),
+    ).toEqual([{ route: `${BASE}/reapply`, method: "POST", body: "{}" }]);
+    expect(button("Reapply")).toBeUndefined();
+    expect(button("Undo")).toBeDefined();
+    expect(container.querySelector(".turn-changes-result")!.textContent).toBe(
+      "2 files reapplied.",
+    );
+    const fileReads = daemon.requests.filter(
+      (request) => request.route === "/projects/project/files",
+    ).length;
+    await act(async () =>
+      daemon.send(
+        2,
+        "workspace.reapplied",
+        { checkpointId: "checkpoint-1", undone: false, kept: 0 },
+        "conversation",
+      ),
+    );
+    await act(async () =>
+      daemon.send(3, "workspace.restored", {
+        version: "reapplied",
+        changed: ["a.js", "b.js"],
+      }),
+    );
+    await settle();
+    expect(
+      daemon.requests.filter(
+        (request) => request.route === "/projects/project/files",
+      ).length,
+    ).toBeGreaterThan(fileReads);
+    expect(
+      daemon.requests.some((request) => request.route.includes("?reset=1")),
+    ).toBe(false);
+    expect(container.textContent).toContain("Built");
   });
 
   it("keeps a turn that started while an undo was reported", async () => {
@@ -384,7 +446,7 @@ describe("checkpoints in the project shell", () => {
     expect(held).toHaveLength(0);
     expect(texts(".user-message")).toEqual(["Build", "Next thing"]);
     expect(texts(".turn-changes-summary")).toEqual([
-      "2 files changedChanges undone",
+      "2 files changedReapply",
       "3 files changedUndo",
     ]);
   });
@@ -458,7 +520,7 @@ describe("checkpoints in the project shell", () => {
 
     expect(button("Undo")).toBeDefined();
     await click("2 files changed");
-    expect(texts(".turn-change-row")).toEqual(["a.jsModified", "b.jsAdded"]);
+    expect(texts(".turn-change-row")).toEqual(["a.js—", "b.js—"]);
 
     // A later turn rewrites one of the files.
     changes = [{ ...CHANGES[0], state: "changed" }, CHANGES[1]];
@@ -477,8 +539,8 @@ describe("checkpoints in the project shell", () => {
     await settle();
 
     expect(texts(".turn-change-row")).toEqual([
-      "a.jsModifiedChanged later",
-      "b.jsAdded",
+      "a.js—Changed later",
+      "b.js—",
     ]);
     expect(
       daemon.requests.filter((request) => request.route === `${BASE}/changes`),
@@ -487,9 +549,7 @@ describe("checkpoints in the project shell", () => {
 
   it("offers no undo while the Agent works or the connection is lost", async () => {
     const daemon = await openProject(() => undefined);
-    await click("Undo");
     expect(button("Undo")!.disabled).toBe(false);
-    expect(button("Undo changes")!.disabled).toBe(false);
 
     await act(async () =>
       daemon.send(
@@ -503,7 +563,6 @@ describe("checkpoints in the project shell", () => {
     await settle();
 
     expect(button("Undo")!.disabled).toBe(true);
-    expect(button("Undo changes")!.disabled).toBe(true);
     // Looking at the changes stays possible.
     expect(button("2 files changed")!.disabled).toBe(false);
 
@@ -544,7 +603,6 @@ describe("checkpoints in the project shell", () => {
       route === `${BASE}/undo` ? answers.shift() : undefined,
     );
     await click("Undo");
-    await click("Undo changes");
     expect(texts(".turn-changes-conflicts li")).toEqual(["a.js"]);
 
     await click("Overwrite them");
@@ -606,7 +664,6 @@ describe("checkpoints in the project shell", () => {
         .length;
 
     await click("Undo");
-    await click("Undo changes");
 
     // Unsaved edits must be on disk before conflicts are worked out.
     expect(save).toHaveBeenCalledTimes(1);
@@ -852,7 +909,6 @@ describe("checkpoints in the project shell", () => {
     expect(container.querySelector(".unfinished-restore")).toBeNull();
 
     await click("Undo");
-    await click("Undo changes");
 
     expect(container.querySelector(".turn-changes-error")!.textContent).toBe(
       "The undo could not be completed",

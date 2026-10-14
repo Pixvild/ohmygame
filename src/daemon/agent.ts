@@ -177,7 +177,8 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
       const item = items[index];
       // The last undo of a turn says how it stands: one that left files as they are, until a later one puts those back too.
       if (undone && item?.type === "userMessage" && item.changes) {
-        items[index] = { ...item, changes: { files: item.changes.files, ...(item.changes.items ? { items: item.changes.items } : {}), undone: true, ...(undone.kept > 0 ? { kept: undone.kept } : {}) } };
+        const pending = undone.reapply === undefined || Object.keys(undone.reapply).length > 0;
+        items[index] = { ...item, changes: { files: item.changes.files, ...(item.changes.items ? { items: item.changes.items } : {}), ...(pending ? { undone: true, ...(undone.kept > 0 ? { kept: undone.kept } : {}) } : {}) } };
       }
       continue;
     }
@@ -387,6 +388,8 @@ interface UndoneChanges {
   changed: string[];
   /** Paths that were left as they are. */
   conflicts: string[];
+  reapply?: Record<string, string>;
+  kept?: number;
 }
 
 interface ManagedSession {
@@ -873,7 +876,8 @@ export class AgentManager {
     project: ProjectState,
     conversation: StoredConversation,
     checkpointId: string,
-    undo: (range: TurnRange) => Promise<UndoneChanges>,
+    undo: (range: TurnRange, state?: StoredCheckpointUndone) => Promise<UndoneChanges>,
+    direction: "undo" | "reapply" = "undo",
   ): Promise<UndoneChanges> {
     await this.turnsClosed(project.id);
     if (this.#closing) throw new Error("Agent manager is closing");
@@ -887,16 +891,56 @@ export class AgentManager {
     try {
       const { session } = await this.#getSession(project, conversation);
       const sessionManager = session.sessionManager;
-      const range = sessionManager && turnRange(sessionManager.getBranch(), checkpointId);
+      const branch = sessionManager?.getBranch();
+      const range = branch && turnRange(branch, checkpointId);
       if (!sessionManager || !range) throw new CheckpointNotFoundError();
 
-      const result = await undo(range);
+      const records = branch!
+        .flatMap((entry) =>
+          entry.type === "custom" &&
+          entry.customType === CHECKPOINT_UNDONE_ENTRY
+            ? [parseStoredCheckpointUndone(entry.data)]
+            : [],
+        )
+        .filter(
+          (entry): entry is StoredCheckpointUndone =>
+            entry?.checkpoint === checkpointId,
+        );
+      const last = records.at(-1);
+      const state = last && {
+        ...last,
+        ...(last.reapply === undefined
+          ? { previous: records[0]!.previous }
+          : {}),
+      };
+      if (direction === "reapply" && !state)
+        throw new Error("There are no undone changes to reapply");
+      const result = await undo(range, state);
+      const pending = new Map(
+        Object.entries(result.reapply ?? state?.reapply ?? {}),
+      );
+      if (direction === "undo")
+        for (const file of result.changed) {
+          // A file and its descendants cannot come from incompatible snapshots.
+          // Repeating Undo on a file/folder replacement supersedes that whole shape.
+          for (const pendingPath of pending.keys())
+            if (
+              pendingPath.startsWith(`${file}/`) ||
+              file.startsWith(`${pendingPath}/`)
+            )
+              pending.set(pendingPath, result.previous);
+          pending.set(file, result.previous);
+        }
+      else if (result.reapply === undefined)
+        for (const file of result.changed) pending.delete(file);
+      const reapply = Object.fromEntries(pending);
+      const kept = result.kept ?? (pending.size ? result.conflicts.length : 0);
       // An undo that only met files to leave alone has undone nothing, and can be asked for again.
       if (result.changed.length > 0 || result.conflicts.length === 0) {
-        const undone: StoredCheckpointUndone = { version: 1, checkpoint: checkpointId, previous: result.previous, kept: result.conflicts.length };
+        const undone: StoredCheckpointUndone = { version: 1, checkpoint: checkpointId, previous: result.previous, kept, reapply };
         sessionManager.appendCustomEntry(CHECKPOINT_UNDONE_ENTRY, undone);
       }
-      return result;
+      return { ...result, reapply, kept };
     } finally {
       this.#revisions.delete(key);
       this.#puttingBack.delete(project.id);

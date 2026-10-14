@@ -1,7 +1,7 @@
 import { observeWorkspaceVersion, workspaceVersion } from "../src/renderer/workspace-version.js";
 import { request } from "../src/renderer/api.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { approvePlan, cancelPlan, compactConversation, createConversation, createLibraryImage, createProject, deleteWorkspaceEntry, deleteLibraryAsset, deleteProject, duplicateProject, forceDeleteLibraryAsset, getConversation, getConversationCapabilities, getConversationContextUsage, getExploreGameCover, getHomeComposerCapabilities, getLibraryAsset, getOpenAIEndpointSettings, getNodeCodebase, getProjectCover, getWorkspaceAsset, getWorkspaceFile, inspectPluginSource, installPlugin, listLibraryAssetReferences, listLibraryAssets, listModels, listPlugins, listProjects, listWorkspaceFiles, publishProject, readPlugin, readPluginSkill, refinePlan, removePendingPrompt, renameWorkspaceEntry, renameConversation, renameLibraryAsset, renameProject, reviseLastPrompt, sendPrompt, setConversationModel, setConversationReasoning, setProjectCover, steerPendingPrompt, subscribeToProject, uninstallPlugin, updateAgentDefaults, updateOpenAIEndpointSettings, updateNodeCodebase, updatePluginSettings, updateProjectRunSettings, updateProjectStartupDirectory, uploadLibraryAsset, getCheckpointChanges, getCheckpointFile, getUnfinishedChanges, getUnfinishedRestore, restoreCheckpoint, restoreUnfinished, undoCheckpoint } from "../src/renderer/api.js";
+import { approvePlan, cancelPlan, compactConversation, createConversation, createLibraryImage, createProject, deleteWorkspaceEntry, deleteLibraryAsset, deleteProject, duplicateProject, forceDeleteLibraryAsset, getConversation, getConversationCapabilities, getConversationContextUsage, getExploreGameCover, getHomeComposerCapabilities, getLibraryAsset, getOpenAIEndpointSettings, getNodeCodebase, getProjectCover, getWorkspaceAsset, getWorkspaceFile, inspectPluginSource, installPlugin, listLibraryAssetReferences, listLibraryAssets, listModels, listPlugins, listProjects, listWorkspaceFiles, publishProject, readPlugin, readPluginSkill, refinePlan, removePendingPrompt, renameWorkspaceEntry, renameConversation, renameLibraryAsset, renameProject, reviseLastPrompt, sendPrompt, setConversationModel, setConversationReasoning, setProjectCover, steerPendingPrompt, subscribeToProject, uninstallPlugin, updateAgentDefaults, updateOpenAIEndpointSettings, updateNodeCodebase, updatePluginSettings, updateProjectRunSettings, updateProjectStartupDirectory, uploadLibraryAsset, getCheckpointChanges, getCheckpointFile, getUnfinishedChanges, getUnfinishedRestore, restoreCheckpoint, restoreUnfinished, undoCheckpoint, reapplyCheckpoint } from "../src/renderer/api.js";
 import { readPluginIconImage, updatePluginDraftIcon, cancelToolJob, getProjectCoverState, listToolJobs, setProjectCoverMode, retryToolJob, startToolJob } from "../src/renderer/api.js";
 import type { RuntimeEvent } from "../src/shared/contracts.js";
 
@@ -534,6 +534,37 @@ describe("renderer project API", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(1, url, expect.objectContaining({ method: "POST", body: "{}", headers: { "content-type": "application/json", "x-workspace-version": "0" } }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, url, expect.objectContaining({ method: "POST", body: JSON.stringify({ conflicts: "keep" }) }));
     expect(fetchMock).toHaveBeenNthCalledWith(3, url, expect.objectContaining({ method: "POST", body: JSON.stringify({ conflicts: "overwrite", expected: ["src/b.js"] }) }));
+  });
+
+  it("sends Reapply with explicit conflict consent and returns the remaining Undo state", async () => {
+    installWindow();
+    const result = {
+      changed: ["src/a.js"],
+      conflicts: [],
+      undone: false,
+      kept: 0,
+    };
+    const fetchMock = vi.fn(async () => Response.json(result));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      reapplyCheckpoint(
+        "project-1",
+        "conversation-1",
+        "checkpoint 1",
+        "overwrite",
+        ["src/a.js"],
+      ),
+    ).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/project-1/conversations/conversation-1/checkpoints/checkpoint%201/reapply",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          conflicts: "overwrite",
+          expected: ["src/a.js"],
+        }),
+      }),
+    );
   });
 
   it("keeps the conflicts of a refused undo on the error", async () => {

@@ -79,6 +79,9 @@ describe("stored turn ends", () => {
       kept: 0,
     };
     expect(parseStoredCheckpointUndone(stored)).toEqual(stored);
+    for (const reapply of [{ "src/game.ts": commit("c") }, {}]) {
+      expect(parseStoredCheckpointUndone({ ...stored, reapply })).toEqual({ ...stored, reapply });
+    }
     for (const damaged of [
       undefined,
       [],
@@ -87,6 +90,9 @@ describe("stored turn ends", () => {
       { ...stored, previous: commit("b").slice(1) },
       { ...stored, kept: -1 },
       { ...stored, kept: Number.NaN },
+      { ...stored, reapply: null },
+      { ...stored, reapply: [] },
+      { ...stored, reapply: { "src/game.ts": "bad commit" } },
     ])
       expect(parseStoredCheckpointUndone(damaged)).toBeUndefined();
   });

@@ -42,6 +42,8 @@ export interface StoredCheckpointUndone {
   previous: string;
   /** How many of the turn's files were left as they are. */
   kept: number;
+  /** Undone paths and the snapshot to reapply for each. Empty after a full Reapply. */
+  reapply?: Record<string, string>;
 }
 
 /** The snapshots a turn's file changes lie between. */
@@ -85,12 +87,18 @@ export function parseStoredCheckpointUndone(
   return data.version === 1 &&
     isEntryId(data.checkpoint) &&
     isCommit(data.previous) &&
-    isCount(data.kept)
+    isCount(data.kept) &&
+    (data.reapply === undefined ||
+      (data.reapply !== null &&
+        typeof data.reapply === "object" &&
+        !Array.isArray(data.reapply) &&
+        Object.values(data.reapply).every(isCommit)))
     ? {
         version: 1,
         checkpoint: data.checkpoint,
         previous: data.previous,
         kept: data.kept,
+        ...(data.reapply ? { reapply: data.reapply } : {}),
       }
     : undefined;
 }

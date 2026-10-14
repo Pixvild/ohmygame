@@ -155,6 +155,11 @@ describe("rendererReducer", () => {
     const rest = event(partly, { ...undone, id: 3 });
     expect(rest.turns[0]?.items[0]).toMatchObject({ changes: { files: 4, undone: true } });
     expect(rest.turns[0]?.items[0]).not.toHaveProperty("changes.kept");
+    const reapplied = event(partly, { ...undone, id: 4, type: "workspace.reapplied", data: { checkpointId: "checkpoint-1", kept: 0, undone: false } });
+    expect(reapplied.turns[0]?.items[0]).toMatchObject({ changes: { files: 4 } });
+    expect(reapplied.turns[0]?.items[0]).not.toHaveProperty("changes.undone");
+    expect(reapplied.turns[0]?.items[0]).not.toHaveProperty("changes.kept");
+    expect(reapplied.turns[1]).toBe(second);
     // A turn whose end was not reported has nothing to mark, and an event of another conversation changes nothing.
     expect(event(state, { ...undone, data: { checkpointId: "checkpoint-2", kept: 0 } }).turns[1]).toBe(second);
     const other = event(state, { ...undone, conversationId: "another" });

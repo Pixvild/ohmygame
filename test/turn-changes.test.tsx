@@ -49,6 +49,13 @@ function controls(overrides: Partial<TurnChangesControls> = {}) {
       changed: ["src/game.js", "assets/hero.png", "old/notes.md"],
       conflicts: [],
     })),
+    reapply: vi.fn<TurnChangesControls["reapply"]>(async () => ({
+      status: "done",
+      changed: ["src/game.js", "assets/hero.png", "old/notes.md"],
+      conflicts: [],
+      undone: false,
+      kept: 0,
+    })),
     ...overrides,
   };
 }
@@ -127,6 +134,31 @@ describe("TurnChangesFooter", () => {
     expect(button("Undo")).toBeUndefined();
   });
 
+  it("uses the persisted Reapply state when a conversation reload replaces a local Undo result", async () => {
+    const value = controls();
+    await render(value);
+    await click("Undo");
+    await render(value, { files: 3, undone: true }, "stored-turn");
+    expect(button("Reapply")).toBeDefined();
+    await render(value, { files: 3 }, "reapplied-turn");
+    expect(button("Reapply")).toBeUndefined();
+    expect(button("Undo")).toBeDefined();
+  });
+
+  it("keeps Reapply available for pre-undo edits even if files equal the original turn end", async () => {
+    const value = controls({
+      load: vi.fn(async () =>
+        LIST.map((item) => ({ ...item, state: "applied" as const })),
+      ),
+    });
+    await render(value, { files: 3, undone: true });
+    await click("3 files changed");
+    expect(button("Undo")).toBeDefined();
+    expect(button("Reapply")).toBeDefined();
+    await click("Reapply");
+    expect(value.reapply).toHaveBeenCalledTimes(1);
+  });
+
   it("loads the list when it is first opened and shows each file", async () => {
     const value = controls();
     await render(value);
@@ -145,9 +177,9 @@ describe("TurnChangesFooter", () => {
       "true",
     );
     expect(texts(".turn-change-row")).toEqual([
-      "src/game.jsModifiedChanged later",
-      "assets/hero.pngAdded",
-      "old/notes.mdRemovedAlready put back",
+      "src/game.js—Changed later",
+      "assets/hero.png—",
+      "old/notes.md—Already put back",
     ]);
     expect(texts(".turn-change-badge")).toEqual([
       "Changed later",
@@ -326,167 +358,104 @@ describe("TurnChangesFooter", () => {
     ]);
   });
 
-  it("undoes only after a confirmation and says what was put back", async () => {
-    const value = controls({
-      undo: vi.fn<TurnChangesControls["undo"]>(async () => ({
-        status: "done",
-        changed: ["src/game.js", "assets/hero.png"],
-        conflicts: ["old/notes.md"],
-      })),
-    });
-    await render(value);
-    await click("3 files changed");
-
+  it("undoes directly without loading a confirmation list, and allows Reapply then Undo", async () => {
+    const value = controls();
+    await render(value, { files: 31 });
     await click("Undo");
-
-    expect(value.undo).not.toHaveBeenCalled();
-    expect(button("Undo")!.getAttribute("aria-expanded")).toBe("true");
-    // The file that is already back is left alone, so it is not named.
-    expect(texts(".turn-changes-panel p")).toEqual([
-      "The 2 files go back to how they were before this turn; the conversation stays as it is.",
-      "Everything that changed in the project during this turn is listed, also what you changed yourself.",
-    ]);
-    expect(texts(".turn-changes-files li")).toEqual([
-      "Modifiedsrc/game.jsChanged later",
-      "Addedassets/hero.png",
-    ]);
-    expect(buttons()).toEqual(
-      expect.arrayContaining(["Undo changes", "Cancel"]),
-    );
-    // The list was open, so the confirmation shows it without asking again.
-    expect(value.load).toHaveBeenCalledTimes(1);
-
-    await click("Undo changes");
-
-    expect(value.undo).toHaveBeenCalledTimes(1);
     expect(value.undo).toHaveBeenCalledWith(
       "checkpoint-1",
       undefined,
       undefined,
     );
+    expect(value.load).not.toHaveBeenCalled();
     expect(container.querySelector(".turn-changes-panel")).toBeNull();
-    expect(texts('[role="status"]')).toEqual([
-      "2 files were put back. 1 file was left as it is.",
-    ]);
-    // The files stand differently now, so the open list is asked for again.
-    expect(value.load).toHaveBeenCalledTimes(2);
+    expect(button("Undo")).toBeUndefined();
+    expect(button("Reapply")).toBeDefined();
+    await click("Reapply");
+    expect(value.reapply).toHaveBeenCalledWith(
+      "checkpoint-1",
+      undefined,
+      undefined,
+    );
+    expect(texts('[role="status"]')).toEqual(["3 files reapplied."]);
+    expect(button("Reapply")).toBeUndefined();
+    await click("Undo");
+    expect(value.undo).toHaveBeenCalledTimes(2);
   });
 
-  it("words the confirmation and the outcome for a single file", async () => {
+  it("does not offer Reapply when no files were undone", async () => {
     const value = controls({
-      load: vi.fn<TurnChangesControls["load"]>(async () => [LIST[0]]),
       undo: vi.fn<TurnChangesControls["undo"]>(async () => ({
         status: "done",
-        changed: ["src/game.js"],
+        changed: [],
         conflicts: [],
+        undone: false,
+        kept: 0,
       })),
     });
-    await render(value, { files: 1 });
-
+    await render(value);
     await click("Undo");
-    expect(texts(".turn-changes-panel p")[0]).toBe(
-      "The file goes back to how it was before this turn; the conversation stays as it is.",
-    );
-    await click("Undo changes");
-
-    expect(texts('[role="status"]')).toEqual(["1 file was put back."]);
+    expect(texts('[role="status"]')).toEqual(["No files were put back."]);
+    expect(button("Undo")).toBeDefined();
+    expect(button("Reapply")).toBeUndefined();
   });
 
-  it("loads the list for the confirmation and names at most ten of the files", async () => {
-    let answer!: (list: CheckpointChangeItem[]) => void;
+  it("can cancel a conflict without making a second write request", async () => {
     const value = controls({
-      load: vi.fn<TurnChangesControls["load"]>(
-        () =>
-          new Promise((resolve) => {
-            answer = resolve;
-          }),
-      ),
-    });
-    await render(value, { files: 12 });
-
-    await click("Undo");
-
-    // Nothing can be agreed to before it is shown.
-    expect(value.load).toHaveBeenCalledTimes(1);
-    expect(texts(".turn-changes-panel p")).toEqual(["Loading changes..."]);
-    expect(button("Undo changes")!.disabled).toBe(true);
-    expect(button("Cancel")!.disabled).toBe(false);
-
-    await act(async () =>
-      answer(
-        Array.from({ length: 12 }, (_, index): CheckpointChangeItem => ({
-          path: `src/file-${index + 1}.js`,
-          kind: "added",
-          state: "applied",
-        })),
-      ),
-    );
-
-    expect(texts(".turn-changes-panel p")[0]).toBe(
-      "The 12 files go back to how they were before this turn; the conversation stays as it is.",
-    );
-    expect(texts(".turn-changes-files li")).toEqual([
-      ...Array.from(
-        { length: 10 },
-        (_, index) => `Addedsrc/file-${index + 1}.js`,
-      ),
-      "and 2 more",
-    ]);
-    expect(button("Undo changes")!.disabled).toBe(false);
-    // The list itself stays closed.
-    expect(container.querySelector(".turn-changes-list")).toBeNull();
-  });
-
-  it("shows a list that could not be loaded in the confirmation, with a way to try again", async () => {
-    const value = controls({
-      load: vi
-        .fn<TurnChangesControls["load"]>()
-        .mockRejectedValueOnce(new Error("Checkpoint not found"))
-        .mockResolvedValue(LIST),
+      undo: vi.fn<TurnChangesControls["undo"]>(async () => ({
+        status: "conflicts",
+        conflicts: ["src/game.js"],
+        blocked: false,
+      })),
     });
     await render(value);
-
-    await click("Undo");
-
-    expect(texts('.turn-changes-panel [role="alert"]')).toEqual([
-      "Checkpoint not found",
-    ]);
-    expect(button("Undo changes")!.disabled).toBe(true);
-
-    await click("Try again");
-
-    expect(value.load).toHaveBeenCalledTimes(2);
-    expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(button("Try again")).toBeUndefined();
-    expect(texts(".turn-changes-files li")).toHaveLength(2);
-    expect(button("Undo changes")!.disabled).toBe(false);
-  });
-
-  it("says so when every file is already back", async () => {
-    const value = controls({
-      load: vi.fn<TurnChangesControls["load"]>(async () => [LIST[2]]),
-    });
-    await render(value, { files: 1 });
-
-    await click("Undo");
-
-    expect(texts(".turn-changes-panel p")).toEqual([
-      "Every file is already back to how it was before this turn.",
-    ]);
-    expect(container.querySelector(".turn-changes-files")).toBeNull();
-    expect(button("Undo changes")!.disabled).toBe(false);
-  });
-
-  it("leaves everything as it is when the confirmation is cancelled", async () => {
-    const value = controls();
-    await render(value);
-
     await click("Undo");
     await click("Cancel");
-
-    expect(value.undo).not.toHaveBeenCalled();
+    expect(value.undo).toHaveBeenCalledTimes(1);
     expect(container.querySelector(".turn-changes-panel")).toBeNull();
-    expect(button("Undo")!.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("asks about Reapply conflicts and retries only the displayed paths", async () => {
+    const reapply = vi
+      .fn<TurnChangesControls["reapply"]>()
+      .mockResolvedValueOnce({
+        status: "conflicts",
+        conflicts: ["src/game.js"],
+        blocked: false,
+      })
+      .mockResolvedValueOnce({
+        status: "conflicts",
+        conflicts: ["src/game.js", "assets/hero.png"],
+        blocked: false,
+      })
+      .mockResolvedValueOnce({
+        status: "done",
+        changed: ["old/notes.md"],
+        conflicts: ["src/game.js", "assets/hero.png"],
+        undone: true,
+        kept: 1,
+      });
+    const value = controls({ reapply });
+    await render(value, { files: 3, undone: true });
+    await click("Reapply");
+    expect(texts(".turn-changes-panel p")[0]).toBe(
+      "These files were edited after Undo:",
+    );
+    await click("Overwrite them");
+    expect(reapply).toHaveBeenLastCalledWith("checkpoint-1", "overwrite", [
+      "src/game.js",
+    ]);
+    expect(texts(".turn-changes-conflicts li")).toEqual([
+      "src/game.js",
+      "assets/hero.png",
+    ]);
+    expect(container.textContent).toContain("in the meantime");
+    await click("Keep them");
+    expect(reapply).toHaveBeenLastCalledWith("checkpoint-1", "keep", undefined);
+    expect(texts('[role="status"]')).toEqual([
+      "1 file reapplied. 2 files were left as they are.",
+    ]);
+    expect(button("Reapply")).toBeDefined();
   });
 
   it("asks what to do with files that were changed later and keeps them on request", async () => {
@@ -506,7 +475,6 @@ describe("TurnChangesFooter", () => {
     await render(value);
 
     await click("Undo");
-    await click("Undo changes");
 
     expect(
       container.querySelector(".turn-changes-panel")!.textContent,
@@ -553,7 +521,6 @@ describe("TurnChangesFooter", () => {
     const value = controls({ undo });
     await render(value);
     await click("Undo");
-    await click("Undo changes");
 
     await click("Overwrite them");
 
@@ -608,7 +575,6 @@ describe("TurnChangesFooter", () => {
     const value = controls({ undo });
     await render(value);
     await click("Undo");
-    await click("Undo changes");
     expect(
       container.querySelector(".turn-changes-panel")!.textContent,
     ).not.toContain("in the meantime");
@@ -661,16 +627,14 @@ describe("TurnChangesFooter", () => {
     await render(value);
 
     await click("Undo");
-    await click("Undo changes");
 
     expect(texts('[role="alert"]')).toEqual([
       "Wait for the agent to finish before undoing",
     ]);
     expect(container.querySelector('[role="status"]')).toBeNull();
-    expect(button("Undo changes")!.disabled).toBe(false);
+    expect(button("Undo")!.disabled).toBe(false);
 
-    await click("Undo changes");
-
+    await click("Undo");
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(texts('[role="status"]')).toEqual(["1 file was put back."]);
   });
@@ -687,12 +651,8 @@ describe("TurnChangesFooter", () => {
     });
     await render(value);
     await click("Undo");
-    await click("Undo changes");
 
     expect(button("Undo")!.disabled).toBe(true);
-    expect(button("Undo changes")!.disabled).toBe(true);
-    expect(button("Cancel")!.disabled).toBe(true);
-    await click("Undo changes");
     expect(value.undo).toHaveBeenCalledTimes(1);
 
     await act(async () =>
@@ -724,7 +684,6 @@ describe("TurnChangesFooter", () => {
     await click("3 files changed");
     await click("src/game.js");
     await click("Undo");
-    await click("Undo changes");
     const footer = container.querySelector(".turn-changes");
 
     await render(value, { files: 3, undone: true }, "stored-turn");
@@ -736,7 +695,7 @@ describe("TurnChangesFooter", () => {
     expect(texts(".turn-change-path")).toHaveLength(3);
     expect(container.querySelector(".turn-change-diff")).not.toBeNull();
     expect(texts('[role="status"]')).toEqual(["3 files were put back."]);
-    expect(container.textContent).toContain("Changes undone");
+    expect(button("Reapply")).toBeDefined();
     expect(button("Undo")).toBeUndefined();
     expect(value.load).toHaveBeenCalledTimes(2);
     expect(value.file).toHaveBeenCalledTimes(1);
@@ -758,12 +717,6 @@ describe("TurnChangesFooter", () => {
     expect(button("Undo")).toBeUndefined();
 
     await click("Undo the rest");
-
-    expect(texts(".turn-changes-files li")).toEqual([
-      "Modifiedsrc/game.jsChanged later",
-      "Addedassets/hero.png",
-    ]);
-    await click("Undo changes");
 
     expect(value.undo).toHaveBeenCalledWith(
       "checkpoint-1",
@@ -789,23 +742,14 @@ describe("TurnChangesFooter", () => {
     });
     await render(value, { files: 3, undone: true });
 
-    // Nothing is known of the files before the list is loaded, and nothing stands as the turn left it in the first one.
-    expect(container.querySelector(".turn-changes-undone")!.textContent).toBe(
-      "Changes undone",
-    );
+    expect(button("Reapply")).toBeDefined();
     await click("3 files changed");
-    expect(container.querySelector(".turn-changes-undone")!.textContent).toBe(
-      "Changes undone",
-    );
     expect(button("Undo")).toBeUndefined();
-
-    // The workspace changed: another undo brought a change of this turn back.
     await render(value, { files: 3, undone: true }, "live-turn", 1);
-
-    expect(container.querySelector(".turn-changes-undone")).toBeNull();
-    await click("Undo");
-    expect(texts(".turn-changes-files li")).toEqual(["Modifiedsrc/game.js"]);
-    expect(button("Undo changes")!.disabled).toBe(false);
+    expect(button("Reapply")).toBeDefined();
+    expect(button("Undo the rest")).toBeDefined();
+    await click("Undo the rest");
+    expect(value.undo).toHaveBeenCalledWith("checkpoint-1", undefined, undefined);
   });
 
   it("loads what it shows again when the workspace changed, and keeps the rest", async () => {
@@ -828,7 +772,6 @@ describe("TurnChangesFooter", () => {
     await act(async () => lists[0](LIST));
     await click("assets/hero.png");
     await click("Undo");
-    await click("Undo changes");
     expect(value.load).toHaveBeenCalledTimes(2);
     expect(value.file).toHaveBeenCalledTimes(1);
 

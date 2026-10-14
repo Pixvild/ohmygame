@@ -9723,9 +9723,10 @@ button {
 .turn-change-line-removed .turn-change-line-sign { color: var(--diff-removed); }
 
 .turn-changes {
-  margin: 4px 0 18px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+  margin: 12px 0 6px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 8px;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.5;
@@ -9775,7 +9776,7 @@ button {
 }
 
 .turn-changes-undo:hover:not(:disabled),
-.turn-changes-undo[aria-expanded="true"] {
+.turn-changes-undo:focus-visible {
   background: var(--surface-hover);
   color: var(--text);
 }
@@ -9786,7 +9787,8 @@ button {
   color: var(--text-faint);
 }
 
-.turn-changes-undone + .turn-changes-undo {
+.turn-changes-undone + .turn-changes-undo,
+.turn-changes-undo + .turn-changes-undo {
   margin-left: 0;
 }
 
@@ -9830,25 +9832,6 @@ button {
     Monaco,
     Consolas,
     monospace;
-}
-
-.turn-changes-files {
-  margin: 0;
-  padding: 0;
-  color: var(--text);
-  list-style: none;
-}
-
-.turn-changes-files li {
-  display: flex;
-  min-height: 22px;
-  align-items: center;
-  gap: 8px;
-}
-
-.turn-changes-file-path {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .turn-changes-actions {
@@ -9898,14 +9881,6 @@ button {
   flex: 0 0 auto;
   color: var(--text-faint);
   font-size: 10px;
-}
-
-.turn-change-added {
-  color: var(--success);
-}
-
-.turn-change-removed {
-  color: var(--danger);
 }
 
 .turn-change-path {
@@ -10499,9 +10474,28 @@ button {
   grid-template-columns: 14px minmax(0, auto) 14px 14px minmax(0, 1fr) auto;
 }
 
-.tool-row > .change-counts {
-  grid-column: -2;
-  justify-self: end;
+.tool-row:has(> .change-counts) {
+  grid-template-columns: 14px minmax(0, auto) auto 14px minmax(0, 1fr);
+}
+
+.tool-row-expandable:has(> .change-counts) {
+  grid-template-columns: 14px minmax(0, auto) 12px auto 14px minmax(0, 1fr);
+}
+
+.tool-row .change-count-added,
+.tool-row .change-count-removed {
+  color: inherit;
+  transition: color 120ms ease;
+}
+
+.tool-row:hover .change-count-added,
+.tool-activity-details > summary:focus-visible .change-count-added {
+  color: var(--diff-added);
+}
+
+.tool-row:hover .change-count-removed,
+.tool-activity-details > summary:focus-visible .change-count-removed {
+  color: var(--diff-removed);
 }
 
 .tool-detail-chevron {

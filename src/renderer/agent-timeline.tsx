@@ -207,6 +207,9 @@ const Turn = memo(function Turn({ turn, projectId, waitingForInput, steeringPend
     return () => window.clearInterval(timer);
   }, [active]);
   const display = useMemo(() => active ? projectTurnDisplay(turn, now, waitingForInput) : turnDisplay(turn), [turn, active, now, waitingForInput]);
+  const fileChanges = changeControls && display.status !== "inProgress" && display.user?.checkpointId && display.user.changes && display.user.changes.files > 0
+    ? <TurnChangesFooter checkpointId={display.user.checkpointId} changes={display.user.changes} controls={changeControls} />
+    : null;
   return (
     <article className="agent-turn">
       <UserInput item={display.user} controls={userControls} />
@@ -214,12 +217,9 @@ const Turn = memo(function Turn({ turn, projectId, waitingForInput, steeringPend
       {display.status !== "inProgress" && (display.work.length > 0 || display.status === "cancelled") ? <CompletedWork display={display} /> : null}
       {display.messages.map((item) => <TimelineItem key={item.id} item={item} />)}
       {display.finalMessages.length > 0
-        ? <FinalResponse projectId={projectId} items={display.finalMessages} artifacts={display.artifacts} controls={assistantControls} />
+        ? <FinalResponse projectId={projectId} items={display.finalMessages} artifacts={display.artifacts} controls={assistantControls} changes={fileChanges} />
         : display.artifacts.length > 0 ? <ArtifactPreviews projectId={projectId} artifacts={display.artifacts} /> : null}
-      {/* Not part of the final response: a failed or stopped turn has none, but may have changed files. */}
-      {changeControls && display.status !== "inProgress" && display.user?.checkpointId && display.user.changes && display.user.changes.files > 0
-        ? <TurnChangesFooter checkpointId={display.user.checkpointId} changes={display.user.changes} controls={changeControls} />
-        : null}
+      {display.finalMessages.length === 0 ? fileChanges : null}
       {steeringPending ? <SteeringActivity /> : null}
     </article>
   );
@@ -240,11 +240,12 @@ function SteeringActivity() {
   );
 }
 
-function FinalResponse({ projectId, items, artifacts, controls }: {
+function FinalResponse({ projectId, items, artifacts, controls, changes }: {
   projectId: string;
   items: Extract<ThreadItem, { type: "agentMessage" }>[];
   artifacts: ToolArtifact[];
   controls: AssistantControls;
+  changes: ReactNode;
 }) {
   const copyable = items.filter((item) => item.status === "completed" && Boolean(item.text.trim()));
   const responseId = copyable.at(-1)?.id;
@@ -254,6 +255,7 @@ function FinalResponse({ projectId, items, artifacts, controls }: {
     <div className={`assistant-response${responseId === controls.latestItemId ? " assistant-response-latest" : ""}`}>
       {items.map((item) => <TimelineItem key={item.id} item={item} />)}
       {artifacts.length > 0 ? <ArtifactPreviews projectId={projectId} artifacts={artifacts} /> : null}
+      {changes}
       {responseId ? (
         <div className="assistant-response-footer">
           <button type="button" aria-label={t("timeline.copyResponse")} title={t("common.copy")} onClick={() => controls.onCopy(responseId, text)}>
@@ -679,10 +681,10 @@ function ToolActivity({ item, completed = false }: { item: Extract<ThreadItem, {
       <Icon size={13} aria-hidden="true" />
       <span className="tool-label" title={label}>{label}</span>
       {expandable ? <ChevronRight className="tool-detail-chevron" size={12} aria-hidden="true" /> : null}
+      {item.type === "dynamicToolCall" && ["edit", "write"].includes(item.tool) && item.status === "completed" && item.lineChanges ? <ChangeCounts lines={item.lineChanges} /> : null}
       <span className="tool-result" aria-label={item.status}>
         {item.status === "failed" ? <X size={12} /> : null}
       </span>
-      {item.type === "dynamicToolCall" && ["edit", "write"].includes(item.tool) && item.status === "completed" && item.lineChanges ? <ChangeCounts lines={item.lineChanges} /> : null}
     </div>
   );
   if (!expandable) return row;

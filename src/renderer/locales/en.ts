@@ -1450,28 +1450,26 @@ const en = {
     filesChanged_one: "{{count}} file changed",
     filesChanged_other: "{{count}} files changed",
     undo: "Undo",
+    reapply: "Reapply",
+    reapplyRest: "Reapply the rest",
+    reapplyConflicts: "These files were edited after Undo:",
+    reapplied_one: "{{count}} file reapplied.",
+    reapplied_other: "{{count}} files reapplied.",
+    noLineCounts: "Line counts unavailable",
     undoRest: "Undo the rest",
     partlyUndone: "Partly undone",
-    undone: "Changes undone",
     loadingChanges: "Loading changes...",
     noChanges: "No changed files to show.",
     loadingFile: "Loading file...",
     undoChanges: "Undo changes",
-    allBack: "Every file is already back to how it was before this turn.",
-    confirm_one:
-      "The file goes back to how it was before this turn; the conversation stays as it is.",
-    confirm_other:
-      "The {{count}} files go back to how they were before this turn; the conversation stays as it is.",
     andMore: "and {{count}} more",
-    everythingListed:
-      "Everything that changed in the project during this turn is listed, also what you changed yourself.",
     renewed:
       "More files were changed in the meantime, so nothing was overwritten.",
     blockedIntro:
       "These files cannot be put back because other files are in their place:",
     conflictsIntro: "These files were changed again after this turn:",
     blockedHint:
-      "Undo the rest leaves them, and every file changed after this turn, as they are.",
+      "Continue with the other files, leaving these files and their later edits as they are.",
     conflictsHint:
       "Keep them to put back only the other files, or overwrite them and lose what was changed later.",
     keep: "Keep them",

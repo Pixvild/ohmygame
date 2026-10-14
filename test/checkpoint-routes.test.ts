@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, it } from "vitest";
-import { createApp } from "../src/daemon/app.js";
+import { createApp, type AppOptions } from "../src/daemon/app.js";
 import {
   CheckpointStore,
   checkpointDirectory,
 } from "../src/daemon/checkpoints.js";
 import {
   CHECKPOINT_ENTRY,
+  CHECKPOINT_UNDONE_ENTRY,
   TURN_END_ENTRY,
 } from "../src/daemon/checkpoint-extension.js";
 import type { ProjectState } from "../src/shared/contracts.js";
@@ -22,6 +23,25 @@ const cleanup: Array<() => unknown | Promise<unknown>> = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
+const createSession: NonNullable<AppOptions["createSession"]> = async (
+  project,
+  conversation,
+) => {
+  const session = SessionManager.open(
+    conversation.sessionPath,
+    undefined,
+    project.workspacePath,
+  );
+  return {
+    messages: [],
+    sessionManager: session,
+    prompt: async () => {},
+    abort: async () => {},
+    dispose() {},
+    subscribe: () => () => {},
+  };
+};
+
 async function fixture() {
   const directory = await mkdtemp(
     path.join(tmpdir(), "ohmygame-checkpoint-routes-"),
@@ -29,21 +49,7 @@ async function fixture() {
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
   const app = createApp({
     dataDirectory: directory,
-    createSession: async (project, conversation) => {
-      const session = SessionManager.open(
-        conversation.sessionPath,
-        undefined,
-        project.workspacePath,
-      );
-      return {
-        messages: [],
-        sessionManager: session,
-        prompt: async () => {},
-        abort: async () => {},
-        dispose() {},
-        subscribe: () => () => {},
-      };
-    },
+    createSession,
   });
   cleanup.push(() => app.close());
   const project = (
@@ -124,8 +130,8 @@ it("serves persisted and live turn diffs, undoes only files, and rejects old edi
     });
     expect(changes.statusCode, changes.body).toBe(200);
     expect(changes.json().changes).toEqual([
-      { path: "created.txt", kind: "added", state: "applied" },
-      { path: "game.txt", kind: "modified", state: "applied" },
+      { path: "created.txt", kind: "added", state: "applied", lines: { added: 1, removed: 0 } },
+      { path: "game.txt", kind: "modified", state: "applied", lines: { added: 1, removed: 1 } },
     ]);
   }
   expect(
@@ -290,7 +296,7 @@ it("preserves the restored workspace version across daemon restart", async () =>
   });
   expect(undo.statusCode, undo.body).toBe(200);
   await app.close();
-  const restarted = createApp({ dataDirectory: directory });
+  const restarted = createApp({ dataDirectory: directory, createSession });
   cleanup.push(() => restarted.close());
   const read = await restarted.inject({
     method: "GET",
@@ -341,4 +347,290 @@ it("shows binary and oversized files without unbounded text reads", async () => 
   });
   expect(large.json().after).toMatchObject({ truncated: true, binary: false });
   expect(large.json().after.content).toHaveLength(256 * 1024);
+});
+
+it("reapplies exact pre-undo contents, survives restart, and keeps the conversation and unrelated files", async () => {
+  const { checkpointId, app, directory, project, base, session } =
+    await fixture();
+  const call = (host: typeof app, action: string, payload = {}) =>
+    host.inject({
+      method: "POST",
+      url: `${base}/${checkpointId}/${action}`,
+      payload,
+    });
+  await writeFile(
+    path.join(project.workspacePath, "game.txt"),
+    "player edit after the turn",
+  );
+  await writeFile(
+    path.join(project.workspacePath, "unrelated.txt"),
+    "leave alone",
+  );
+  expect((await call(app, "undo")).statusCode).toBe(409);
+  const undo = await call(app, "undo", {
+    conflicts: "overwrite",
+    expected: ["game.txt"],
+  });
+  expect(undo.json()).toEqual({
+    changed: ["created.txt", "game.txt"],
+    conflicts: [],
+    undone: true,
+    kept: 0,
+  });
+  expect(
+    await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+  ).toBe("before");
+  await app.close();
+  const restarted = createApp({ dataDirectory: directory, createSession });
+  cleanup.push(() => restarted.close());
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const reapplied = await call(restarted, "reapply");
+    expect(reapplied.statusCode, reapplied.body).toBe(200);
+    expect(reapplied.json()).toEqual({
+      changed: ["created.txt", "game.txt"],
+      conflicts: [],
+      undone: false,
+      kept: 0,
+    });
+    expect(
+      await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+    ).toBe("player edit after the turn");
+    expect(
+      await readFile(path.join(project.workspacePath, "created.txt"), "utf8"),
+    ).toBe("new");
+    expect(
+      await readFile(path.join(project.workspacePath, "unrelated.txt"), "utf8"),
+    ).toBe("leave alone");
+    expect(await readWorkspaceNotice(project)).toContain(
+      "reapplied previously undone file changes",
+    );
+    const branch = SessionManager.open(session.getSessionFile()!).getBranch();
+    expect(branch.filter((entry) => entry.type === "message")).toHaveLength(2);
+    if (cycle === 0)
+      expect(
+        (
+          await call(restarted, "undo", {
+            conflicts: "overwrite",
+            expected: ["game.txt"],
+          })
+        ).statusCode,
+      ).toBe(200);
+  }
+  const history = (
+    await restarted.inject({
+      method: "GET",
+      url: base.slice(0, base.lastIndexOf("/checkpoints")),
+    })
+  ).json();
+  expect(
+    history.turns
+      .flatMap((turn: { items: { type: string }[] }) => turn.items)
+      .find((item: { type: string }) => item.type === "userMessage").changes,
+  ).toEqual({ files: 2 });
+});
+
+it("reapplies only undone paths, including Undo rest paths from different snapshots", async () => {
+  const { checkpointId, app, project, base } = await fixture();
+  const call = (action: string, payload = {}) =>
+    app.inject({
+      method: "POST",
+      url: `${base}/${checkpointId}/${action}`,
+      payload,
+    });
+  await writeFile(
+    path.join(project.workspacePath, "game.txt"),
+    "first player edit",
+  );
+  const partial = await call("undo", { conflicts: "keep" });
+  expect(partial.json()).toEqual({
+    changed: ["created.txt"],
+    conflicts: ["game.txt"],
+    undone: true,
+    kept: 1,
+  });
+  expect((await call("reapply")).json()).toEqual({
+    changed: ["created.txt"],
+    conflicts: [],
+    undone: false,
+    kept: 0,
+  });
+  expect(
+    await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+  ).toBe("first player edit");
+  await call("undo", { conflicts: "keep" });
+  await writeFile(
+    path.join(project.workspacePath, "game.txt"),
+    "second player edit",
+  );
+  await call("undo", { conflicts: "overwrite", expected: ["game.txt"] });
+  const result = await call("reapply");
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json()).toEqual({
+    changed: ["created.txt", "game.txt"],
+    conflicts: [],
+    undone: false,
+    kept: 0,
+  });
+  expect(
+    await readFile(path.join(project.workspacePath, "created.txt"), "utf8"),
+  ).toBe("new");
+  expect(
+    await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+  ).toBe("second player edit");
+});
+
+it("refuses Reapply without writes when files change after Undo, and renews overwrite consent", async () => {
+  const { checkpointId, app, project, base } = await fixture();
+  const call = (action: string, payload = {}) =>
+    app.inject({
+      method: "POST",
+      url: `${base}/${checkpointId}/${action}`,
+      payload,
+    });
+  await call("undo");
+  await writeFile(
+    path.join(project.workspacePath, "game.txt"),
+    "edit after Undo",
+  );
+  const version = await readWorkspaceVersion(project);
+  const refused = await call("reapply");
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().conflicts).toEqual(["game.txt"]);
+  expect(await readWorkspaceVersion(project)).toBe(version);
+  await expect(
+    readFile(path.join(project.workspacePath, "created.txt")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+  await writeFile(
+    path.join(project.workspacePath, "created.txt"),
+    "also edited",
+  );
+  expect(
+    (await call("reapply", { conflicts: "overwrite", expected: ["game.txt"] }))
+      .statusCode,
+  ).toBe(409);
+  expect(
+    await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+  ).toBe("edit after Undo");
+  await rm(path.join(project.workspacePath, "created.txt"));
+  const partial = await call("reapply", { conflicts: "keep" });
+  expect(partial.json()).toMatchObject({
+    changed: ["created.txt"],
+    conflicts: ["game.txt"],
+    undone: true,
+  });
+  expect(
+    await readFile(path.join(project.workspacePath, "created.txt"), "utf8"),
+  ).toBe("new");
+  expect(
+    await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+  ).toBe("edit after Undo");
+  const rest = await call("reapply", {
+    conflicts: "overwrite",
+    expected: ["game.txt"],
+  });
+  expect(rest.json()).toEqual({
+    changed: ["game.txt"],
+    conflicts: [],
+    undone: false,
+    kept: 0,
+  });
+  expect(
+    await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+  ).toBe("after");
+  expect((await call("reapply")).json()).toEqual({
+    changed: [],
+    conflicts: [],
+    undone: false,
+    kept: 0,
+  });
+});
+
+
+it("reapplies legacy Undo records conservatively without guessing paths edited afterward", async () => {
+  const { checkpointId, app, project, base, store, session, before, after } =
+    await fixture();
+  const undone = await store.undo(project, { before, after });
+  session.appendCustomEntry(CHECKPOINT_UNDONE_ENTRY, {
+    version: 1,
+    checkpoint: checkpointId,
+    previous: undone.previous,
+    kept: 0,
+  });
+  await writeFile(
+    path.join(project.workspacePath, "game.txt"),
+    "edit after legacy Undo",
+  );
+  const result = await app.inject({
+    method: "POST",
+    url: `${base}/${checkpointId}/reapply`,
+    payload: {},
+  });
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json()).toEqual({
+    changed: ["created.txt"],
+    conflicts: [],
+    undone: false,
+    kept: 0,
+  });
+  expect(
+    await readFile(path.join(project.workspacePath, "created.txt"), "utf8"),
+  ).toBe("new");
+  expect(
+    await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
+  ).toBe("edit after legacy Undo");
+});
+
+it("repeated Undo keeps file-folder targets consistent instead of mixing incompatible snapshots", async () => {
+  const { app, project, store, session, base } = await fixture();
+  await writeFile(path.join(project.workspacePath, "shape"), "original file");
+  const before = await store.snapshot(project);
+  const checkpointId = session.appendCustomEntry(CHECKPOINT_ENTRY, {
+    version: 1,
+    commit: before,
+  });
+  session.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "Replace file with folder" }],
+    timestamp: Date.now(),
+  });
+  await rm(path.join(project.workspacePath, "shape"));
+  await mkdir(path.join(project.workspacePath, "shape"));
+  await writeFile(
+    path.join(project.workspacePath, "shape/child"),
+    "turn child",
+  );
+  const after = await store.snapshot(project);
+  session.appendCustomEntry(TURN_END_ENTRY, {
+    version: 1,
+    checkpoint: checkpointId,
+    commit: after,
+    files: 2,
+  });
+  const call = (action: string, payload = {}) =>
+    app.inject({
+      method: "POST",
+      url: `${base}/${checkpointId}/${action}`,
+      payload,
+    });
+  expect((await call("undo")).statusCode).toBe(200);
+  await writeFile(
+    path.join(project.workspacePath, "shape"),
+    "player edit after first Undo",
+  );
+  const repeated = await call("undo", {
+    conflicts: "overwrite",
+    expected: ["shape"],
+  });
+  expect(repeated.statusCode, repeated.body).toBe(200);
+  const result = await call("reapply");
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json()).toEqual({
+    changed: ["shape"],
+    conflicts: [],
+    undone: false,
+    kept: 0,
+  });
+  expect(
+    await readFile(path.join(project.workspacePath, "shape"), "utf8"),
+  ).toBe("player edit after first Undo");
 });

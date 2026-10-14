@@ -46,6 +46,7 @@ import {
   removePendingPrompt,
   renameConversation,
   restoreCheckpoint,
+  reapplyCheckpoint,
   restoreUnfinished,
   reviseLastPrompt,
   refinePlan,
@@ -200,7 +201,7 @@ export function ProjectShell({
           void getUnfinishedRestore(projectId).then((pending) => { if (!disposed) setUnfinishedRestore(pending); }).catch(() => {});
         }
         if (event.type === "agent.completed") setWorkspaceRevision((value) => value + 1);
-        if (event.type === "workspace.undone") {
+        if (event.type === "workspace.undone" || event.type === "workspace.reapplied") {
           setUnfinishedRestore(false);
         }
         // A restored conversation lost its later messages. Undo is marked by
@@ -550,15 +551,13 @@ export function ProjectShell({
 
   const loadedConversationId = conversation?.id;
   const turnChangesDisabled = agentBusy || restoring || unfinishedRestore || publishing || state.connection !== "open";
-  const turnChanges = useMemo((): TurnChangesControls | undefined => loadedConversationId === undefined ? undefined : {
-    disabled: turnChangesDisabled,
-    load: (checkpointId) => getCheckpointChanges(projectId, loadedConversationId, checkpointId),
-    file: (checkpointId, path) => getCheckpointFile(projectId, loadedConversationId, checkpointId, path),
-    undo: async (checkpointId, conflicts, expected) => {
+  const turnChanges = useMemo((): TurnChangesControls | undefined => {
+    if (loadedConversationId === undefined) return undefined;
+    const change = (operation: typeof undoCheckpoint): TurnChangesControls["undo"] => async (checkpointId, conflicts, expected) => {
       setRestoring(true);
       try {
         await saveDesign.current?.();
-        return { status: "done", ...await undoCheckpoint(projectId, loadedConversationId, checkpointId, conflicts, expected) };
+        return { status: "done", ...await operation(projectId, loadedConversationId, checkpointId, conflicts, expected) };
       } catch (error) {
         if (error instanceof ApiError && error.status === 409 && error.conflicts) {
           return { status: "conflicts", conflicts: error.conflicts, blocked: Boolean(error.blocked) };
@@ -566,7 +565,14 @@ export function ProjectShell({
         if (leftUnfinished(error)) setUnfinishedRestore(true);
         return { status: "failed", message: errorMessage(error) };
       } finally { setRestoring(false); }
-    },
+    };
+    return {
+      disabled: turnChangesDisabled,
+      load: (checkpointId) => getCheckpointChanges(projectId, loadedConversationId, checkpointId),
+      file: (checkpointId, path) => getCheckpointFile(projectId, loadedConversationId, checkpointId, path),
+      undo: change(undoCheckpoint),
+      reapply: change(reapplyCheckpoint),
+    };
   }, [projectId, loadedConversationId, turnChangesDisabled]);
 
   async function stopAgent() {
