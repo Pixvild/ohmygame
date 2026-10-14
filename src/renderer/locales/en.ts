@@ -1440,8 +1440,6 @@ const en = {
     },
   },
   checkpoints: {
-    viewChanges: "View changes",
-    hideChanges: "Hide changes",
     showMore: "Show {{count}} more files",
     showFewer: "Show fewer files",
     lineCounts: "Lines added: {{added}}; lines removed: {{removed}}",

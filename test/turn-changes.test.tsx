@@ -110,28 +110,33 @@ describe("TurnChangesFooter", () => {
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+21-6"]);
     expect(value.load).not.toHaveBeenCalled();
     expect(value.file).not.toHaveBeenCalled();
+    expect(button("View changes")).toBeUndefined();
     await click("Show 3 more files");
     expect(texts(".turn-change-path")).toHaveLength(6);
     expect(value.load).not.toHaveBeenCalled();
     await click("Show fewer files");
-    await click("View changes");
-    expect(value.load).toHaveBeenCalledTimes(1);
+    await click(items[0].path);
+    expect(value.load).not.toHaveBeenCalled();
     expect(value.file).toHaveBeenCalledWith("checkpoint-1", items[0].path);
     expect(container.querySelector(".turn-change-diff")).not.toBeNull();
-    await click("Hide changes");
+    await click(items[0].path);
     expect(texts(".turn-change-path")).toHaveLength(3);
     expect(container.querySelector(".turn-change-diff")).toBeNull();
   });
 
-  it("keeps saved statistics after the live list and an undo refresh the workspace", async () => {
+  it("keeps saved statistics and an open diff after an undo refreshes the workspace", async () => {
     const items = [{ path: "notes.txt", kind: "modified" as const, lines: { added: 2, removed: 1 } }];
-    const value = controls({ load: vi.fn<TurnChangesControls["load"]>(async () => [{ path: "notes.txt", kind: "modified", state: "undone" }]) });
+    const value = controls();
     await render(value, { files: 1, items });
-    await click("View changes");
+    await click("notes.txt");
     expect(texts(".turn-change-row .change-counts")).toEqual(["+2-1"]);
     await render(value, { files: 1, items, undone: true }, "reloaded-turn", 1);
     expect(texts(".turn-change-row .change-counts")).toEqual(["+2-1"]);
     expect(button("Undo")).toBeUndefined();
+    expect(button("Reapply")).toBeDefined();
+    expect(container.querySelector(".turn-change-diff")).not.toBeNull();
+    expect(value.file).toHaveBeenCalledTimes(2);
+    expect(value.load).not.toHaveBeenCalled();
   });
 
   it("uses the persisted Reapply state when a conversation reload replaces a local Undo result", async () => {

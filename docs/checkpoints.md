@@ -6,9 +6,8 @@ when the run settles. A compact summary below each finished turn shows up to
 three changed paths and green/red added/removed line counts in a subtle
 bordered panel.
 Added text files show `+N -0`; the response copy button and timestamp follow
-the panel. **Show more files**
-expands the list; select a path to inspect its diff, or **View changes** to open
-the first file and the full list. Failed and
+the panel. **Show more files** expands the list; select a path to open or close
+its diff. Failed and
 cancelled turns also capture their partial file changes. If either checkpoint
 fails, the range is unavailable; a failed before checkpoint prevents inference
 and tool execution.

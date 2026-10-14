@@ -1404,8 +1404,6 @@ const zhCN: typeof en = {
     },
   },
   checkpoints: {
-    viewChanges: "查看更改",
-    hideChanges: "收起更改",
     showMore: "显示其余 {{count}} 个文件",
     showFewer: "收起文件",
     lineCounts: "新增 {{added}} 行，删除 {{removed}} 行",

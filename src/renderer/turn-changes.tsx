@@ -237,36 +237,6 @@ export function TurnChangesFooter({
     }));
   }
 
-  function viewChanges() {
-    update((current) => {
-      if (current.open)
-        return {
-          ...current,
-          open: false,
-          allFiles: false,
-          files: Object.fromEntries(
-            Object.entries(current.files).map(([path, file]) => [
-              path,
-              { ...file, open: false },
-            ]),
-          ),
-        };
-      const next = {
-        ...current,
-        open: true,
-        list: current.list?.status === "failed" ? undefined : current.list,
-      };
-      return items?.length
-        ? withFile(next, items[0].path, (file) => ({
-            ...file,
-            open: true,
-            content:
-              file.content?.status === "failed" ? undefined : file.content,
-          }))
-        : next;
-    });
-  }
-
   async function changeFiles(
     direction: FileAction,
     conflicts?: ConflictChoice,
@@ -336,18 +306,6 @@ export function TurnChangesFooter({
             onClick={() => void changeFiles("reapply")}
           >
             {t("checkpoints.reapply")}
-          </button>
-        ) : null}
-        {summary ? (
-          <button
-            className="turn-changes-view"
-            type="button"
-            aria-expanded={view.open}
-            onClick={viewChanges}
-          >
-            {t(
-              view.open ? "checkpoints.hideChanges" : "checkpoints.viewChanges",
-            )}
           </button>
         ) : null}
       </div>
