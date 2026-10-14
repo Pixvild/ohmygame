@@ -4,6 +4,51 @@ User-visible changes are collected here when maintainers prepare a release.
 Older versions are documented in
 [GitHub Releases](https://github.com/WhiteTowerAI/ohmygame/releases).
 
+## [0.0.0-beta.4.8] - 2026-10-14
+
+### Added
+
+- Community search, sorting, and time filters, creator profiles, and owner
+  controls to edit or unpublish a game.
+  ([#242](https://github.com/WhiteTowerAI/ohmygame/pull/242))
+- MiniMax H3 and H3-Max video generation with your own MiniMax China or Global
+  API key. ([#240](https://github.com/WhiteTowerAI/ohmygame/pull/240))
+- Release notes in Settings → About, available offline and shown with
+  available updates. ([#239](https://github.com/WhiteTowerAI/ohmygame/pull/239))
+- Option-drag (Alt-drag on Windows and Linux) duplicates canvas nodes.
+  ([#230](https://github.com/WhiteTowerAI/ohmygame/pull/230))
+- Image generation accepts a resolution and aspect ratio.
+  ([#244](https://github.com/WhiteTowerAI/ohmygame/pull/244))
+
+### Changed
+
+- New installations connect directly by default, and network settings are
+  simpler, with clear mode hints and unsaved-change feedback.
+  ([#238](https://github.com/WhiteTowerAI/ohmygame/pull/238))
+- Provider detail pages are reorganized, with a breadcrumb, a single connection
+  row, a compact model list, and an Advanced section.
+  ([#231](https://github.com/WhiteTowerAI/ohmygame/pull/231))
+- First-run setup selects the connected provider's recommended model, and
+  Settings and setup list providers in the same order.
+  ([#228](https://github.com/WhiteTowerAI/ohmygame/pull/228),
+  [#229](https://github.com/WhiteTowerAI/ohmygame/pull/229))
+- Back from a project returns to the page it was opened from.
+  ([#241](https://github.com/WhiteTowerAI/ohmygame/pull/241))
+- The agent runtime is updated to Pi 1.2.0, and Azure provider settings are
+  migrated automatically.
+  ([#237](https://github.com/WhiteTowerAI/ohmygame/pull/237))
+
+### Fixed
+
+- New projects show the empty preview instead of an error.
+  ([#232](https://github.com/WhiteTowerAI/ohmygame/pull/232))
+- A preview stopped while restarting no longer stays marked as ready.
+  ([#243](https://github.com/WhiteTowerAI/ohmygame/pull/243))
+- The light canvas background outside onboarding is restored.
+  ([#245](https://github.com/WhiteTowerAI/ohmygame/pull/245))
+
+**Full Changelog**: https://github.com/WhiteTowerAI/ohmygame/compare/v0.0.0-beta.4.7...v0.0.0-beta.4.8
+
 ## [0.0.0-beta.4.7] - 2026-10-13
 
 ### Added
