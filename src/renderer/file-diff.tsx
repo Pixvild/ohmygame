@@ -1,4 +1,4 @@
-import { Fragment, useMemo } from "react";
+import { Fragment, memo, useMemo } from "react";
 import { lineDiff, type DiffHunk } from "../shared/line-diff.js";
 import type { CheckpointFileView } from "../shared/contracts.js";
 import { t } from "./i18n.js";
@@ -6,7 +6,11 @@ import { t } from "./i18n.js";
 const LINE_SIGNS = { same: " ", added: "+", removed: "-" } as const;
 
 /** Shared view for tool mutations, turn changes and the Git workspace. */
-export function FileDiff({ hunks }: { hunks: DiffHunk[] }) {
+export const FileDiff = memo(function FileDiff({
+  hunks,
+}: {
+  hunks: DiffHunk[];
+}) {
   return (
     <div className="turn-change-diff">
       {hunks.map((hunk, index) => (
@@ -29,11 +33,11 @@ export function FileDiff({ hunks }: { hunks: DiffHunk[] }) {
       ))}
     </div>
   );
-}
+});
 
 export function FileComparison({
   view,
-  maxLines,
+  maxLines = 2_000,
   unchangedLabel,
 }: {
   view: CheckpointFileView;
@@ -49,18 +53,17 @@ export function FileComparison({
         : lineDiff(view.before?.content ?? "", view.after?.content ?? ""),
     [view, binary],
   );
-  let retained = 0;
-  const hunks =
-    maxLines === undefined
-      ? full
-      : full
-          .map((hunk) => {
-            const shown = hunk.slice(0, Math.max(0, maxLines - retained));
-            retained += hunk.length;
-            return shown;
-          })
-          .filter((hunk) => hunk.length);
-  const clipped = maxLines !== undefined && retained > maxLines;
+  const { hunks, clipped } = useMemo(() => {
+    let retained = 0;
+    const hunks = full
+      .map((hunk) => {
+        const shown = hunk.slice(0, Math.max(0, maxLines - retained));
+        retained += hunk.length;
+        return shown;
+      })
+      .filter((hunk) => hunk.length);
+    return { hunks, clipped: retained > maxLines };
+  }, [full, maxLines]);
   if (binary)
     return <p className="turn-changes-note">{t("checkpoints.binary")}</p>;
   return (

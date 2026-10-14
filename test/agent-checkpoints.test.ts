@@ -2,6 +2,7 @@ import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -19,6 +20,10 @@ import {
   checkpointDirectory,
 } from "../src/daemon/checkpoints.js";
 import { ConversationManager } from "../src/daemon/conversations.js";
+import {
+  ArtifactBuilder,
+  PublishError,
+} from "../src/daemon/publish/archive.js";
 import { ProjectWrites } from "../src/daemon/project-writes.js";
 import { RuntimeEventBus } from "../src/shared/events.js";
 import type {
@@ -401,6 +406,141 @@ async function studio(steps: Step[], type = "web-game") {
 }
 
 describe("Agent checkpoints", () => {
+  it("keeps a turn marked as undone while an edited message runs", async () => {
+    const { app, base, userMessages, send, ended, undo } = await studio([
+      { write: { "notes.txt": "first" } },
+      { say: "Wrote the notes." },
+      { say: "Said something." },
+      { hang: true },
+    ]);
+    await send("Write the notes");
+    const first = await ended("Write the notes");
+    await send("Say something");
+    await ended("Say something");
+    expect((await undo(first.checkpointId!)).statusCode).toBe(200);
+
+    const revised = await app.inject({
+      method: "POST",
+      url: `${base}/revise-last`,
+      payload: { prompt: "Say something else" },
+    });
+    expect(revised.statusCode, revised.body).toBe(202);
+    // The mark is written again when the edited message starts, which is after its run started.
+    await vi.waitFor(
+      async () =>
+        expect((await userMessages()).map((message) => message.text)).toEqual([
+          "Write the notes",
+          "Say something else",
+        ]),
+      { timeout: 10_000 },
+    );
+    expect((await userMessages())[0]!.changes).toMatchObject({
+      files: 1,
+      undone: true,
+    });
+  });
+
+  it("keeps the turns before an edited message that fails before it starts", async () => {
+    const {
+      app,
+      start,
+      base,
+      detail,
+      userMessages,
+      send,
+      file,
+      idle,
+      ended,
+      undo,
+    } = await studio([
+      { write: { "notes.txt": "first" } },
+      { say: "Wrote the notes.", delayMs: 800 },
+      { say: "Said something." },
+    ]);
+    await send("Write the notes");
+    await vi.waitFor(
+      async () => expect(await file("notes.txt")).toBe("first"),
+      { timeout: 15_000 },
+    );
+    // Queued behind the running turn, so the ends of both turns are written after this message.
+    expect((await send("Say something")).queued).toBe(true);
+    await idle(2);
+    const first = await ended("Write the notes");
+
+    // The model can no longer be used, so the edited message fails before it starts.
+    vi.spyOn(ModelRuntime.prototype, "hasConfiguredAuth").mockReturnValue(
+      false,
+    );
+    vi.spyOn(ModelRuntime.prototype, "checkAuth").mockResolvedValue(
+      undefined as never,
+    );
+    const revised = await app.inject({
+      method: "POST",
+      url: `${base}/revise-last`,
+      payload: { prompt: "Say something else" },
+    });
+    expect(revised.statusCode, revised.body).toBe(202);
+    await vi.waitFor(
+      async () => expect((await detail()).agent.status).toBe("error"),
+      { timeout: 10_000 },
+    );
+    vi.restoreAllMocks();
+
+    // The edit holds, and the first turn can still be shown and undone.
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await userMessages()).map((message) => [
+            message.text,
+            message.changes?.files,
+          ]),
+        ).toEqual([["Write the notes", 1]]),
+      { timeout: 10_000 },
+    );
+    expect((await undo(first.checkpointId!)).json()).toMatchObject({
+      changed: ["notes.txt"],
+      conflicts: [],
+    });
+    await app.close();
+    expect(
+      (await userMessages(start())).map((message) => message.changes),
+    ).toMatchObject([{ files: 1, undone: true }]);
+  });
+
+  it("restores to before a message that was the last thing saved when the app quit", async () => {
+    const { app, start, project, userMessages, send, missing, restore } =
+      await studio([{ hang: true }]);
+    await send("Write the notes");
+    const folder = path.join(
+      project.storagePath ?? path.dirname(project.workspacePath),
+      "session",
+    );
+    let saved = "";
+    await vi.waitFor(
+      async () => {
+        const [name] = await readdir(folder);
+        saved = await readFile(path.join(folder, name!), "utf8");
+        expect(saved).toContain('"role":"user"');
+      },
+      { timeout: 10_000 },
+    );
+    const [name] = await readdir(folder);
+    await app.close();
+    // As the app left it when it was killed while the model answered: the message is the last entry.
+    await writeFile(path.join(folder, name!), saved);
+
+    const restarted = start();
+    const [message] = await userMessages(restarted);
+    await writeFile(path.join(project.workspacePath, "later.txt"), "later");
+    const restored = await restore(message!.checkpointId!, restarted);
+    expect(restored.statusCode, restored.body).toBe(204);
+    expect(await missing("later.txt")).toBe(true);
+    expect(await userMessages(restarted)).toEqual([]);
+    // The message is gone from what is saved too.
+    await restarted.close();
+    expect(await userMessages(start())).toEqual([]);
+  });
+
   it.each(["undo", "restore"] as const)(
     "publishes %s refresh events only after unlocking the workspace",
     async (kind) => {
@@ -819,15 +959,33 @@ describe("Agent turn changes", () => {
     const first = await ended("Write the notes");
     await send("Change the notes");
     const second = await ended("Change the notes");
-    expect(first.changes).toEqual({ files: 3, items: [
-      { path: "notes.txt", kind: "added", lines: { added: 1, removed: 0 } },
-      { path: "old.txt", kind: "removed", lines: { added: 0, removed: 1 } },
-      { path: "player.txt", kind: "modified", lines: { added: 1, removed: 1 } },
-    ] });
-    expect(second.changes).toEqual({ files: 2, items: [
-      { path: "extra/added.txt", kind: "added", lines: { added: 1, removed: 0 } },
-      { path: "notes.txt", kind: "modified", lines: { added: 1, removed: 1 } },
-    ] });
+    expect(first.changes).toEqual({
+      files: 3,
+      items: [
+        { path: "notes.txt", kind: "added", lines: { added: 1, removed: 0 } },
+        { path: "old.txt", kind: "removed", lines: { added: 0, removed: 1 } },
+        {
+          path: "player.txt",
+          kind: "modified",
+          lines: { added: 1, removed: 1 },
+        },
+      ],
+    });
+    expect(second.changes).toEqual({
+      files: 2,
+      items: [
+        {
+          path: "extra/added.txt",
+          kind: "added",
+          lines: { added: 1, removed: 0 },
+        },
+        {
+          path: "notes.txt",
+          kind: "modified",
+          lines: { added: 1, removed: 1 },
+        },
+      ],
+    });
 
     // Each turn lists its own files only. The second turn changed the notes again after the first one.
     expect(await changes(first.checkpointId!)).toMatchObject([
@@ -926,10 +1084,9 @@ describe("Agent turn changes", () => {
       changed: ["notes.txt"],
       conflicts: [],
     });
-    expect((await userMessages()).map((message) => message.changes)).toMatchObject([
-      { files: 1, undone: true },
-      { files: 1 },
-    ]);
+    expect(
+      (await userMessages()).map((message) => message.changes),
+    ).toMatchObject([{ files: 1, undone: true }, { files: 1 }]);
 
     // The edit takes the entries after the last message away, the one that says the first turn was undone among them. The files stay.
     const revised = await app.inject({
@@ -1304,7 +1461,9 @@ describe("Agent turn changes", () => {
       "notes.txt": "changed",
       "other.txt": "undone",
     });
-    expect((await undo(turn.checkpointId!, ["notes.txt"])).json()).toMatchObject({
+    expect(
+      (await undo(turn.checkpointId!, ["notes.txt"])).json(),
+    ).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -1642,7 +1801,9 @@ describe("Agent turn changes", () => {
       undone: true,
       kept: 1,
     });
-    expect((await undo(turn.checkpointId!, ["notes.txt"])).json()).toMatchObject({
+    expect(
+      (await undo(turn.checkpointId!, ["notes.txt"])).json(),
+    ).toMatchObject({
       changed: ["notes.txt"],
       conflicts: [],
     });
@@ -2199,6 +2360,62 @@ describe("The end of a turn", () => {
       changes: [{ path: "notes.txt", kind: "added", state: "applied" }],
     });
   });
+
+  it.each(["publish", "interactive-story/build"] as const)(
+    "waits for turn closure before tracking a %s request as an active workspace write",
+    async (route) => {
+      const { app, project, send, ended } = await studio(
+        turn(),
+        "interactive-story",
+      );
+      const reached = gate();
+      const released = gate();
+      cleanup.push(async () => released.open());
+      const snapshot = ProjectWrites.prototype.snapshot;
+      let calls = 0;
+      vi.spyOn(ProjectWrites.prototype, "snapshot").mockImplementation(
+        async function (
+          this: ProjectWrites,
+          ...args: Parameters<typeof snapshot>
+        ) {
+          if (++calls === 2) {
+            reached.open();
+            await released.opened;
+          }
+          return snapshot.apply(this, args);
+        },
+      );
+      const artifact = vi
+        .spyOn(
+          ArtifactBuilder.prototype,
+          route === "publish" ? "create" : "buildInteractiveStory",
+        )
+        .mockRejectedValue(new PublishError("Fixture build stopped", 422));
+      await send("Write the notes");
+      await reached.opened;
+      const enter = vi.spyOn(ProjectWrites.prototype, "enter");
+      const closing = vi.spyOn(AgentManager.prototype, "turnsClosed");
+      const request = app
+        .inject({
+          method: "POST",
+          url: `/projects/${project.id}/${route}`,
+          ...(route === "publish"
+            ? { payload: { title: "Fixture", accessToken: "fixture" } }
+            : {}),
+        })
+        .then((response) => response);
+      await vi.waitFor(() => expect(closing).toHaveBeenCalled());
+      expect(enter).not.toHaveBeenCalled();
+      expect(artifact).not.toHaveBeenCalled();
+      released.open();
+      const response = await request;
+      expect(response.statusCode, response.body).toBe(422);
+      expect(artifact).toHaveBeenCalledTimes(1);
+      expect((await ended("Write the notes")).changes).toMatchObject({
+        files: 1,
+      });
+    },
+  );
 
   it("deletes a project whose turn is being closed once that is done", async () => {
     const { app, project, send } = await studio(turn());

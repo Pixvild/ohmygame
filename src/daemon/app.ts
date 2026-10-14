@@ -31,7 +31,7 @@ import { PUBLISH_GAME_TITLE_MAX_LENGTH } from "../shared/publish-v1.js";
 import { clampReasoningLevel, parseReasoningLevel, supportedReasoningLevels } from "../shared/reasoning.js";
 import { matchesBearerToken } from "./access.js";
 import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
-import { TURN_END_ENTRY } from "./checkpoint-extension.js";
+import { CHECKPOINT_UNDONE_ENTRY, TURN_END_ENTRY } from "./checkpoint-extension.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
 import { ConversationImageStore } from "./conversation-images.js";
@@ -2529,7 +2529,7 @@ export function createApp(options: AppOptions = {}) {
       const activePlanState = agents.planState(conversation);
       // The end of an earlier turn is kept whatever its time: it is written when a run is over, in the very
       // millisecond in which a message that waited for that starts the next run.
-      const before = (entry: SessionEntry) => !currentRun || entry.timestamp < currentRun.timestamp || (entry.type === "custom" && entry.customType === TURN_END_ENTRY);
+      const before = (entry: SessionEntry) => !currentRun || entry.timestamp < currentRun.timestamp || (entry.type === "custom" && (entry.customType === TURN_END_ENTRY || entry.customType === CHECKPOINT_UNDONE_ENTRY));
       const loadedItems = [
         ...conversationItems(branch.filter(before), !currentRun),
         // A reset must be a complete snapshot. Replaying from the active turn's
@@ -3034,7 +3034,6 @@ export function createApp(options: AppOptions = {}) {
       if (!localPublisher && request.body.accessToken === LOCAL_DEBUG_ACCESS_TOKEN) {
         return reply.code(401).send({ error: "Local debug sign-in is unavailable outside local development" });
       }
-      await agents.turnsClosed(project.id);
       if (agents.isProjectBusy(project.id)) {
         return reply.code(409).send({ error: "Wait for the agent to finish before publishing" });
       }
@@ -3073,7 +3072,6 @@ export function createApp(options: AppOptions = {}) {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
     if (project.type !== "interactive-story") return reply.code(409).send({ error: "Build requires an Interactive Story project" });
-    await agents.turnsClosed(project.id);
     if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before building" });
     if (publishing.has(project.id)) return reply.code(409).send({ error: "Project is already being published" });
     try {

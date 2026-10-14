@@ -310,20 +310,33 @@ export class CheckpointStore {
   }
 
   /** Immutable, bounded text statistics for the end-of-turn summary. */
-  async summarize(project: CheckpointProject, from: string, to: string): Promise<TurnChanges> {
+  async summarize(
+    project: CheckpointProject,
+    from: string,
+    to: string,
+  ): Promise<TurnChanges> {
     const items = [];
     const text = async (commit: string, filePath: string) => {
       try {
-        return changeText(await this.read(project, commit, filePath, MAX_CHANGE_BYTES));
+        return changeText(
+          await this.read(project, commit, filePath, MAX_CHANGE_BYTES),
+        );
       } catch (cause) {
         if (cause instanceof CheckpointFileTooLargeError) return undefined;
         throw cause;
       }
     };
     for (const change of await this.diff(project, from, to)) {
-      const before = change.kind === "added" ? "" : await text(from, change.path);
-      const after = change.kind === "removed" ? "" : await text(to, change.path);
-      items.push({ ...change, ...(before !== undefined && after !== undefined ? { lines: countLineChanges(before, after) } : {}) });
+      const before =
+        change.kind === "added" ? "" : await text(from, change.path);
+      const after =
+        change.kind === "removed" ? "" : await text(to, change.path);
+      items.push({
+        ...change,
+        ...(before !== undefined && after !== undefined
+          ? { lines: countLineChanges(before, after) }
+          : {}),
+      });
     }
     return { files: items.length, items };
   }

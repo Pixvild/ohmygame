@@ -87,7 +87,8 @@ async function render(
 
 const button = (name: string) =>
   [...container.querySelectorAll("button")].find(
-    (candidate) => (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
+    (candidate) =>
+      (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
   );
 const buttons = () =>
   [...container.querySelectorAll("button:not(.turn-change-row)")].map(
@@ -101,14 +102,21 @@ const texts = (selector: string) =>
 
 describe("TurnChangesFooter", () => {
   it("starts folded with saved counts and reveals files and Undo only when opened", async () => {
-    const items: CheckpointChangeItem[] = Array.from({ length: 6 }, (_, index) => ({
-      path: `src/file-${index}.ts`, kind: "modified", lines: { added: index + 1, removed: 1 },
-    }));
+    const items: CheckpointChangeItem[] = Array.from(
+      { length: 6 },
+      (_, index) => ({
+        path: `src/file-${index}.ts`,
+        kind: "modified",
+        lines: { added: index + 1, removed: 1 },
+      }),
+    );
     const value = controls({ load: vi.fn(async () => items) });
     await render(value, { files: 6, items });
     expect(container.querySelector(".turn-changes-list")).toBeNull();
     expect(button("Undo")).toBeUndefined();
-    expect(button("6 files changed")!.getAttribute("aria-expanded")).toBe("false");
+    expect(button("6 files changed")!.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     expect(button("6 files changed")!.querySelector("svg")).not.toBeNull();
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+21-6"]);
     expect(value.load).not.toHaveBeenCalled();
@@ -117,15 +125,22 @@ describe("TurnChangesFooter", () => {
     await click("6 files changed");
     expect(texts(".turn-change-path")).toHaveLength(6);
     expect(value.load).toHaveBeenCalledTimes(1);
-    expect(container.querySelector(".turn-changes-summary .turn-changes-undo")).toBeNull();
-    expect(container.querySelector(".turn-changes-controls")!.textContent).toBe("Undo");
+    expect(
+      container.querySelector(".turn-changes-summary .turn-changes-undo"),
+    ).toBeNull();
+    expect(container.querySelector(".turn-changes-controls")!.textContent).toBe(
+      "Undo",
+    );
     await act(async () =>
-      container.querySelector<HTMLElement>(".turn-change-row .change-count-added")!.click(),
+      container
+        .querySelector<HTMLElement>(".turn-change-row .change-count-added")!
+        .click(),
     );
     expect(value.file).toHaveBeenCalledWith("checkpoint-1", items[0].path);
     expect(container.querySelector(".turn-change-diff")).not.toBeNull();
     await act(async () =>
-      container.querySelector(".turn-change-row .turn-change-chevron")!
+      container
+        .querySelector(".turn-change-row .turn-change-chevron")!
         .dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     expect(texts(".turn-change-path")).toHaveLength(6);
@@ -147,7 +162,9 @@ describe("TurnChangesFooter", () => {
     await act(async () => root.render(null));
     await render(value, { files: 2, items, undone: true }, "stored-turn");
 
-    expect(button("2 files changed")!.getAttribute("aria-expanded")).toBe("false");
+    expect(button("2 files changed")!.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+12-0"]);
     expect(container.querySelector(".turn-changes-list")).toBeNull();
     expect(button("Reapply")).toBeUndefined();
@@ -163,10 +180,16 @@ describe("TurnChangesFooter", () => {
     ];
     let finish!: (items: CheckpointChangeItem[]) => void;
     const value = controls({
-      load: vi.fn<TurnChangesControls["load"]>()
+      load: vi
+        .fn<TurnChangesControls["load"]>()
         .mockResolvedValueOnce(items)
         .mockResolvedValueOnce(items)
-        .mockImplementation(() => new Promise((resolve) => { finish = resolve; })),
+        .mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            }),
+        ),
     });
     await render(value, { files: 1 });
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
@@ -174,7 +197,9 @@ describe("TurnChangesFooter", () => {
     await act(async () => root.render(null));
     await render(value, { files: 1 }, "stored-turn");
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
-    expect(button("1 file changed")!.getAttribute("aria-expanded")).toBe("false");
+    expect(button("1 file changed")!.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     expect(value.load).toHaveBeenCalledTimes(2);
     await render(value, { files: 1, undone: true }, "stored-turn", 1);
     expect(value.load).toHaveBeenCalledTimes(2);
@@ -183,13 +208,50 @@ describe("TurnChangesFooter", () => {
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
     expect(texts(".turn-change-row .change-counts")).toEqual(["+2-1"]);
     expect(button("Reapply")).toBeDefined();
-    await act(async () => finish(items.map((item) => ({ ...item, state: "undone" }))));
+    await act(async () =>
+      finish(items.map((item) => ({ ...item, state: "undone" }))),
+    );
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
     expect(value.file).not.toHaveBeenCalled();
   });
 
+  it("caps a large file diff without reducing the saved counts", async () => {
+    const lines = 5_000;
+    const value = controls({
+      load: vi.fn(async () => [{ path: "large.txt", kind: "added" as const }]),
+      file: vi.fn(async () => ({
+        path: "large.txt",
+        before: null,
+        after: { binary: false, content: "line\n".repeat(lines) },
+      })),
+    });
+    await render(value, {
+      files: 1,
+      items: [
+        {
+          path: "large.txt",
+          kind: "added",
+          lines: { added: lines, removed: 0 },
+        },
+      ],
+    });
+    await click("1 file changed");
+    await click("large.txt");
+    expect(container.querySelectorAll(".turn-change-line")).toHaveLength(2_000);
+    expect(texts(".turn-changes-note")).toContain(
+      "Only part of this diff is shown.",
+    );
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+5000-0"]);
+  });
+
   it("keeps saved statistics and an open diff after an undo refreshes the workspace", async () => {
-    const items = [{ path: "notes.txt", kind: "modified" as const, lines: { added: 2, removed: 1 } }];
+    const items = [
+      {
+        path: "notes.txt",
+        kind: "modified" as const,
+        lines: { added: 2, removed: 1 },
+      },
+    ];
     const value = controls({ load: vi.fn(async () => items) });
     await render(value, { files: 1, items });
     await click("1 file changed");
@@ -200,7 +262,7 @@ describe("TurnChangesFooter", () => {
     expect(button("Undo")).toBeUndefined();
     expect(button("Reapply")).toBeDefined();
     expect(container.querySelector(".turn-change-diff")).not.toBeNull();
-    expect(value.file).toHaveBeenCalledTimes(2);
+    expect(value.file).toHaveBeenCalledTimes(1);
     expect(value.load).toHaveBeenCalledTimes(2);
   });
 
@@ -833,7 +895,11 @@ describe("TurnChangesFooter", () => {
     expect(button("Reapply")).toBeDefined();
     expect(button("Undo the rest")).toBeDefined();
     await click("Undo the rest");
-    expect(value.undo).toHaveBeenCalledWith("checkpoint-1", undefined, undefined);
+    expect(value.undo).toHaveBeenCalledWith(
+      "checkpoint-1",
+      undefined,
+      undefined,
+    );
   });
 
   it("loads what it shows again when the workspace changed, and keeps the rest", async () => {
@@ -881,8 +947,8 @@ describe("TurnChangesFooter", () => {
       "Already put back",
       "Already put back",
     ]);
-    // The file that was open is read again and stays open.
-    expect(value.file).toHaveBeenCalledTimes(2);
+    // Its immutable diff stays cached and open while the current path state refreshes.
+    expect(value.file).toHaveBeenCalledTimes(1);
     expect(button("assets/hero.png")!.getAttribute("aria-expanded")).toBe(
       "true",
     );

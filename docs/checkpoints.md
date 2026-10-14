@@ -10,9 +10,10 @@ file list and reveal **Undo** / **Reapply** below it. Long lists scroll within
 close its diff. Hover and keyboard focus highlight the whole row.
 Added text files show `+N -0`; the response copy button and timestamp follow
 the panel. Failed and cancelled turns also capture their partial file changes.
-If either checkpoint
-fails, the range is unavailable; a failed before checkpoint prevents inference
+If either checkpoint fails, the range is unavailable; a failed before checkpoint prevents inference
 and tool execution.
+
+![Turn file changes and an expanded diff](assets/turn-changes.webp)
 
 Tool groups expand into an internally scrolling list capped at 280px. Successful
 `edit` and `write` calls show their own line counts immediately after the tool
@@ -62,6 +63,8 @@ turn's before checkpoint and uses the same keep/explicit overwrite choices if
 files changed after Undo. Keeping Reapply conflicts leaves those paths available
 for a later attempt; paths already at their target are cleared without writes.
 
+![Undo conflicts after a later edit](assets/turn-undo-conflict.webp)
+
 **Restore to before this message** independently restores the whole workspace and
 rewinds only the selected conversation to before that message. This action
 requires confirmation. Editing a message always preserves the workspace.
@@ -92,6 +95,9 @@ an operation rolls back when possible rather than silently overwriting them.
 
 ## Storage and file scope
 
+The store currently retains all snapshots without garbage collection; file modes
+retain only whether a file is executable.
+
 The daemon stores Git-compatible objects in the project's storage directory at
 `checkpoints/`, outside its workspace. The workspace does not need Git; its
 `.git`, branches, index, and `.gitignore` are untouched. This is internal snapshot
@@ -112,7 +118,10 @@ edited after a legacy Undo cannot be reliably identified and are left alone.
 
 The Diff lists binary and large files, but text preview is limited to UTF-8 files
 without NUL bytes and up to 256 KiB per side, with a truncation notice. The limit is enforced while
-decompressing stored blobs. File Undo still works for these files.
+decompressing stored blobs. Chat diff views render at most 2,000 lines; truncation
+does not reduce saved line counts. Immutable previews remain cached when the
+workspace changes; only current path states refresh. File Undo still works for
+these files.
 
 ## Interrupted restoration
 

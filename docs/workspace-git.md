@@ -13,6 +13,8 @@ an addition. Untracked files honor Git's ignore rules. The path filter applies
 to both explorer views. Switching back to Files preserves the selected source
 file; an explicit request to open a source file also switches back to Files.
 
+![Read-only Git changes in Code](assets/workspace-git.webp)
+
 The list refreshes when Code opens, when Changes opens, after an agent turn,
 after Undo/Reapply, and after file operations in the explorer. **Refresh Git
 changes** picks up external edits and commits. There is no continuous background

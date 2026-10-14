@@ -120,7 +120,8 @@ export function TurnChangesViews({
   useEffect(() => {
     if (revision.current === workspaceRevision) return;
     revision.current = workspaceRevision;
-    // What was loaded says how the files stood before, so it is dropped; what is open loads again.
+    // Only current path states expire. The before/after diffs and summaries
+    // belong to immutable checkpoints, so keep them across workspace changes.
     setViews((current) =>
       Object.fromEntries(
         Object.entries(current).map(([checkpointId, view]) => [
@@ -128,12 +129,6 @@ export function TurnChangesViews({
           {
             ...view,
             list: undefined,
-            files: Object.fromEntries(
-              Object.entries(view.files).map(([path, file]) => [
-                path,
-                { open: file.open },
-              ]),
-            ),
           },
         ]),
       ),
@@ -205,11 +200,12 @@ export function TurnChangesFooter({
   const undone = view.result?.undone ?? Boolean(changes.undone);
   const kept = view.result?.kept ?? changes.kept ?? 0;
   const appliedAgain = listed?.every((item) => item.state === "applied");
-  const offer = !undone || appliedAgain
-    ? "undo"
-    : kept || listed?.some((item) => item.state === "applied")
-      ? "undoRest"
-      : undefined;
+  const offer =
+    !undone || appliedAgain
+      ? "undo"
+      : kept || listed?.some((item) => item.state === "applied")
+        ? "undoRest"
+        : undefined;
 
   useEffect(() => {
     update((current) =>
@@ -243,7 +239,15 @@ export function TurnChangesFooter({
         };
       }),
     );
-  }, [checkpointId, view.open, view.list, summary, changes.items, load, update]);
+  }, [
+    checkpointId,
+    view.open,
+    view.list,
+    summary,
+    changes.items,
+    load,
+    update,
+  ]);
 
   function toggleList() {
     // A list that failed to load is asked for again when it is reopened.
@@ -304,7 +308,9 @@ export function TurnChangesFooter({
       {view.open ? (
         <div id={detailsId}>
           {!items && (!view.list || view.list.status === "loading") ? (
-            <p className="turn-changes-note">{t("checkpoints.loadingChanges")}</p>
+            <p className="turn-changes-note">
+              {t("checkpoints.loadingChanges")}
+            </p>
           ) : view.list?.status === "failed" ? (
             <p className="turn-changes-error" role="alert">
               {view.list.message}

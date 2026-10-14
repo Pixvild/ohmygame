@@ -74,7 +74,11 @@ export function parseStoredTurnEnd(value: unknown): StoredTurnEnd | undefined {
         checkpoint: data.checkpoint,
         commit: data.commit,
         files: data.files,
-        ...(Array.isArray(data.items) && data.items.length === data.files && data.items.every(isChangeItem) ? { items: data.items } : {}),
+        ...(Array.isArray(data.items) &&
+        data.items.length === data.files &&
+        data.items.every(isChangeItem)
+          ? { items: data.items }
+          : {}),
       }
     : undefined;
 }
@@ -147,9 +151,12 @@ function isCount(value: unknown): value is number {
 function isChangeItem(value: unknown): value is CheckpointChangeItem {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<CheckpointChangeItem>;
-  return typeof item.path === "string" &&
+  return (
+    typeof item.path === "string" &&
     ["added", "modified", "removed"].includes(item.kind ?? "") &&
-    (item.lines === undefined || (isCount(item.lines?.added) && isCount(item.lines?.removed)));
+    (item.lines === undefined ||
+      (isCount(item.lines?.added) && isCount(item.lines?.removed)))
+  );
 }
 
 /**

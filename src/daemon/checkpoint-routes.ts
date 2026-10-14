@@ -98,6 +98,10 @@ export function registerCheckpointRoutes(
           );
         return;
       }
+      // Wait before entering the drain set: a closing turn's snapshot needs
+      // this set empty, while publish/build need that snapshot to finish.
+      if (/\/(?:publish|interactive-story\/build)(?:\?|$)/.test(request.url))
+        await agents.turnsClosed(id);
       writes.track(
         request,
         writes.enter(
@@ -460,11 +464,13 @@ export function registerCheckpointRoutes(
                   for (const file of pending.keys()) {
                     if (!kept.includes(file)) pending.delete(file);
                   }
-                else
-                  for (const file of result.changed)
-                    pending.set(file, result.previous);
+                // AgentManager owns Undo target accumulation; Reapply alone
+                // removes targets that were restored or already matched.
                 let remaining = 0;
-                if (pending.size) {
+                if (
+                  pending.size ||
+                  (direction === "undo" && result.changed.length)
+                ) {
                   const turnPaths = new Set(
                     (await store.diff(project, range.before, range.after)).map(
                       (file) => file.path,
@@ -481,7 +487,9 @@ export function registerCheckpointRoutes(
                 return {
                   ...result,
                   kept: remaining,
-                  reapply: Object.fromEntries(pending),
+                  ...(direction === "reapply"
+                    ? { reapply: Object.fromEntries(pending) }
+                    : {}),
                   conflicts: kept,
                 };
               };

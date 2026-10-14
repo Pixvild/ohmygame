@@ -1515,7 +1515,7 @@ const en = {
     kept_other: "{{count}} files were left as they are.",
     restoreToMessage: "Restore to before this message",
     restoreConfirm:
-      "Restore the project to before this message?\n\nEvery file change made since then, including your own, and the messages after it will be removed.",
+      "Restore the project to before this message?\n\nEvery file change made since then, including your own, and this message and the messages after it will be removed.",
     unfinished: {
       interrupted:
         "Putting files back was interrupted, so the project's files may be partly changed.",

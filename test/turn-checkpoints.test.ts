@@ -308,7 +308,11 @@ it("projects real edit/write diffs before the turn ends and restores them from d
       files: 2,
       items: [
         { path: "notes.txt", kind: "added", lines: { added: 2, removed: 0 } },
-        { path: "src/render.ts", kind: "modified", lines: { added: 3, removed: 2 } },
+        {
+          path: "src/render.ts",
+          kind: "modified",
+          lines: { added: 3, removed: 2 },
+        },
       ],
     },
   });

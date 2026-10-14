@@ -130,8 +130,18 @@ it("serves persisted and live turn diffs, undoes only files, and rejects old edi
     });
     expect(changes.statusCode, changes.body).toBe(200);
     expect(changes.json().changes).toEqual([
-      { path: "created.txt", kind: "added", state: "applied", lines: { added: 1, removed: 0 } },
-      { path: "game.txt", kind: "modified", state: "applied", lines: { added: 1, removed: 1 } },
+      {
+        path: "created.txt",
+        kind: "added",
+        state: "applied",
+        lines: { added: 1, removed: 0 },
+      },
+      {
+        path: "game.txt",
+        kind: "modified",
+        state: "applied",
+        lines: { added: 1, removed: 1 },
+      },
     ]);
   }
   expect(
@@ -544,7 +554,6 @@ it("refuses Reapply without writes when files change after Undo, and renews over
     kept: 0,
   });
 });
-
 
 it("reapplies legacy Undo records conservatively without guessing paths edited afterward", async () => {
   const { checkpointId, app, project, base, store, session, before, after } =

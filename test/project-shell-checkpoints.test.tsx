@@ -220,7 +220,8 @@ const settle = () =>
   });
 const button = (name: string) =>
   [...container.querySelectorAll("button")].find(
-    (candidate) => (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
+    (candidate) =>
+      (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
   );
 const buttons = () =>
   [...container.querySelectorAll("button")].map(
@@ -261,10 +262,7 @@ describe("checkpoints in the project shell", () => {
         .length;
 
     await click("2 files changed");
-    expect(texts(".turn-change-row")).toEqual([
-      "a.js—Changed later",
-      "b.js—",
-    ]);
+    expect(texts(".turn-change-row")).toEqual(["a.js—Changed later", "b.js—"]);
 
     await click("Undo");
     expect(texts(".turn-changes-conflicts li")).toEqual(["a.js"]);
@@ -309,7 +307,12 @@ describe("checkpoints in the project shell", () => {
     // updates every editor and the open list once, after the lock is released.
     expect(asked("/projects/project/files")).toBe(fileLists);
     expect(asked(`${BASE}/changes`)).toBe(changeLists);
-    await act(async () => daemon.send(2, "workspace.restored", { version: "restored", changed: ["a.js"] }));
+    await act(async () =>
+      daemon.send(2, "workspace.restored", {
+        version: "restored",
+        changed: ["a.js"],
+      }),
+    );
     await settle();
     expect(asked("/projects/project/files")).toBeGreaterThan(fileLists);
     expect(asked(`${BASE}/changes`)).toBe(changeLists + 1);
@@ -456,9 +459,12 @@ describe("checkpoints in the project shell", () => {
     const daemon = await openProject(() => undefined);
     await click("2 files changed");
     const loads = () =>
-      daemon.requests.filter((request) =>
-        request.route === "/projects/project/conversations/conversation" ||
-        request.route.startsWith("/projects/project/conversations/conversation?"),
+      daemon.requests.filter(
+        (request) =>
+          request.route === "/projects/project/conversations/conversation" ||
+          request.route.startsWith(
+            "/projects/project/conversations/conversation?",
+          ),
       ).length;
     const before = loads();
 
@@ -471,7 +477,12 @@ describe("checkpoints in the project shell", () => {
         "another",
       ),
     );
-    await act(async () => daemon.send(2, "workspace.restored", { version: "restored", changed: [] }));
+    await act(async () =>
+      daemon.send(2, "workspace.restored", {
+        version: "restored",
+        changed: [],
+      }),
+    );
     await settle();
 
     expect(loads()).toBe(before);
@@ -540,10 +551,7 @@ describe("checkpoints in the project shell", () => {
     );
     await settle();
 
-    expect(texts(".turn-change-row")).toEqual([
-      "a.js—Changed later",
-      "b.js—",
-    ]);
+    expect(texts(".turn-change-row")).toEqual(["a.js—Changed later", "b.js—"]);
     expect(
       daemon.requests.filter((request) => request.route === `${BASE}/changes`),
     ).toHaveLength(2);
@@ -921,7 +929,12 @@ describe("checkpoints in the project shell", () => {
     );
     expect(container.querySelector(".unfinished-restore")).not.toBeNull();
 
-    await act(async () => daemon.send(1, "workspace.restored", { version: "restored", changed: [] }));
+    await act(async () =>
+      daemon.send(1, "workspace.restored", {
+        version: "restored",
+        changed: [],
+      }),
+    );
     await settle();
     expect(container.querySelector(".unfinished-restore")).toBeNull();
   });

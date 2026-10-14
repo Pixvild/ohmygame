@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { lineDiff, type DiffLine } from "../src/shared/line-diff.js";
+import {
+  countLineChanges,
+  lineDiff,
+  type DiffLine,
+} from "../src/shared/line-diff.js";
 
 describe("lineDiff", () => {
   it("gives no hunks for identical texts", () => {
@@ -139,6 +143,43 @@ describe("lineDiff", () => {
         { kind: "added", text: "", after: 2 },
       ],
     ]);
+  });
+
+  it("finds a few changes far apart in a long file", () => {
+    const before = numbered(3_000);
+    const after = before.map((line, index) =>
+      index === 100 || index === 2_500 ? `${line}!` : line,
+    );
+    const result = lineDiff(text(before), text(after));
+
+    expect(countLineChanges(text(before), text(after))).toEqual({
+      added: 2,
+      removed: 2,
+    });
+    expect(result).toHaveLength(2);
+    expect(
+      result
+        .flat()
+        .filter((line) => line.kind !== "same")
+        .map(numbers),
+    ).toEqual(["101:", ":101", "2501:", ":2501"]);
+  });
+
+  it("finds a line added at the top of two texts cut at the same length", () => {
+    const whole = numbered(5_000);
+    const cut = (lines: string[]) => text(lines).slice(0, 20_000);
+    const result = lineDiff(cut(whole), cut(["inserted", ...whole]));
+
+    expect(result).toHaveLength(2);
+    expect(result[0]?.filter((line) => line.kind !== "same")).toEqual([
+      { kind: "added", text: "inserted", after: 1 },
+    ]);
+    // Only the last line, cut in a different place, differs at the end.
+    expect(
+      result[1]
+        ?.filter((line) => line.kind !== "same")
+        .map((line) => line.kind),
+    ).toEqual(["removed", "removed", "added"]);
   });
 
   it("shows a very large change as removed and then added", () => {

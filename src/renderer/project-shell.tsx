@@ -201,9 +201,6 @@ export function ProjectShell({
           void getUnfinishedRestore(projectId).then((pending) => { if (!disposed) setUnfinishedRestore(pending); }).catch(() => {});
         }
         if (event.type === "agent.completed") setWorkspaceRevision((value) => value + 1);
-        if (event.type === "workspace.undone" || event.type === "workspace.reapplied") {
-          setUnfinishedRestore(false);
-        }
         // A restored conversation lost its later messages. Undo is marked by
         // the event; reloading its conversation could drop a newly started turn.
         if (event.type === "workspace.restored" && event.conversationId === selectedConversationId) {

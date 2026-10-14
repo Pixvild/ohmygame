@@ -842,7 +842,10 @@ export class AgentManager {
 
       await restoreFiles(checkpoint.commit, async (undo) => {
         try {
-          const navigation = await navigate(message.id, { summarize: false });
+          // Pi does not navigate away from its current leaf. After an interrupted
+          // answer the user message itself can be that leaf; select its checkpoint.
+          const target = branch.at(-1) === message ? checkpointId : message.id;
+          const navigation = await navigate(target, { summarize: false });
           if (navigation.cancelled) throw new Error("Restore was cancelled");
           // Pi moves back in memory only; an entry after the move makes it the conversation's end on disk too.
           sessionManager.appendCustomEntry(CHECKPOINT_RESTORED_ENTRY, { version: 1, checkpoint: checkpointId, undo });
@@ -1409,6 +1412,17 @@ export class AgentManager {
     active.ended = true;
     await this.#withQueueMutation(key, async () => {
       if (this.#activeTurns.get(key) !== active) return;
+      // An edit can fail before its replacement message starts. Preserve the
+      // earlier turns on the branch selected by the edit in that case too.
+      if (active.left) {
+        try {
+          const sessionManager = this.#sessions.get(key)?.session.sessionManager;
+          if (sessionManager) carryTurnEnds(sessionManager, active.left, true);
+        } catch {
+          console.warn("Could not preserve earlier turn checkpoints");
+        }
+        active.left = undefined;
+      }
       // The turn is still active, so no prompt, edit or restore moves the conversation on before its end is written.
       const ends = await this.#turnEnds(project, active);
       this.#recordTurnEnds(projectId, active, ends);
