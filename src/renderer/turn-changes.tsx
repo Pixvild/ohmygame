@@ -4,7 +4,9 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -59,7 +61,8 @@ interface FileState {
 
 interface FooterView {
   open: boolean;
-  allFiles?: boolean;
+  /** Immutable summaries loaded for older turns that did not save them. */
+  summary?: CheckpointChangeItem[];
   list?: Loaded<CheckpointChangeItem[]>;
   /** The files whose view was opened, by path. */
   files: Record<string, FileState>;
@@ -95,7 +98,6 @@ interface FooterViews {
 }
 
 const CLOSED: FooterView = { open: false, files: {}, submitting: false };
-const PREVIEW_FILES = 3;
 const FooterViewsContext = createContext<FooterViews | undefined>(undefined);
 
 /**
@@ -114,7 +116,10 @@ export function TurnChangesViews({
   children: ReactNode;
 }) {
   const [views, setViews] = useState<Record<string, FooterView>>({});
+  const revision = useRef(workspaceRevision);
   useEffect(() => {
+    if (revision.current === workspaceRevision) return;
+    revision.current = workspaceRevision;
     // What was loaded says how the files stood before, so it is dropped; what is open loads again.
     setViews((current) =>
       Object.fromEntries(
@@ -174,10 +179,11 @@ export function TurnChangesFooter({
   controls: TurnChangesControls;
 }) {
   const [view, update] = useFooterView(checkpointId);
+  const detailsId = useId();
   const { load, file } = controls;
   const disabled = controls.disabled || view.submitting;
   const listed = view.list?.status === "ready" ? view.list.value : undefined;
-  const summary = changes.items;
+  const summary = changes.items ?? view.summary;
   const savedLines = useMemo(
     () => new Map(summary?.map((item) => [item.path, item.lines])),
     [summary],
@@ -221,18 +227,33 @@ export function TurnChangesFooter({
   }, [changes.undone, changes.kept, update]);
 
   useEffect(() => {
-    if (!view.open || view.list) return;
+    // Older turns need their statistics even while the file list is folded.
+    if ((!view.open && summary) || view.list) return;
     startLoad(load(checkpointId), (change) =>
-      update((current) => ({ ...current, list: change(current.list) })),
+      update((current) => {
+        const list = change(current.list);
+        return {
+          ...current,
+          list,
+          summary:
+            current.summary ??
+            (!changes.items && list?.status === "ready"
+              ? list.value.map(({ state, ...item }) => item)
+              : undefined),
+        };
+      }),
     );
-  }, [checkpointId, view.open, view.list, load, update]);
+  }, [checkpointId, view.open, view.list, summary, changes.items, load, update]);
 
   function toggleList() {
     // A list that failed to load is asked for again when it is reopened.
     update((current) => ({
       ...current,
       open: !current.open,
-      list: current.list?.status === "failed" ? undefined : current.list,
+      list:
+        !current.open && current.list?.status === "failed"
+          ? undefined
+          : current.list,
     }));
   }
 
@@ -264,126 +285,101 @@ export function TurnChangesFooter({
 
   return (
     <div className="turn-changes">
-      <div className="turn-changes-summary">
-        {summary ? (
-          <span className="turn-changes-title">
-            {t("checkpoints.filesChanged", { count: changes.files })}
-          </span>
-        ) : (
-          <button
-            className="turn-changes-toggle"
-            type="button"
-            aria-expanded={view.open}
-            onClick={toggleList}
-          >
-            <span>
-              {t("checkpoints.filesChanged", { count: changes.files })}
-            </span>
-          </button>
-        )}
+      <button
+        className="turn-changes-summary turn-changes-toggle"
+        type="button"
+        aria-label={t("checkpoints.filesChanged", { count: changes.files })}
+        aria-expanded={view.open}
+        aria-controls={detailsId}
+        onClick={toggleList}
+      >
+        <span>{t("checkpoints.filesChanged", { count: changes.files })}</span>
         {totals ? <ChangeCounts lines={totals} /> : null}
-        {offer === "undoRest" ? (
-          <span className="turn-changes-undone">
-            {t("checkpoints.partlyUndone")}
-          </span>
-        ) : null}
-        {offer ? (
-          <button
-            className="turn-changes-undo"
-            type="button"
-            disabled={disabled}
-            onClick={() => void changeFiles("undo")}
-          >
-            {t(`checkpoints.${offer}`)}
-          </button>
-        ) : null}
-        {undone ? (
-          <button
-            className="turn-changes-undo"
-            type="button"
-            disabled={disabled}
-            onClick={() => void changeFiles("reapply")}
-          >
-            {t("checkpoints.reapply")}
-          </button>
-        ) : null}
-      </div>
-      {view.result ? (
-        <p className="turn-changes-result" role="status">
-          {resultText(view.result)}
-        </p>
-      ) : null}
-      {view.conflict ? (
-        <ConflictPanel
-          conflict={view.conflict}
-          disabled={disabled}
-          submitting={view.submitting}
-          onApply={(conflicts, expected) =>
-            void changeFiles(view.conflict!.direction, conflicts, expected)
-          }
-          onCancel={() =>
-            update((current) => ({
-              ...current,
-              conflict: undefined,
-              error: undefined,
-            }))
-          }
+        <ChevronRight
+          className={`turn-change-chevron${view.open ? " is-open" : ""}`}
+          size={14}
+          aria-hidden="true"
         />
-      ) : null}
-      {view.error ? (
-        <p className="turn-changes-error" role="alert">
-          {view.error}
-        </p>
-      ) : null}
-      {view.open || summary ? (
-        !items && (!view.list || view.list.status === "loading") ? (
-          <p className="turn-changes-note">{t("checkpoints.loadingChanges")}</p>
-        ) : view.list?.status === "failed" ? (
-          <p className="turn-changes-error" role="alert">
-            {view.list.message}
-          </p>
-        ) : items?.length === 0 ? (
-          <p className="turn-changes-note">{t("checkpoints.noChanges")}</p>
-        ) : (
-          <>
+      </button>
+      {view.open ? (
+        <div id={detailsId}>
+          {!items && (!view.list || view.list.status === "loading") ? (
+            <p className="turn-changes-note">{t("checkpoints.loadingChanges")}</p>
+          ) : view.list?.status === "failed" ? (
+            <p className="turn-changes-error" role="alert">
+              {view.list.message}
+            </p>
+          ) : items?.length === 0 ? (
+            <p className="turn-changes-note">{t("checkpoints.noChanges")}</p>
+          ) : (
             <ul className="turn-changes-list">
-              {items
-                ?.slice(
-                  0,
-                  view.open || view.allFiles ? undefined : PREVIEW_FILES,
-                )
-                .map((item) => (
-                  <ChangedFile
-                    key={item.path}
-                    checkpointId={checkpointId}
-                    item={item}
-                    state={view.files[item.path]}
-                    update={update}
-                    load={file}
-                  />
-                ))}
+              {items?.map((item) => (
+                <ChangedFile
+                  key={item.path}
+                  checkpointId={checkpointId}
+                  item={item}
+                  state={view.files[item.path]}
+                  update={update}
+                  load={file}
+                />
+              ))}
             </ul>
-            {items && items.length > PREVIEW_FILES && !view.open ? (
+          )}
+          <div className="turn-changes-controls">
+            {offer === "undoRest" ? (
+              <span className="turn-changes-undone">
+                {t("checkpoints.partlyUndone")}
+              </span>
+            ) : null}
+            {offer ? (
               <button
-                className="turn-changes-more"
+                className="turn-changes-undo"
                 type="button"
-                aria-expanded={Boolean(view.allFiles)}
-                onClick={() =>
-                  update((current) => ({
-                    ...current,
-                    allFiles: !current.allFiles,
-                  }))
-                }
+                disabled={disabled}
+                onClick={() => void changeFiles("undo")}
               >
-                {view.allFiles
-                  ? t("checkpoints.showFewer")
-                  : t("checkpoints.showMore", {
-                      count: items.length - PREVIEW_FILES,
-                    })}
+                {t(`checkpoints.${offer}`)}
               </button>
             ) : null}
-          </>
-        )
+            {undone ? (
+              <button
+                className="turn-changes-undo"
+                type="button"
+                disabled={disabled}
+                onClick={() => void changeFiles("reapply")}
+              >
+                {t("checkpoints.reapply")}
+              </button>
+            ) : null}
+          </div>
+          {view.result ? (
+            <p className="turn-changes-result" role="status">
+              {resultText(view.result)}
+            </p>
+          ) : null}
+          {view.conflict ? (
+            <ConflictPanel
+              conflict={view.conflict}
+              disabled={disabled}
+              submitting={view.submitting}
+              onApply={(conflicts, expected) =>
+                void changeFiles(view.conflict!.direction, conflicts, expected)
+              }
+              onCancel={() =>
+                update((current) => ({
+                  ...current,
+                  conflict: undefined,
+                  error: undefined,
+                }))
+              }
+            />
+          ) : null}
+          {view.error ? (
+            <p className="turn-changes-error" role="alert">
+              {view.error}
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

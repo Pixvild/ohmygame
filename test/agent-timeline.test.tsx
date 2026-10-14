@@ -1144,9 +1144,9 @@ describe("AgentTimeline", () => {
     expect(renderToStaticMarkup(<AgentTimeline items={items} onRestore={() => {}} revisionDisabled />).match(/aria-label="Restore to before this message"[^>]*disabled/g)).toHaveLength(2);
   });
 
-  it("shows what a finished turn changed, with a way to undo it", () => {
+  it("shows collapsed file summaries below completed and failed turns", () => {
     const items = [
-      { ...user(), checkpointId: "checkpoint-1", changes: { files: 1 } },
+      { ...user(), checkpointId: "checkpoint-1", changes: { files: 1, items: [{ path: "notes.txt", kind: "added" as const, lines: { added: 12, removed: 0 } }] } },
       assistant("final-1", "Done", "final_answer"),
       { ...user(), id: "user-2", turnId: "turn-2", text: "Second", checkpointId: "checkpoint-2", changes: { files: 3 } },
       { ...user(), id: "user-3", turnId: "turn-3", text: "Third", checkpointId: "checkpoint-3", changes: { files: 0 } },
@@ -1158,8 +1158,9 @@ describe("AgentTimeline", () => {
     expect(html.match(/class="turn-changes"/g)).toHaveLength(2);
     expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*><span>1 file changed<\/span>/);
     expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*><span>3 files changed<\/span>/);
-    expect(html.match(/<button[^>]*>Undo<\/button>/g)).toHaveLength(2);
-    expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Undo<\/button>/);
+    expect(html).toContain("+12");
+    expect(html).toContain("-0");
+    expect(html).not.toMatch(/>Undo<\/button>/);
     // The footer closes the turn, below the answer.
     expect(html.indexOf("1 file changed")).toBeGreaterThan(html.indexOf("Done"));
     expect(html.indexOf("1 file changed")).toBeLessThan(html.indexOf("assistant-response-footer"));
@@ -1173,27 +1174,27 @@ describe("AgentTimeline", () => {
     expect(renderToStaticMarkup(<AgentTimeline items={items} />)).not.toContain("turn-changes");
   });
 
-  it("offers no undo for changes that were undone, and none while the agent is busy", () => {
+  it("keeps Undo and Reapply inside the collapsed summaries while the agent is busy", () => {
     const items = [
       { ...user(), checkpointId: "checkpoint-1", changes: { files: 2, undone: true } },
       { ...user(), id: "user-2", turnId: "turn-2", text: "Second", checkpointId: "checkpoint-2", changes: { files: 3 } },
     ];
     const html = renderToStaticMarkup(<AgentTimeline items={items} changeControls={changeControls(true)} />);
 
-    expect(html.match(/>Reapply<\/button>/g)).toHaveLength(1);
-    expect(html.match(/<button[^>]*>Undo<\/button>/g)).toHaveLength(1);
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Undo<\/button>/);
+    expect(html).not.toMatch(/>(Undo|Reapply)<\/button>/);
+    expect(html.match(/aria-expanded="false"[^>]*><span>\d files changed/g)).toHaveLength(2);
     // The list can still be opened.
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*><span>3 files changed/);
   });
 
-  it("offers to undo the rest of a turn that was undone in part", () => {
+  it("keeps partial Undo details inside the collapsed summary", () => {
     const items = [{ ...user(), checkpointId: "checkpoint-1", changes: { files: 3, undone: true, kept: 1 } }];
     const html = renderToStaticMarkup(<AgentTimeline items={items} changeControls={changeControls()} />);
 
-    expect(html).toContain("Partly undone");
+    expect(html).toContain("3 files changed");
+    expect(html).not.toContain("Partly undone");
     expect(html).not.toContain("Changes undone");
-    expect(html.match(/<button[^>]*>Undo the rest<\/button>/g)).toHaveLength(1);
+    expect(html).not.toMatch(/>Undo the rest<\/button>/);
   });
 
   it("offers copy on final responses and keeps only the latest action visible", () => {

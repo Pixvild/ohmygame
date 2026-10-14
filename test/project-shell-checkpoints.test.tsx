@@ -220,7 +220,7 @@ const settle = () =>
   });
 const button = (name: string) =>
   [...container.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent === name,
+    (candidate) => (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
   );
 const buttons = () =>
   [...container.querySelectorAll("button")].map(
@@ -339,6 +339,7 @@ describe("checkpoints in the project shell", () => {
         });
       return undefined;
     });
+    await click("2 files changed");
     await click("Undo");
     expect(button("Reapply")).toBeDefined();
     await act(async () =>
@@ -446,18 +447,18 @@ describe("checkpoints in the project shell", () => {
     expect(held).toHaveLength(0);
     expect(texts(".user-message")).toEqual(["Build", "Next thing"]);
     expect(texts(".turn-changes-summary")).toEqual([
-      "2 files changedReapply",
-      "3 files changedUndo",
+      "2 files changed",
+      "3 files changed",
     ]);
   });
 
   it("does not mark a turn for an undo in another conversation, and reads no conversation for a restore without one", async () => {
     const daemon = await openProject(() => undefined);
+    await click("2 files changed");
     const loads = () =>
       daemon.requests.filter((request) =>
-        request.route.startsWith(
-          "/projects/project/conversations/conversation",
-        ),
+        request.route === "/projects/project/conversations/conversation" ||
+        request.route.startsWith("/projects/project/conversations/conversation?"),
       ).length;
     const before = loads();
 
@@ -518,8 +519,9 @@ describe("checkpoints in the project shell", () => {
     );
     await settle();
 
-    expect(button("Undo")).toBeDefined();
+    expect(button("Undo")).toBeUndefined();
     await click("2 files changed");
+    expect(button("Undo")).toBeDefined();
     expect(texts(".turn-change-row")).toEqual(["a.js—", "b.js—"]);
 
     // A later turn rewrites one of the files.
@@ -549,6 +551,7 @@ describe("checkpoints in the project shell", () => {
 
   it("offers no undo while the Agent works or the connection is lost", async () => {
     const daemon = await openProject(() => undefined);
+    await click("2 files changed");
     expect(button("Undo")!.disabled).toBe(false);
 
     await act(async () =>
@@ -602,6 +605,7 @@ describe("checkpoints in the project shell", () => {
     const daemon = await openProject((route) =>
       route === `${BASE}/undo` ? answers.shift() : undefined,
     );
+    await click("2 files changed");
     await click("Undo");
     expect(texts(".turn-changes-conflicts li")).toEqual(["a.js"]);
 
@@ -663,6 +667,7 @@ describe("checkpoints in the project shell", () => {
       daemon.requests.filter((request) => request.route === `${BASE}/undo`)
         .length;
 
+    await click("2 files changed");
     await click("Undo");
 
     // Unsaved edits must be on disk before conflicts are worked out.
@@ -908,6 +913,7 @@ describe("checkpoints in the project shell", () => {
     );
     expect(container.querySelector(".unfinished-restore")).toBeNull();
 
+    await click("2 files changed");
     await click("Undo");
 
     expect(container.querySelector(".turn-changes-error")!.textContent).toBe(

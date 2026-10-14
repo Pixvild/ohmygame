@@ -2,13 +2,14 @@
 
 Each consumed user message has a checkpoint before model/tool execution. Its
 turn ends at the next consumed message's checkpoint, or at the final snapshot
-when the run settles. A compact summary below each finished turn shows up to
-three changed paths and green/red added/removed line counts in a subtle
-bordered panel.
+when the run settles. A compact summary below each finished turn shows the file
+count and green/red added/removed line counts in a subtle bordered panel,
+collapsed by default. Select the summary or its right-hand arrow to expand the
+file list and reveal **Undo** / **Reapply** below it. Long lists scroll within
+280px; select a path to open or close its diff.
 Added text files show `+N -0`; the response copy button and timestamp follow
-the panel. **Show more files** expands the list; select a path to open or close
-its diff. Failed and
-cancelled turns also capture their partial file changes. If either checkpoint
+the panel. Failed and cancelled turns also capture their partial file changes.
+If either checkpoint
 fails, the range is unavailable; a failed before checkpoint prevents inference
 and tool execution.
 
@@ -25,9 +26,10 @@ or failed call does not show successful change counts or a completed Diff.
 These counts describe individual calls; the turn summary describes the net file
 changes, including changes made outside tools during the turn. Counts are saved
 with the turn end, so showing history does not scan the current workspace. Older
-sessions can still load their file list on demand. Binary and oversized files
-show a dash in place of unavailable line counts; they do not invent counts.
-The file list endpoint also computes statistics for older sessions on demand.
+sessions without saved summaries automatically load their statistics even while
+collapsed; these immutable summaries stay visible across workspace refreshes.
+The expanded list also loads each path's current state. Binary and oversized
+files show a dash in place of unavailable line counts; they do not invent counts.
 
 **Edit message** changes the conversation branch and sends the replacement
 prompt using the current workspace. It preserves files. **Undo** is a

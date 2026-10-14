@@ -87,10 +87,10 @@ async function render(
 
 const button = (name: string) =>
   [...container.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent === name,
+    (candidate) => (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
   );
 const buttons = () =>
-  [...container.querySelectorAll("button")].map(
+  [...container.querySelectorAll("button:not(.turn-change-path)")].map(
     (candidate) => candidate.textContent,
   );
 const click = (name: string) => act(async () => button(name)!.click());
@@ -100,34 +100,94 @@ const texts = (selector: string) =>
   );
 
 describe("TurnChangesFooter", () => {
-  it("previews three saved files without requests, expands the list and opens a diff on demand", async () => {
+  it("starts folded with saved counts and reveals files and Undo only when opened", async () => {
     const items: CheckpointChangeItem[] = Array.from({ length: 6 }, (_, index) => ({
       path: `src/file-${index}.ts`, kind: "modified", lines: { added: index + 1, removed: 1 },
     }));
     const value = controls({ load: vi.fn(async () => items) });
     await render(value, { files: 6, items });
-    expect(texts(".turn-change-path")).toEqual(items.slice(0, 3).map((item) => item.path));
+    expect(container.querySelector(".turn-changes-list")).toBeNull();
+    expect(button("Undo")).toBeUndefined();
+    expect(button("6 files changed")!.getAttribute("aria-expanded")).toBe("false");
+    expect(button("6 files changed")!.querySelector("svg")).not.toBeNull();
     expect(texts(".turn-changes-summary .change-counts")).toEqual(["+21-6"]);
     expect(value.load).not.toHaveBeenCalled();
     expect(value.file).not.toHaveBeenCalled();
     expect(button("View changes")).toBeUndefined();
-    await click("Show 3 more files");
+    await click("6 files changed");
     expect(texts(".turn-change-path")).toHaveLength(6);
-    expect(value.load).not.toHaveBeenCalled();
-    await click("Show fewer files");
+    expect(value.load).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".turn-changes-summary .turn-changes-undo")).toBeNull();
+    expect(container.querySelector(".turn-changes-controls")!.textContent).toBe("Undo");
     await click(items[0].path);
-    expect(value.load).not.toHaveBeenCalled();
     expect(value.file).toHaveBeenCalledWith("checkpoint-1", items[0].path);
     expect(container.querySelector(".turn-change-diff")).not.toBeNull();
     await click(items[0].path);
-    expect(texts(".turn-change-path")).toHaveLength(3);
+    expect(texts(".turn-change-path")).toHaveLength(6);
     expect(container.querySelector(".turn-change-diff")).toBeNull();
+    await click("6 files changed");
+    expect(container.querySelector(".turn-changes-list")).toBeNull();
+    expect(button("Undo")).toBeUndefined();
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+21-6"]);
+  });
+
+  it("shows saved counts after leaving and reopening the conversation, folded and without requests", async () => {
+    const items: CheckpointChangeItem[] = [
+      { path: "notes.txt", kind: "added", lines: { added: 12, removed: 0 } },
+      { path: "hero.png", kind: "added" },
+    ];
+    const value = controls();
+    await render(value, { files: 2, items });
+    await click("2 files changed");
+    await act(async () => root.render(null));
+    await render(value, { files: 2, items, undone: true }, "stored-turn");
+
+    expect(button("2 files changed")!.getAttribute("aria-expanded")).toBe("false");
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+12-0"]);
+    expect(container.querySelector(".turn-changes-list")).toBeNull();
+    expect(button("Reapply")).toBeUndefined();
+    expect(value.load).toHaveBeenCalledTimes(1);
+    expect(value.file).not.toHaveBeenCalled();
+    await click("2 files changed");
+    expect(button("Reapply")).toBeDefined();
+  });
+
+  it("restores legacy counts while folded and keeps them during a workspace refresh", async () => {
+    const items: CheckpointChangeItem[] = [
+      { path: "notes.txt", kind: "modified", lines: { added: 2, removed: 1 } },
+    ];
+    let finish!: (items: CheckpointChangeItem[]) => void;
+    const value = controls({
+      load: vi.fn<TurnChangesControls["load"]>()
+        .mockResolvedValueOnce(items)
+        .mockResolvedValueOnce(items)
+        .mockImplementation(() => new Promise((resolve) => { finish = resolve; })),
+    });
+    await render(value, { files: 1 });
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
+    expect(container.querySelector(".turn-changes-list")).toBeNull();
+    await act(async () => root.render(null));
+    await render(value, { files: 1 }, "stored-turn");
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
+    expect(button("1 file changed")!.getAttribute("aria-expanded")).toBe("false");
+    expect(value.load).toHaveBeenCalledTimes(2);
+    await render(value, { files: 1, undone: true }, "stored-turn", 1);
+    expect(value.load).toHaveBeenCalledTimes(2);
+    await click("1 file changed");
+    expect(value.load).toHaveBeenCalledTimes(3);
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
+    expect(texts(".turn-change-row .change-counts")).toEqual(["+2-1"]);
+    expect(button("Reapply")).toBeDefined();
+    await act(async () => finish(items.map((item) => ({ ...item, state: "undone" }))));
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+2-1"]);
+    expect(value.file).not.toHaveBeenCalled();
   });
 
   it("keeps saved statistics and an open diff after an undo refreshes the workspace", async () => {
     const items = [{ path: "notes.txt", kind: "modified" as const, lines: { added: 2, removed: 1 } }];
-    const value = controls();
+    const value = controls({ load: vi.fn(async () => items) });
     await render(value, { files: 1, items });
+    await click("1 file changed");
     await click("notes.txt");
     expect(texts(".turn-change-row .change-counts")).toEqual(["+2-1"]);
     await render(value, { files: 1, items, undone: true }, "reloaded-turn", 1);
@@ -136,12 +196,13 @@ describe("TurnChangesFooter", () => {
     expect(button("Reapply")).toBeDefined();
     expect(container.querySelector(".turn-change-diff")).not.toBeNull();
     expect(value.file).toHaveBeenCalledTimes(2);
-    expect(value.load).not.toHaveBeenCalled();
+    expect(value.load).toHaveBeenCalledTimes(2);
   });
 
   it("uses the persisted Reapply state when a conversation reload replaces a local Undo result", async () => {
     const value = controls();
     await render(value);
+    await click("3 files changed");
     await click("Undo");
     await render(value, { files: 3, undone: true }, "stored-turn");
     expect(button("Reapply")).toBeDefined();
@@ -164,11 +225,11 @@ describe("TurnChangesFooter", () => {
     expect(value.reapply).toHaveBeenCalledTimes(1);
   });
 
-  it("loads the list when it is first opened and shows each file", async () => {
+  it("loads missing summaries while folded and reveals the cached file list on demand", async () => {
     const value = controls();
     await render(value);
 
-    expect(value.load).not.toHaveBeenCalled();
+    expect(value.load).toHaveBeenCalledTimes(1);
     expect(button("3 files changed")!.getAttribute("aria-expanded")).toBe(
       "false",
     );
@@ -207,16 +268,19 @@ describe("TurnChangesFooter", () => {
       load: vi
         .fn<TurnChangesControls["load"]>()
         .mockRejectedValueOnce(new Error("Checkpoint not found"))
+        .mockRejectedValueOnce(new Error("Checkpoint not found"))
         .mockResolvedValue(LIST),
     });
     await render(value, { files: 1 });
+    expect(value.load).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
 
     await click("1 file changed");
     expect(texts('[role="alert"]')).toEqual(["Checkpoint not found"]);
 
     await click("1 file changed");
     await click("1 file changed");
-    expect(value.load).toHaveBeenCalledTimes(2);
+    expect(value.load).toHaveBeenCalledTimes(3);
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(texts(".turn-change-path")).toHaveLength(3);
   });
@@ -363,16 +427,16 @@ describe("TurnChangesFooter", () => {
     ]);
   });
 
-  it("undoes directly without loading a confirmation list, and allows Reapply then Undo", async () => {
+  it("undoes directly after expanding, without confirmation, and allows Reapply then Undo", async () => {
     const value = controls();
     await render(value, { files: 31 });
+    await click("31 files changed");
     await click("Undo");
     expect(value.undo).toHaveBeenCalledWith(
       "checkpoint-1",
       undefined,
       undefined,
     );
-    expect(value.load).not.toHaveBeenCalled();
     expect(container.querySelector(".turn-changes-panel")).toBeNull();
     expect(button("Undo")).toBeUndefined();
     expect(button("Reapply")).toBeDefined();
@@ -399,6 +463,7 @@ describe("TurnChangesFooter", () => {
       })),
     });
     await render(value);
+    await click("3 files changed");
     await click("Undo");
     expect(texts('[role="status"]')).toEqual(["No files were put back."]);
     expect(button("Undo")).toBeDefined();
@@ -414,6 +479,7 @@ describe("TurnChangesFooter", () => {
       })),
     });
     await render(value);
+    await click("3 files changed");
     await click("Undo");
     await click("Cancel");
     expect(value.undo).toHaveBeenCalledTimes(1);
@@ -442,6 +508,7 @@ describe("TurnChangesFooter", () => {
       });
     const value = controls({ reapply });
     await render(value, { files: 3, undone: true });
+    await click("3 files changed");
     await click("Reapply");
     expect(texts(".turn-changes-panel p")[0]).toBe(
       "These files were edited after Undo:",
@@ -479,6 +546,7 @@ describe("TurnChangesFooter", () => {
     const value = controls({ undo });
     await render(value);
 
+    await click("3 files changed");
     await click("Undo");
 
     expect(
@@ -525,6 +593,7 @@ describe("TurnChangesFooter", () => {
       });
     const value = controls({ undo });
     await render(value);
+    await click("3 files changed");
     await click("Undo");
 
     await click("Overwrite them");
@@ -579,6 +648,7 @@ describe("TurnChangesFooter", () => {
       });
     const value = controls({ undo });
     await render(value);
+    await click("3 files changed");
     await click("Undo");
     expect(
       container.querySelector(".turn-changes-panel")!.textContent,
@@ -631,6 +701,7 @@ describe("TurnChangesFooter", () => {
     const value = controls({ undo });
     await render(value);
 
+    await click("3 files changed");
     await click("Undo");
 
     expect(texts('[role="alert"]')).toEqual([
@@ -655,6 +726,7 @@ describe("TurnChangesFooter", () => {
       ),
     });
     await render(value);
+    await click("3 files changed");
     await click("Undo");
 
     expect(button("Undo")!.disabled).toBe(true);
@@ -715,6 +787,7 @@ describe("TurnChangesFooter", () => {
       })),
     });
     await render(value, { files: 3, undone: true, kept: 1 });
+    await click("3 files changed");
 
     expect(container.querySelector(".turn-changes-undone")!.textContent).toBe(
       "Partly undone",
@@ -747,8 +820,9 @@ describe("TurnChangesFooter", () => {
     });
     await render(value, { files: 3, undone: true });
 
-    expect(button("Reapply")).toBeDefined();
+    expect(button("Reapply")).toBeUndefined();
     await click("3 files changed");
+    expect(button("Reapply")).toBeDefined();
     expect(button("Undo")).toBeUndefined();
     await render(value, { files: 3, undone: true }, "live-turn", 1);
     expect(button("Reapply")).toBeDefined();
@@ -790,7 +864,9 @@ describe("TurnChangesFooter", () => {
     expect(texts('[role="status"]')).toEqual([
       "1 file was put back. 1 file was left as it is.",
     ]);
-    expect(container.textContent).toContain("Loading changes...");
+    // Immutable paths remain visible while their current state refreshes.
+    expect(texts(".turn-change-path")).toHaveLength(3);
+    expect(texts(".turn-change-badge")).toEqual([]);
 
     await act(async () =>
       lists[2](LIST.map((item) => ({ ...item, state: "undone" }))),

@@ -9709,14 +9709,6 @@ button {
 .change-count-added { color: var(--diff-added); }
 .change-count-removed { color: var(--diff-removed); }
 
-.turn-changes-title, .turn-changes-toggle { color: var(--text-secondary); }
-.turn-changes-more {
-  padding: 3px 0;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-.turn-changes-more:hover { color: var(--text); }
-.turn-changes-more { margin-top: 3px; }
 .turn-change-chevron { flex: 0 0 auto; color: var(--text-faint); }
 .turn-change-chevron.is-open { transform: rotate(90deg); }
 .turn-change-line-added .turn-change-line-sign { color: var(--diff-added); }
@@ -9749,28 +9741,39 @@ button {
 
 .turn-changes-summary {
   display: flex;
+  width: 100%;
   min-height: 28px;
-  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
 }
 
 .turn-changes-toggle {
-  display: inline-flex;
   min-width: 0;
-  align-items: center;
-  gap: 4px;
   padding: 0;
   border-radius: 3px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.turn-changes-toggle > .turn-change-chevron {
+  margin-left: auto;
 }
 
 .turn-changes-toggle:hover {
   color: var(--text);
 }
 
+.turn-changes-controls {
+  display: flex;
+  min-height: 28px;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
 .turn-changes-undo {
   height: 24px;
-  margin-left: auto;
   padding: 0 8px;
   border-radius: 5px;
 }
@@ -9782,14 +9785,9 @@ button {
 }
 
 .turn-changes-undone {
-  margin-left: auto;
+  margin-right: auto;
   padding: 0 8px;
   color: var(--text-faint);
-}
-
-.turn-changes-undone + .turn-changes-undo,
-.turn-changes-undo + .turn-changes-undo {
-  margin-left: 0;
 }
 
 .turn-changes-result,
@@ -9858,8 +9856,10 @@ button {
 }
 
 .turn-changes-list {
+  max-height: 280px;
   margin: 4px 0 0;
   padding: 0;
+  overflow: auto;
   list-style: none;
 }
 

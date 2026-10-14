@@ -300,6 +300,18 @@ it("projects real edit/write diffs before the turn ends and restores them from d
   ).toBe(false);
   release.resolve();
   await turn.result;
+  const savedItems = conversationItems(
+    SessionManager.open(sessionManager.getSessionFile()!).getBranch(),
+  );
+  expect(savedItems.find((item) => item.type === "userMessage")).toMatchObject({
+    changes: {
+      files: 2,
+      items: [
+        { path: "notes.txt", kind: "added", lines: { added: 2, removed: 0 } },
+        { path: "src/render.ts", kind: "modified", lines: { added: 3, removed: 2 } },
+      ],
+    },
+  });
   const restored = conversationItems(
     SessionManager.open(sessionManager.getSessionFile()!).getBranch(),
   ).filter((item) => item.type === "dynamicToolCall");

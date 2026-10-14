@@ -1454,8 +1454,6 @@ const en = {
     },
   },
   checkpoints: {
-    showMore: "Show {{count}} more files",
-    showFewer: "Show fewer files",
     lineCounts: "Lines added: {{added}}; lines removed: {{removed}}",
     kind: { added: "Added", modified: "Modified", removed: "Removed" },
     state: { changed: "Changed later", undone: "Already put back" },
