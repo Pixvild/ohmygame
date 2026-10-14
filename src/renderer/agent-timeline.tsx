@@ -1,4 +1,5 @@
 import { ChangeCounts } from "./change-counts.js";
+import { FileDiff } from "./file-diff.js";
 import {
   Check,
   ChevronRight,
@@ -732,8 +733,13 @@ function FileOperationDetails({ item, args }: { item: ToolCallItem; args: Record
 }
 
 function FileChangeDetails({ item, args }: { item: ToolCallItem; args: Record<string, unknown> | undefined }) {
+  const diff = item.type === "dynamicToolCall" && item.status === "completed" ? item.fileDiff : undefined;
   return <div className="tool-details">
     <ToolDetailBlock label={t("timeline.detail.file")}><code>{text(args?.path) || text(args?.file_path) || t("timeline.detail.unknownFile")}</code></ToolDetailBlock>
+    {diff ? <ToolDetailBlock label={t("timeline.detail.diff")}>
+      {diff.hunks.length ? <FileDiff hunks={diff.hunks} /> : <p className="turn-changes-note">{t("checkpoints.sameLines")}</p>}
+      {diff.truncated ? <p className="tool-details-truncated">{t("timeline.detail.diffTruncated")}</p> : null}
+    </ToolDetailBlock> : null}
     {item.output ? <ToolDetailBlock label={t("timeline.detail.result")}><pre>{item.output}</pre></ToolDetailBlock> : null}
     {item.truncated ? <p className="tool-details-truncated">{t("timeline.detail.resultTruncated")}</p> : null}
     {!item.output && item.status === "failed" ? <p className="tool-details-error">{t("timeline.detail.fileChangeFailed")}</p> : null}
@@ -781,7 +787,8 @@ function hasToolDetails(item: ToolCallItem): boolean {
   if (item.status === "failed" || item.truncated) return true;
   if (item.type === "mcpToolCall") return item.arguments !== undefined || Boolean(item.output) || Boolean(item.images?.length);
   if (item.tool === "bash") return Boolean(text(record(item.arguments)?.command) || item.output);
-  if (["read", "grep", "find", "ls", "edit", "write"].includes(item.tool)) return Boolean(item.output);
+  if (["edit", "write"].includes(item.tool)) return Boolean(item.output || item.fileDiff);
+  if (["read", "grep", "find", "ls"].includes(item.tool)) return Boolean(item.output);
   return item.arguments !== undefined || Boolean(item.output) || Boolean(item.images?.length);
 }
 

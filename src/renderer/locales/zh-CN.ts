@@ -1252,6 +1252,8 @@ const zhCN: typeof en = {
       outputTruncated: "输出已截断",
       commandFailed: "命令执行失败，没有输出。",
       result: "结果",
+      diff: "更改",
+      diffTruncated: "仅展示部分更改，增删统计包含完整结果。",
       resultTruncated: "结果已截断",
       operationFailed: "操作失败，没有输出。",
       file: "文件",

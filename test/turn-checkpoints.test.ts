@@ -198,6 +198,139 @@ function rangeFor(
   return id ? turnRange(session.getBranch(), id) : undefined;
 }
 
+it("projects real edit/write diffs before the turn ends and restores them from disk", async () => {
+  const { events, project, manager, conversation, runtime, sessionManager } =
+    await fixture();
+  await mkdir(path.join(project.workspacePath, "src"));
+  await writeFile(
+    path.join(project.workspacePath, "src/render.ts"),
+    "const color = 'red';\nconst width = 1;\n",
+  );
+  const edited = deferred(),
+    release = deferred();
+  cleanups.push(() => release.resolve());
+  let calls = 0;
+  runtime.streamSimple = () => {
+    if (calls++ === 0)
+      return stream(
+        assistant(
+          [
+            {
+              type: "toolCall",
+              id: "edit",
+              name: "edit",
+              arguments: {
+                path: "src/render.ts",
+                edits: [
+                  {
+                    oldText: "const color = 'red';",
+                    newText: "const color = 'green';",
+                  },
+                  {
+                    oldText: "const width = 1;",
+                    newText: "const width = 2;\nconst height = 3;",
+                  },
+                ],
+              },
+            },
+            {
+              type: "toolCall",
+              id: "write",
+              name: "write",
+              arguments: { path: "notes.txt", content: "first\nsecond\n" },
+            },
+          ],
+          "toolUse",
+        ),
+      );
+    const output = createAssistantMessageEventStream();
+    edited.resolve();
+    void release.promise.then(() =>
+      output.push({
+        type: "done",
+        reason: "stop",
+        message: assistant([{ type: "text", text: "Done" }]),
+      }),
+    );
+    return output;
+  };
+  const turn = manager.prompt(
+    project,
+    conversation,
+    "Edit two blocks and write notes",
+  );
+  await Promise.race([
+    edited.promise,
+    turn.result!.then(() => {
+      throw new Error("Turn ended before inspection");
+    }),
+  ]);
+  const live = events
+    .since(project.id)
+    .flatMap((event) =>
+      event.type === "item.completed" &&
+      event.data.item.type === "dynamicToolCall"
+        ? [event.data.item]
+        : [],
+    );
+  expect(live).toHaveLength(2);
+  expect(live[0]).toMatchObject({
+    tool: "edit",
+    status: "completed",
+    output: "Successfully replaced 2 block(s) in src/render.ts.",
+    lineChanges: { added: 3, removed: 2 },
+  });
+  expect(live[0]?.fileDiff?.hunks.flat().map((line) => line.text)).toContain(
+    "const color = 'green';",
+  );
+  expect(live[1]).toMatchObject({
+    tool: "write",
+    lineChanges: { added: 2, removed: 0 },
+    fileDiff: {
+      hunks: [
+        [
+          { kind: "added", text: "first", after: 1 },
+          { kind: "added", text: "second", after: 2 },
+        ],
+      ],
+    },
+  });
+  expect(
+    events.since(project.id).some((event) => event.type === "agent.completed"),
+  ).toBe(false);
+  release.resolve();
+  await turn.result;
+  const restored = conversationItems(
+    SessionManager.open(sessionManager.getSessionFile()!).getBranch(),
+  ).filter((item) => item.type === "dynamicToolCall");
+  expect(
+    restored.map(({ lineChanges, fileDiff }) => ({ lineChanges, fileDiff })),
+  ).toEqual(
+    live.map(({ lineChanges, fileDiff }) => ({ lineChanges, fileDiff })),
+  );
+  const olderEntries = SessionManager.open(
+    sessionManager.getSessionFile()!,
+  ).getBranch();
+  for (const entry of olderEntries) {
+    if (
+      entry.type === "message" &&
+      entry.message.role === "toolResult" &&
+      entry.message.toolName === "edit"
+    ) {
+      const details = entry.message.details as { patch?: string };
+      delete details.patch;
+    }
+  }
+  expect(
+    conversationItems(olderEntries).find(
+      (item) => item.type === "dynamicToolCall" && item.tool === "edit",
+    ),
+  ).toMatchObject({
+    lineChanges: { added: 3, removed: 2 },
+    fileDiff: { hunks: expect.any(Array) },
+  });
+});
+
 it("captures consumed follow-ups and steering at file boundaries, rather than enqueue time", async () => {
   const {
     events,

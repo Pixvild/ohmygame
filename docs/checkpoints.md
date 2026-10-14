@@ -12,6 +12,12 @@ and tool execution.
 
 Tool groups expand into an internally scrolling list capped at 280px. Successful
 `edit` and `write` calls show their own line counts on the right, when available.
+They appear as soon as that call completes, while the rest of the turn can still
+be running. Expanding the call shows its actual Diff with the same green/red
+view as the turn summary. Tool previews retain up to 300 lines and 32,768 text characters;
+truncation does not reduce the full line counts. Pi's unified patch and older
+numbered Diff records are supported in both live events and history. An executing
+or failed call does not show successful change counts or a completed Diff.
 These counts describe individual calls; the turn summary describes the net file
 changes, including changes made outside tools during the turn. Counts are saved
 with the turn end, so showing history does not scan the current workspace. Older

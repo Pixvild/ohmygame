@@ -16,9 +16,9 @@ import { promptContextLabels, splitPromptContext, withProjectDesignContext } fro
 import { gameDesignMetadata } from "./game-design-context.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { createTrackedWriteTool, patchLineChanges } from "./file-line-changes.js";
+import { createTrackedWriteTool, fileChangeMetadata } from "./file-line-changes.js";
 import { readWorkspaceNotice } from "./workspace-notice.js";
-import type { AgentContextUsage, AgentMessagePhase, AgentReasoningLevel, AgentStatus, ConversationAgentState, ConversationAttachment, PendingPrompt, PlanMode, PlanSessionState, PlanState, PluginMention, ProjectAgentActivity, ProjectState, PromptImage, PromptReference, QuestionnaireAnswer, QuestionnaireQuestion, QuestionnaireResult, ResponsesTransportMode, ThreadItem, ThreadItemError, ToolArtifact, TurnChanges, LineChanges } from "../shared/contracts.js";
+import type { AgentContextUsage, AgentMessagePhase, AgentReasoningLevel, AgentStatus, ConversationAgentState, ConversationAttachment, PendingPrompt, PlanMode, PlanSessionState, PlanState, PluginMention, ProjectAgentActivity, ProjectState, PromptImage, PromptReference, QuestionnaireAnswer, QuestionnaireQuestion, QuestionnaireResult, ResponsesTransportMode, ThreadItem, ThreadItemError, ToolArtifact, TurnChanges } from "../shared/contracts.js";
 import { hasPluginMentionToken, parsePluginMentions, serializePluginMentions } from "../shared/plugins.js";
 import type { RuntimeEventBus } from "../shared/events.js";
 import type { StoredConversation } from "./conversations.js";
@@ -337,6 +337,7 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
         if (result.artifact) tool.artifact = result.artifact;
         if (result.images?.length) tool.images = result.images;
         if (tool.type === "dynamicToolCall" && result.lineChanges) tool.lineChanges = result.lineChanges;
+        if (tool.type === "dynamicToolCall" && result.fileDiff) tool.fileDiff = result.fileDiff;
       }
     }
   }
@@ -2452,20 +2453,18 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-function toolOutput(result: unknown): { output?: string; truncated?: boolean; artifact?: ToolArtifact; images?: PromptImage[]; webSearch?: Extract<ThreadItem, { type: "dynamicToolCall" }>["webSearch"]; lineChanges?: LineChanges } {
+function toolOutput(result: unknown): Pick<
+  Extract<ThreadItem, { type: "dynamicToolCall" }>,
+  "output" | "truncated" | "artifact" | "images" | "webSearch" | "lineChanges" | "fileDiff"
+> {
   const details = record(record(result)?.details);
-  const lines = record(details?.lineChanges);
-  const patch = typeof details?.patch === "string" ? details.patch : undefined;
-  const lineChanges = lines && Number.isSafeInteger(lines.added) && Number.isSafeInteger(lines.removed) && Number(lines.added) >= 0 && Number(lines.removed) >= 0
-    ? { added: Number(lines.added), removed: Number(lines.removed) }
-    : patch ? patchLineChanges(patch) : undefined;
   const artifact = toolArtifact(result);
   const webSearch = toolWebSearch(result);
   const images = result && typeof result === "object" && "content" in result
     ? imageContent((result as { content?: unknown }).content)
     : [];
   const media = {
-    ...(lineChanges ? { lineChanges } : {}),
+    ...fileChangeMetadata(details),
     ...(artifact ? { artifact } : {}),
     ...(images.length ? { images } : {}),
     ...(webSearch ? { webSearch } : {}),

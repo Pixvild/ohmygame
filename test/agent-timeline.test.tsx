@@ -37,12 +37,28 @@ function AgentTimeline({ items, activeTurnId, failedTurnId, cancelledTurnId, ...
 describe("AgentTimeline", () => {
   it("shows per-call line counts only for successful file edits", () => {
     const edit: ThreadItem = { id: "edit-1", turnId: "turn-1", type: "dynamicToolCall", toolCallId: "call-1", tool: "edit", status: "completed", arguments: { path: "game.ts" }, output: "Updated", lineChanges: { added: 3, removed: 1 } };
-    const html = renderToStaticMarkup(<AgentTimeline items={[user(), edit]} />);
+    const html = renderToStaticMarkup(<AgentTimeline items={[user(), edit]} activeTurnId="turn-1" />);
     expect(html).toContain('aria-label="Lines added: 3; lines removed: 1"');
     expect(html).toContain('class="change-count-added"');
     expect(html).toContain('class="change-count-removed"');
     for (const status of ["failed", "inProgress"] as const) {
       expect(renderToStaticMarkup(<AgentTimeline items={[user(), { ...edit, status }]} />)).not.toContain("change-counts");
+    }
+  });
+
+  it("shows a completed call's Diff while the turn runs, and keeps failure output", () => {
+    const edit: ThreadItem = { id:"edit",turnId:"turn-1",type:"dynamicToolCall",toolCallId:"edit",tool:"edit",status:"completed",arguments:{path:"src/render.ts"},lineChanges:{added:1,removed:1},fileDiff:{hunks:[[{kind:"removed",text:"old code",before:12},{kind:"added",text:"new code",after:12}]],truncated:true} };
+    const html = renderToStaticMarkup(<AgentTimeline items={[user(),edit]} activeTurnId="turn-1" />);
+    expect(html).toContain("Diff");
+    expect(html).toContain("old code");
+    expect(html).toContain("turn-change-line-added");
+    expect(html).toContain("turn-change-line-removed");
+    expect(html).toContain("truncated");
+    for(const status of ["inProgress","failed"] as const) {
+      const pending = renderToStaticMarkup(<AgentTimeline items={[user(),{...edit,status,output:"Could not find exact text"}]} activeTurnId="turn-1" />);
+      expect(pending).not.toContain("old code");
+      expect(pending).not.toContain("change-counts");
+      expect(pending).toContain("Could not find exact text");
     }
   });
 

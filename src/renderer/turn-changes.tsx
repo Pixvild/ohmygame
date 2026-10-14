@@ -1,7 +1,6 @@
 import { ChevronRight, FilePenLine } from "./icons.js";
 import {
   createContext,
-  Fragment,
   useCallback,
   useContext,
   useEffect,
@@ -18,6 +17,7 @@ import type {
 import { t } from "./i18n.js";
 import { lineDiff } from "../shared/line-diff.js";
 import { ChangeCounts } from "./change-counts.js";
+import { FileDiff } from "./file-diff.js";
 
 type ConflictChoice = NonNullable<CheckpointUndoRequest["conflicts"]>;
 
@@ -86,7 +86,6 @@ const CLOSED: FooterView = { open: false, files: {}, submitting: false };
 /** How many files the undo confirmation names before it only counts them. */
 const NAMED_FILES = 10;
 const PREVIEW_FILES = 3;
-const LINE_SIGNS = { same: " ", added: "+", removed: "-" } as const;
 const FooterViewsContext = createContext<FooterViews | undefined>(undefined);
 
 /**
@@ -653,26 +652,7 @@ function FileChanges({ view }: { view: CheckpointFileView }) {
   return (
     <>
       {hunks.length ? (
-        <div className="turn-change-diff">
-          {hunks.map((hunk, index) => (
-            <Fragment key={index}>
-              {index > 0 ? <hr className="turn-change-gap" /> : null}
-              {hunk.map((line) => (
-                <div
-                  className={`turn-change-line turn-change-line-${line.kind}`}
-                  key={`${line.before ?? ""}:${line.after ?? ""}`}
-                >
-                  <span className="turn-change-line-number">{line.before}</span>
-                  <span className="turn-change-line-number">{line.after}</span>
-                  <span className="turn-change-line-sign">
-                    {LINE_SIGNS[line.kind]}
-                  </span>
-                  <span className="turn-change-line-text">{line.text}</span>
-                </div>
-              ))}
-            </Fragment>
-          ))}
-        </div>
+        <FileDiff hunks={hunks} />
       ) : (
         <p className="turn-changes-note">
           {!view.before || !view.after

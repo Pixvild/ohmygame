@@ -1288,6 +1288,8 @@ const en = {
       outputTruncated: "Output truncated",
       commandFailed: "Command failed without output.",
       result: "Result",
+      diff: "Diff",
+      diffTruncated: "Only part of this change is shown. Line counts include all changes.",
       resultTruncated: "Result truncated",
       operationFailed: "Operation failed without output.",
       file: "File",

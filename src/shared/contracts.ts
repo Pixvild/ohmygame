@@ -1,6 +1,7 @@
 import type { ProjectPreviewSettings } from "./preview-settings.js";
 import type { PublishCommunityGame, PublishDeployment } from "./publish-v1.js";
 import type { WebSearchToolMetadata } from "./web-search.js";
+import type { DiffHunk } from "./line-diff.js";
 
 export type PreviewStatus = "waiting" | "stopped" | "starting" | "ready" | "error";
 export type AgentStatus = "idle" | "running" | "cancelling" | "error";
@@ -709,6 +710,8 @@ export type ThreadItem = (
       webSearch?: WebSearchToolMetadata;
       /** Actual text lines changed by this file tool, when available. */
       lineChanges?: LineChanges;
+      /** Bounded preview of this tool's actual file mutation, independent of turn checkpoints. */
+      fileDiff?: { hunks: DiffHunk[]; truncated?: boolean };
     }
   | {
       id: string;
