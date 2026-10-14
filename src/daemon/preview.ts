@@ -596,12 +596,10 @@ export class PreviewManager {
       if (this.#stopping.get(project.id) === stopping)
         this.#stopping.delete(project.id);
     }
-    if (
-      this.#operations.has(project.id) &&
-      this.#operations.get(project.id) !== operation
-    )
-      return;
-    this.#operations.delete(project.id);
+    // A replacement waits for this stop before launching, but may still fail
+    // inspection. Publish the completed stop without cancelling its operation.
+    if (this.#operations.get(project.id) === operation)
+      this.#operations.delete(project.id);
     project.preview = {
       ...project.preview,
       status: "stopped",

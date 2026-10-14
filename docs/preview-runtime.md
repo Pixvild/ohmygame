@@ -81,6 +81,8 @@ Inspection and launch are one cancellable operation: stopping, disabling automat
 startup or losing the last lease cancels an unfinished automatic launch. An explicit
 Start/Play request takes over that launch under manual policy. Reopening during idle
 cleanup waits for the old server to close before starting again.
+If the replacement fails configuration inspection, the closed preview remains
+stopped and its old URL is cleared.
 Saving viewport, default route, automatic policy or idle policy does not restart
 the server. Changing effective launch settings restarts a currently active server.
 
