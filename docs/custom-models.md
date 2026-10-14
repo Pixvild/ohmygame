@@ -24,6 +24,15 @@ them against your endpoint's documentation. Refreshing the list preserves saved
 names, uses, protocols, limits and enable state, including models no longer listed
 by the endpoint. Remove those models explicitly if you no longer want them.
 
+## Azure provider upgrade
+
+Pi 1.2 uses provider ID `azure` in place of `azure-openai-responses`.
+At startup, OhMyGame migrates saved credentials, custom model definitions,
+Pi model preferences, and provider visibility settings. Existing `azure`
+entries take precedence. JSONC comments and UTF-8 BOMs are preserved.
+If a file is invalid, it is left untouched and the error is logged; other
+files are still migrated. Correct the invalid file and restart to retry.
+
 ## OpenAI image connections
 
 The built-in **OpenAI** page has an independent **Image models** section. Chat can
