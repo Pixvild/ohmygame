@@ -106,7 +106,7 @@ export function reduceRuntimeEvent(state: RendererState, event: RuntimeEvent): R
       return {
         ...next,
         turns: state.turns.map((turn) => turn.items.some(ended)
-          ? { ...turn, items: turn.items.map((item) => ended(item) ? { ...item, changes: { files: event.data.files } } : item) }
+          ? { ...turn, items: turn.items.map((item) => ended(item) ? { ...item, changes: { files: event.data.files, ...(event.data.items ? { items: event.data.items } : {}) } } : item) }
           : turn),
       };
     }
@@ -114,7 +114,7 @@ export function reduceRuntimeEvent(state: RendererState, event: RuntimeEvent): R
       // Marked here and not by reading the conversation again, which would drop a turn that started in the meantime.
       const { checkpointId, kept } = event.data;
       const mark = (item: ThreadItem): ThreadItem => item.type === "userMessage" && item.checkpointId === checkpointId && item.changes
-        ? { ...item, changes: { files: item.changes.files, undone: true, ...(kept > 0 ? { kept } : {}) } }
+        ? { ...item, changes: { files: item.changes.files, ...(item.changes.items ? { items: item.changes.items } : {}), undone: true, ...(kept > 0 ? { kept } : {}) } }
         : item;
       return {
         ...next,

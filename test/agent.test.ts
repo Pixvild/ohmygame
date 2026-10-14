@@ -385,6 +385,7 @@ describe("conversationItems", () => {
         toolCallId: "call-1",
         toolName: "write",
         content: [{ type: "text", text: "large private output" }],
+        details: { lineChanges: { added: 3, removed: 1 } },
         isError: false,
         timestamp: 2,
       }),
@@ -406,6 +407,7 @@ describe("conversationItems", () => {
         status: "completed",
         arguments: { path: "secret" },
         output: "large private output",
+        lineChanges: { added: 3, removed: 1 },
         timestamp: 2,
       },
       { id: "assistant-1:assistant:3", turnId: "user-1", type: "agentMessage", text: "Starting now.", status: "completed", phase: "commentary", timestamp: 0 },
@@ -1918,7 +1920,7 @@ describe("AgentManager", () => {
       userMessage("4", "d".repeat(40));
     });
     const events = new RuntimeEventBus();
-    const changed = vi.fn(async (_project: ProjectState, from: string) => from === "a".repeat(40) ? 2 : 0);
+    const changed = vi.fn(async (_project: ProjectState, from: string) => ({ files: from === "a".repeat(40) ? 2 : 0 }));
     const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: async () => "e".repeat(40), changed } });
     const project = createProject();
     const conversation = createConversation(project);
@@ -1945,7 +1947,7 @@ describe("AgentManager", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const manager = new AgentManager(new RuntimeEventBus(), {
       createSession: async () => session,
-      checkpoints: { snapshot: async () => { throw new Error("disk full"); }, changed: async () => 0 },
+      checkpoints: { snapshot: async () => { throw new Error("disk full"); }, changed: async () => ({ files: 0 }) },
     });
     const project = createProject();
 
@@ -1962,7 +1964,7 @@ describe("AgentManager", () => {
     session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
     const events = new RuntimeEventBus();
     const snapshot = deferred<string>();
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => 1 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => ({ files: 1 }) } });
     const project = createProject();
     const conversation = createConversation(project);
 
@@ -1984,7 +1986,7 @@ describe("AgentManager", () => {
   it("marks a turn as undone after its files change, including partial Undo", async () => {
     const { session, entries, userMessage } = checkpointSession();
     session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
-    const manager = new AgentManager(new RuntimeEventBus(), { createSession: async () => session, checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => 24 } });
+    const manager = new AgentManager(new RuntimeEventBus(), { createSession: async () => session, checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => ({ files: 24 }) } });
     const project = createProject();
     const conversation = createConversation(project);
     await manager.prompt(project, conversation, "Build").result;
@@ -2017,7 +2019,7 @@ describe("AgentManager", () => {
     const events = new RuntimeEventBus();
     const manager = new AgentManager(events, {
       createSession: async () => session,
-      checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => { if (failing === "session") return 1; throw new Error("damaged object"); } },
+      checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => { if (failing === "session") return { files: 1 }; throw new Error("damaged object"); } },
     });
     const project = createProject();
 
@@ -2040,7 +2042,7 @@ describe("AgentManager", () => {
     });
     const events = new RuntimeEventBus();
     const snapshot = deferred<string>();
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => 1 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => ({ files: 1 }) } });
     const project = createProject();
     const conversation = createConversation(project);
 
@@ -2089,7 +2091,7 @@ describe("AgentManager", () => {
     });
     const events = new RuntimeEventBus();
     const snapshot = deferred<string>();
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => 1 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => ({ files: 1 }) } });
     const project = createProject();
     const conversation = createConversation(project);
     const turn = manager.prompt(project, conversation, "Build");
@@ -2170,7 +2172,7 @@ describe("AgentManager", () => {
     session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
     const events = new RuntimeEventBus();
     const snapshot = deferred<string>();
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => 1 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => ({ files: 1 }) } });
     const project = createProject();
     const conversation = createConversation(project);
 
@@ -2198,7 +2200,7 @@ describe("AgentManager", () => {
       const { session, entries, userMessage } = checkpointSession();
       session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
       const events = new RuntimeEventBus();
-      const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => new Promise<string>(() => {}), changed: async () => 1 } });
+      const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => new Promise<string>(() => {}), changed: async () => ({ files: 1 }) } });
       const project = createProject();
       const conversation = createConversation(project);
 
@@ -2229,7 +2231,7 @@ describe("AgentManager", () => {
     session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
     const events = new RuntimeEventBus();
     const snapshot = deferred<string>();
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => 1 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => ({ files: 1 }) } });
     const project = createProject();
     const conversation = createConversation(project);
     const turn = manager.prompt(project, conversation, "Build");
@@ -2272,7 +2274,7 @@ describe("AgentManager", () => {
       const events = new RuntimeEventBus();
       const cleanup = deferred<void>();
       const snapshot = vi.fn(async () => "b".repeat(40));
-      const manager = new AgentManager(events, { createSession: async () => session, onRunFinished: () => cleanup.promise, checkpoints: { snapshot, changed: async () => 1 } });
+      const manager = new AgentManager(events, { createSession: async () => session, onRunFinished: () => cleanup.promise, checkpoints: { snapshot, changed: async () => ({ files: 1 }) } });
       const project = createProject();
 
       const turn = manager.prompt(project, createConversation(project), "Build");
@@ -2298,7 +2300,7 @@ describe("AgentManager", () => {
     session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
     const events = new RuntimeEventBus();
     const snapshot = deferred<string>();
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => 1 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => snapshot.promise, changed: async () => ({ files: 1 }) } });
     const project = createProject();
     const conversation = createConversation(project);
     void manager.prompt(project, conversation, "Build").result?.catch(() => {});
@@ -2343,7 +2345,7 @@ describe("AgentManager", () => {
       session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
       const events = new RuntimeEventBus();
       const slow = deferred<string>();
-      const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => slow.promise, changed: async () => 2 } });
+      const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: () => slow.promise, changed: async () => ({ files: 2 }) } });
 
       const turn = manager.prompt(project, conversation, "Build");
       await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
@@ -2377,7 +2379,7 @@ describe("AgentManager", () => {
       const events = new RuntimeEventBus();
       const slow = deferred<string>();
       const snapshot = vi.fn(async () => "c".repeat(40)).mockReturnValueOnce(slow.promise);
-      const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot, changed: async () => 2 } });
+      const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot, changed: async () => ({ files: 2 }) } });
       const project = createProject();
       const conversation = createConversation(project);
       const ends = () => entries.filter((entry) => (entry as { customType?: string }).customType === TURN_END_ENTRY);
@@ -2428,7 +2430,7 @@ describe("AgentManager", () => {
       entries.push(sessionMessage("user-1", message));
     });
     const events = new RuntimeEventBus();
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => 1 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => ({ files: 1 }) } });
     const project = createProject();
 
     await manager.prompt(project, createConversation(project), "Build").result;
@@ -2452,7 +2454,7 @@ describe("AgentManager", () => {
     session.prompt.mockImplementationOnce(async () => userMessage("edited")).mockImplementationOnce(async () => userMessage("next", "b".repeat(40)));
     const events = new RuntimeEventBus();
     const snapshot = vi.fn(async () => "c".repeat(40));
-    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot, changed: async () => 3 } });
+    const manager = new AgentManager(events, { createSession: async () => session, checkpoints: { snapshot, changed: async () => ({ files: 3 }) } });
     const project = createProject();
     const conversation = createConversation(project);
 
@@ -2474,7 +2476,7 @@ describe("AgentManager", () => {
     const others = new FakeSession();
     const manager = new AgentManager(new RuntimeEventBus(), {
       createSession: async (_project, conversation) => conversation.summary.id === "conversation-1" ? session : others,
-      checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => 1 },
+      checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => ({ files: 1 }) },
     });
     const project = createProject();
     const conversation = createConversation(project);
@@ -2521,7 +2523,7 @@ describe("AgentManager", () => {
     session.prompt.mockImplementation(() => working.promise);
     const manager = new AgentManager(new RuntimeEventBus(), {
       createSession: async () => session,
-      checkpoints: { snapshot: async () => "a".repeat(40), changed: async () => 0 },
+      checkpoints: { snapshot: async () => "a".repeat(40), changed: async () => ({ files: 0 }) },
     });
     const project = createProject();
     const planned = createConversation(project, "planned");
@@ -2545,7 +2547,7 @@ describe("AgentManager", () => {
     other.prompt.mockImplementation(() => working.promise);
     const manager = new AgentManager(new RuntimeEventBus(), {
       createSession: async (_project, conversation) => conversation.summary.id === "conversation-1" ? session : other,
-      checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => 1 },
+      checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => ({ files: 1 }) },
     });
     const project = createProject();
     const conversation = createConversation(project);

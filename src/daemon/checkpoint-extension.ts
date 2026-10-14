@@ -2,6 +2,7 @@ import type {
   ExtensionFactory,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import type { CheckpointChangeItem } from "../shared/contracts.js";
 
 /** Session entry that records the workspace snapshot taken before the user message that follows it. */
 export const CHECKPOINT_ENTRY = "ohmygame-checkpoint";
@@ -29,6 +30,8 @@ export interface StoredTurnEnd {
   commit: string;
   /** How many files differ between the two snapshots. */
   files: number;
+  /** Immutable file summaries; absent in older sessions. */
+  items?: CheckpointChangeItem[];
 }
 
 export interface StoredCheckpointUndone {
@@ -69,6 +72,7 @@ export function parseStoredTurnEnd(value: unknown): StoredTurnEnd | undefined {
         checkpoint: data.checkpoint,
         commit: data.commit,
         files: data.files,
+        ...(Array.isArray(data.items) && data.items.length === data.files && data.items.every(isChangeItem) ? { items: data.items } : {}),
       }
     : undefined;
 }
@@ -130,6 +134,14 @@ function isEntryId(value: unknown): value is string {
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isChangeItem(value: unknown): value is CheckpointChangeItem {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<CheckpointChangeItem>;
+  return typeof item.path === "string" &&
+    ["added", "modified", "removed"].includes(item.kind ?? "") &&
+    (item.lines === undefined || (isCount(item.lines?.added) && isCount(item.lines?.removed)));
 }
 
 /**

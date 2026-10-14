@@ -35,6 +35,17 @@ function AgentTimeline({ items, activeTurnId, failedTurnId, cancelledTurnId, ...
 }
 
 describe("AgentTimeline", () => {
+  it("shows per-call line counts only for successful file edits", () => {
+    const edit: ThreadItem = { id: "edit-1", turnId: "turn-1", type: "dynamicToolCall", toolCallId: "call-1", tool: "edit", status: "completed", arguments: { path: "game.ts" }, output: "Updated", lineChanges: { added: 3, removed: 1 } };
+    const html = renderToStaticMarkup(<AgentTimeline items={[user(), edit]} />);
+    expect(html).toContain('aria-label="Lines added: 3; lines removed: 1"');
+    expect(html).toContain('class="change-count-added"');
+    expect(html).toContain('class="change-count-removed"');
+    for (const status of ["failed", "inProgress"] as const) {
+      expect(renderToStaticMarkup(<AgentTimeline items={[user(), { ...edit, status }]} />)).not.toContain("change-counts");
+    }
+  });
+
   it("does not render structured plans in conversation history", () => {
     const html = renderToStaticMarkup(<AgentTimeline items={[
       user(),

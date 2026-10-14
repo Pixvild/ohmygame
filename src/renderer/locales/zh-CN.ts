@@ -1402,6 +1402,11 @@ const zhCN: typeof en = {
     },
   },
   checkpoints: {
+    viewChanges: "查看更改",
+    hideChanges: "收起更改",
+    showMore: "显示其余 {{count}} 个文件",
+    showFewer: "收起文件",
+    lineCounts: "新增 {{added}} 行，删除 {{removed}} 行",
     kind: { added: "新增", modified: "修改", removed: "删除" },
     state: { changed: "之后又改过", undone: "已恢复原样" },
     filesChanged_one: "更改了 {{count}} 个文件",

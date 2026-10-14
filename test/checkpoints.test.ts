@@ -176,6 +176,25 @@ async function unreadable(
 }
 
 describe("workspace checkpoints", () => {
+  it("summarizes net text changes without counting binary or oversized files", async () => {
+    const game = await project({ "game.ts": "keep\nold\n", "removed.txt": "gone\n", "large.txt": "x".repeat(300_000) });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "game.ts": "keep\nnew\nextra\n", "added.txt": "one\ntwo\n", "large.txt": "y".repeat(300_000), "binary.dat": "\u0000image" });
+    await rm(path.join(game.workspacePath, "removed.txt"));
+    const after = await store.snapshot(game);
+    const summary = await store.summarize(game, before, after);
+    expect(summary).toEqual({ files: 5, items: [
+      { path: "added.txt", kind: "added", lines: { added: 2, removed: 0 } },
+      { path: "binary.dat", kind: "added" },
+      { path: "game.ts", kind: "modified", lines: { added: 2, removed: 1 } },
+      { path: "large.txt", kind: "modified" },
+      { path: "removed.txt", kind: "removed", lines: { added: 0, removed: 1 } },
+    ] });
+    await write(game.workspacePath, { "game.ts": "later edits\n" });
+    expect(await store.summarize(game, before, after)).toEqual(summary);
+  });
+
   it("puts changed, added and removed files back and reports them", async () => {
     const files = {
       "index.html": "<main></main>",

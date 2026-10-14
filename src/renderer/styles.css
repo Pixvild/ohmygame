@@ -20,6 +20,8 @@
   --accent: #ededeb;
   --accent-ink: #1b1b1b;
   --success: #69b88d;
+  --diff-added: #65c690;
+  --diff-removed: #ef817d;
   --danger: #f17a73;
   --warning: #d9af63;
   --radius: 6px;
@@ -63,6 +65,8 @@
   --accent: #252525;
   --accent-ink: #ffffff;
   --success: #2f7d57;
+  --diff-added: #20834b;
+  --diff-removed: #cb4444;
   --danger: #c9413d;
   --warning: #9b6a20;
   --theme-accent: #252525;
@@ -9692,8 +9696,36 @@ button {
   line-height: 1;
 }
 
+/* Shared, quiet line statistics for file summaries and individual tools. */
+.change-counts {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.change-count-added { color: var(--diff-added); }
+.change-count-removed { color: var(--diff-removed); }
+
+.turn-changes-title, .turn-changes-toggle { color: var(--text-secondary); }
+.turn-changes-view, .turn-changes-more {
+  padding: 3px 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.turn-changes-view:hover, .turn-changes-more:hover { color: var(--text); }
+.turn-changes-more { margin-top: 3px; }
+.turn-change-chevron { flex: 0 0 auto; color: var(--text-faint); }
+.turn-change-chevron.is-open { transform: rotate(90deg); }
+.turn-change-line-added .turn-change-line-sign { color: var(--diff-added); }
+.turn-change-line-removed .turn-change-line-sign { color: var(--diff-removed); }
+
 .turn-changes {
-  margin: -8px 0 18px;
+  margin: 4px 0 18px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.5;
@@ -9717,12 +9749,9 @@ button {
 .turn-changes-summary {
   display: flex;
   min-height: 28px;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
-}
-
-.turn-changes-summary > svg {
-  flex: 0 0 auto;
 }
 
 .turn-changes-toggle {
@@ -9736,15 +9765,6 @@ button {
 
 .turn-changes-toggle:hover {
   color: var(--text);
-}
-
-.turn-changes-chevron {
-  color: var(--text-faint);
-  transition: transform 120ms ease;
-}
-
-.turn-changes-toggle[aria-expanded="true"] .turn-changes-chevron {
-  transform: rotate(90deg);
 }
 
 .turn-changes-undo {
@@ -9855,7 +9875,7 @@ button {
 }
 
 .turn-changes-list {
-  margin: 0 0 0 21px;
+  margin: 4px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -9875,7 +9895,7 @@ button {
 }
 
 .turn-change-kind {
-  flex: 0 0 52px;
+  flex: 0 0 auto;
   color: var(--text-faint);
   font-size: 10px;
 }
@@ -9889,11 +9909,26 @@ button {
 }
 
 .turn-change-path {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
   min-width: 0;
   padding: 0;
   overflow: hidden;
   border-radius: 3px;
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-change-path > svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.turn-change-path > span {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -9936,12 +9971,12 @@ button {
 }
 
 .turn-change-line-added {
-  background: color-mix(in srgb, var(--success) 16%, transparent);
+  background: color-mix(in srgb, var(--diff-added) 10%, transparent);
   color: var(--text);
 }
 
 .turn-change-line-removed {
-  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  background: color-mix(in srgb, var(--diff-removed) 10%, transparent);
   color: var(--text);
 }
 
@@ -10436,7 +10471,7 @@ button {
 .tool-row {
   display: grid;
   min-height: 28px;
-  grid-template-columns: 14px minmax(0, 1fr) 14px;
+  grid-template-columns: 14px minmax(0, 1fr) auto 14px;
   align-items: center;
   gap: 7px;
   padding: 0;
@@ -10461,7 +10496,7 @@ button {
 }
 
 .tool-row-expandable {
-  grid-template-columns: 14px minmax(0, auto) 14px 14px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr) auto 14px 14px;
 }
 
 .tool-detail-chevron {
@@ -10615,7 +10650,7 @@ button {
 }
 
 .tool-activity-group {
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
   margin: 0;
 }
@@ -10669,6 +10704,11 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  max-height: 280px;
+  padding-right: 6px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
   padding-left: 0;
 }
 

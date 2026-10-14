@@ -262,8 +262,8 @@ describe("checkpoints in the project shell", () => {
 
     await click("2 files changed");
     expect(texts(".turn-change-row")).toEqual([
-      "Modifieda.jsChanged later",
-      "Addedb.js",
+      "a.jsModifiedChanged later",
+      "b.jsAdded",
     ]);
 
     await click("Undo");
@@ -458,7 +458,7 @@ describe("checkpoints in the project shell", () => {
 
     expect(button("Undo")).toBeDefined();
     await click("2 files changed");
-    expect(texts(".turn-change-row")).toEqual(["Modifieda.js", "Addedb.js"]);
+    expect(texts(".turn-change-row")).toEqual(["a.jsModified", "b.jsAdded"]);
 
     // A later turn rewrites one of the files.
     changes = [{ ...CHANGES[0], state: "changed" }, CHANGES[1]];
@@ -477,8 +477,8 @@ describe("checkpoints in the project shell", () => {
     await settle();
 
     expect(texts(".turn-change-row")).toEqual([
-      "Modifieda.jsChanged later",
-      "Addedb.js",
+      "a.jsModifiedChanged later",
+      "b.jsAdded",
     ]);
     expect(
       daemon.requests.filter((request) => request.route === `${BASE}/changes`),

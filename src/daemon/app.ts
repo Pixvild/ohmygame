@@ -770,7 +770,7 @@ export function createApp(options: AppOptions = {}) {
     },
     checkpoints: {
       snapshot: snapshotWorkspace,
-      changed: async (project, from, to) => (await checkpoints.diff(project, from, to)).length,
+      changed: (project, from, to) => checkpoints.summarize(project, from, to),
     },
     onRunCompleted: (project) => {
       void previews.automatic(project, true).catch(() => {});

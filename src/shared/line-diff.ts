@@ -1,3 +1,5 @@
+import type { LineChanges } from "./contracts.js";
+
 export interface DiffLine {
   kind: "same" | "added" | "removed";
   text: string;
@@ -115,4 +117,15 @@ function hunks(lines: DiffLine[]): DiffHunk[] {
     end = to;
   });
   return result;
+}
+
+/** Counts the same changed lines that the unified view displays. */
+export function countLineChanges(before: string, after: string): LineChanges {
+  const counts = { added: 0, removed: 0 };
+  for (const hunk of lineDiff(before, after)) {
+    for (const line of hunk) {
+      if (line.kind !== "same") counts[line.kind] += 1;
+    }
+  }
+  return counts;
 }

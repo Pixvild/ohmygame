@@ -16,8 +16,9 @@ import { promptContextLabels, splitPromptContext, withProjectDesignContext } fro
 import { gameDesignMetadata } from "./game-design-context.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { createTrackedWriteTool, patchLineChanges } from "./file-line-changes.js";
 import { readWorkspaceNotice } from "./workspace-notice.js";
-import type { AgentContextUsage, AgentMessagePhase, AgentReasoningLevel, AgentStatus, ConversationAgentState, ConversationAttachment, PendingPrompt, PlanMode, PlanSessionState, PlanState, PluginMention, ProjectAgentActivity, ProjectState, PromptImage, PromptReference, QuestionnaireAnswer, QuestionnaireQuestion, QuestionnaireResult, ResponsesTransportMode, ThreadItem, ThreadItemError, ToolArtifact } from "../shared/contracts.js";
+import type { AgentContextUsage, AgentMessagePhase, AgentReasoningLevel, AgentStatus, ConversationAgentState, ConversationAttachment, PendingPrompt, PlanMode, PlanSessionState, PlanState, PluginMention, ProjectAgentActivity, ProjectState, PromptImage, PromptReference, QuestionnaireAnswer, QuestionnaireQuestion, QuestionnaireResult, ResponsesTransportMode, ThreadItem, ThreadItemError, ToolArtifact, TurnChanges, LineChanges } from "../shared/contracts.js";
 import { hasPluginMentionToken, parsePluginMentions, serializePluginMentions } from "../shared/plugins.js";
 import type { RuntimeEventBus } from "../shared/events.js";
 import type { StoredConversation } from "./conversations.js";
@@ -167,7 +168,7 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
       const end = parseStoredTurnEnd(entry.data);
       const index = items.findIndex((item) => item.type === "userMessage" && item.checkpointId === end?.checkpoint);
       const item = items[index];
-      if (end && item?.type === "userMessage") items[index] = { ...item, changes: { files: end.files } };
+      if (end && item?.type === "userMessage") items[index] = { ...item, changes: { files: end.files, ...(end.items ? { items: end.items } : {}) } };
       continue;
     }
     if (entry.type === "custom" && entry.customType === CHECKPOINT_UNDONE_ENTRY) {
@@ -176,7 +177,7 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
       const item = items[index];
       // The last undo of a turn says how it stands: one that left files as they are, until a later one puts those back too.
       if (undone && item?.type === "userMessage" && item.changes) {
-        items[index] = { ...item, changes: { files: item.changes.files, undone: true, ...(undone.kept > 0 ? { kept: undone.kept } : {}) } };
+        items[index] = { ...item, changes: { files: item.changes.files, ...(item.changes.items ? { items: item.changes.items } : {}), undone: true, ...(undone.kept > 0 ? { kept: undone.kept } : {}) } };
       }
       continue;
     }
@@ -335,6 +336,7 @@ export function conversationItems(entries: readonly SessionEntry[], markInterrup
         if (result.truncated) tool.truncated = true;
         if (result.artifact) tool.artifact = result.artifact;
         if (result.images?.length) tool.images = result.images;
+        if (tool.type === "dynamicToolCall" && result.lineChanges) tool.lineChanges = result.lineChanges;
       }
     }
   }
@@ -371,7 +373,7 @@ interface AgentManagerOptions {
   /** Takes the snapshot that closes a turn, and counts the files that differ between two snapshots. */
   checkpoints?: {
     snapshot(project: ProjectState): Promise<string>;
-    changed(project: ProjectState, from: string, to: string): Promise<number>;
+    changed(project: ProjectState, from: string, to: string): Promise<TurnChanges>;
   };
   errorDiagnostics?: () => NonNullable<ThreadItemError["diagnostics"]>;
   onRunFailed?: (error: ThreadItemError, scope: { projectId: string; conversationId: string; turnId: string }) => void;
@@ -1426,7 +1428,7 @@ export class AgentManager {
         for (const [index, checkpoint] of active.checkpoints.entries()) {
           const commit = index === active.checkpoints.length - 1 ? last : active.checkpoints[index + 1]?.commit;
           if (!checkpoint || !commit) continue;
-          ends.push({ version: 1, checkpoint: checkpoint.id, commit, files: await checkpoints.changed(project, checkpoint.commit, commit) });
+          ends.push({ version: 1, checkpoint: checkpoint.id, commit, ...await checkpoints.changed(project, checkpoint.commit, commit) });
         }
         return ends;
       } catch {
@@ -1465,7 +1467,7 @@ export class AgentManager {
         sessionManager.appendCustomEntry(TURN_END_ENTRY, end);
         this.#turnEndsRecorded.set(key, (this.#turnEndsRecorded.get(key) ?? 0) + 1);
         // Turn ids differ between the live and the stored conversation; the checkpoint id does not.
-        this.events.publish(projectId, "checkpoint.completed", { checkpointId: end.checkpoint, files: end.files }, { conversationId: active.conversationId });
+        this.events.publish(projectId, "checkpoint.completed", { checkpointId: end.checkpoint, files: end.files, ...(end.items ? { items: end.items } : {}) }, { conversationId: active.conversationId });
       }
     } catch {
       console.warn("Could not save where the turn ended");
@@ -2450,13 +2452,20 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-function toolOutput(result: unknown): { output?: string; truncated?: boolean; artifact?: ToolArtifact; images?: PromptImage[]; webSearch?: Extract<ThreadItem, { type: "dynamicToolCall" }>["webSearch"] } {
+function toolOutput(result: unknown): { output?: string; truncated?: boolean; artifact?: ToolArtifact; images?: PromptImage[]; webSearch?: Extract<ThreadItem, { type: "dynamicToolCall" }>["webSearch"]; lineChanges?: LineChanges } {
+  const details = record(record(result)?.details);
+  const lines = record(details?.lineChanges);
+  const patch = typeof details?.patch === "string" ? details.patch : undefined;
+  const lineChanges = lines && Number.isSafeInteger(lines.added) && Number.isSafeInteger(lines.removed) && Number(lines.added) >= 0 && Number(lines.removed) >= 0
+    ? { added: Number(lines.added), removed: Number(lines.removed) }
+    : patch ? patchLineChanges(patch) : undefined;
   const artifact = toolArtifact(result);
   const webSearch = toolWebSearch(result);
   const images = result && typeof result === "object" && "content" in result
     ? imageContent((result as { content?: unknown }).content)
     : [];
   const media = {
+    ...(lineChanges ? { lineChanges } : {}),
     ...(artifact ? { artifact } : {}),
     ...(images.length ? { images } : {}),
     ...(webSearch ? { webSearch } : {}),
@@ -2691,7 +2700,7 @@ export async function createPiSession(
   const { session } = await createAgentSession({
     cwd: project.workspacePath,
     agentDir,
-    customTools: [createProviderImageReadTool(project.workspacePath, sessionSettings) as ToolDefinition, createBashToolDefinition(project.workspacePath, {
+    customTools: [createTrackedWriteTool(project.workspacePath) as ToolDefinition, createProviderImageReadTool(project.workspacePath, sessionSettings) as ToolDefinition, createBashToolDefinition(project.workspacePath, {
       shellPath: sessionSettings.getShellPath(),
       commandPrefix: sessionSettings.getShellCommandPrefix(),
       spawnHook: (context) => ({ ...context, env: projectProcessEnvironment(context.env) }),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lineDiff, type DiffLine } from "../src/renderer/line-diff.js";
+import { lineDiff, type DiffLine } from "../src/shared/line-diff.js";
 
 describe("lineDiff", () => {
   it("gives no hunks for identical texts", () => {

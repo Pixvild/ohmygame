@@ -16,7 +16,8 @@ import type {
   TurnChanges,
 } from "../shared/contracts.js";
 import { t } from "./i18n.js";
-import { lineDiff } from "./line-diff.js";
+import { lineDiff } from "../shared/line-diff.js";
+import { ChangeCounts } from "./change-counts.js";
 
 type ConflictChoice = NonNullable<CheckpointUndoRequest["conflicts"]>;
 
@@ -50,6 +51,7 @@ interface FileState {
 
 interface FooterView {
   open: boolean;
+  allFiles?: boolean;
   list?: Loaded<CheckpointChangeItem[]>;
   /** The files whose view was opened, by path. */
   files: Record<string, FileState>;
@@ -83,6 +85,7 @@ interface FooterViews {
 const CLOSED: FooterView = { open: false, files: {}, submitting: false };
 /** How many files the undo confirmation names before it only counts them. */
 const NAMED_FILES = 10;
+const PREVIEW_FILES = 3;
 const LINE_SIGNS = { same: " ", added: "+", removed: "-" } as const;
 const FooterViewsContext = createContext<FooterViews | undefined>(undefined);
 
@@ -164,6 +167,25 @@ export function TurnChangesFooter({
   const { load, file } = controls;
   const disabled = controls.disabled || view.submitting;
   const listed = view.list?.status === "ready" ? view.list.value : undefined;
+  const summary = changes.items;
+  const savedLines = useMemo(
+    () => new Map(summary?.map((item) => [item.path, item.lines])),
+    [summary],
+  );
+  const items =
+    listed?.map((item) => ({
+      ...item,
+      lines: savedLines.get(item.path) ?? item.lines,
+    })) ?? summary;
+  const totals = summary?.some((item) => item.lines)
+    ? summary.reduce(
+        (total, item) => ({
+          added: total.added + (item.lines?.added ?? 0),
+          removed: total.removed + (item.lines?.removed ?? 0),
+        }),
+        { added: 0, removed: 0 },
+      )
+    : undefined;
   // An undone turn can be undone again: for the files that were kept, and when the list shows a change of it in place again.
   const offer = !changes.undone
     ? "undo"
@@ -192,6 +214,36 @@ export function TurnChangesFooter({
     }));
   }
 
+  function viewChanges() {
+    update((current) => {
+      if (current.open)
+        return {
+          ...current,
+          open: false,
+          allFiles: false,
+          files: Object.fromEntries(
+            Object.entries(current.files).map(([path, file]) => [
+              path,
+              { ...file, open: false },
+            ]),
+          ),
+        };
+      const next = {
+        ...current,
+        open: true,
+        list: current.list?.status === "failed" ? undefined : current.list,
+      };
+      return items?.length
+        ? withFile(next, items[0].path, (file) => ({
+            ...file,
+            open: true,
+            content:
+              file.content?.status === "failed" ? undefined : file.content,
+          }))
+        : next;
+    });
+  }
+
   async function undo(conflicts?: ConflictChoice, expected?: string[]) {
     if (disabled) return;
     update((current) => ({
@@ -213,16 +265,23 @@ export function TurnChangesFooter({
   return (
     <div className="turn-changes">
       <div className="turn-changes-summary">
-        <FilePenLine size={13} />
-        <button
-          className="turn-changes-toggle"
-          type="button"
-          aria-expanded={view.open}
-          onClick={toggleList}
-        >
-          <span>{t("checkpoints.filesChanged", { count: changes.files })}</span>
-          <ChevronRight className="turn-changes-chevron" size={12} />
-        </button>
+        {summary ? (
+          <span className="turn-changes-title">
+            {t("checkpoints.filesChanged", { count: changes.files })}
+          </span>
+        ) : (
+          <button
+            className="turn-changes-toggle"
+            type="button"
+            aria-expanded={view.open}
+            onClick={toggleList}
+          >
+            <span>
+              {t("checkpoints.filesChanged", { count: changes.files })}
+            </span>
+          </button>
+        )}
+        {totals ? <ChangeCounts lines={totals} /> : null}
         {offer === "undoRest" ? (
           <span className="turn-changes-undone">
             {t("checkpoints.partlyUndone")}
@@ -248,6 +307,18 @@ export function TurnChangesFooter({
         ) : (
           <span className="turn-changes-undone">{t("checkpoints.undone")}</span>
         )}
+        {summary ? (
+          <button
+            className="turn-changes-view"
+            type="button"
+            aria-expanded={view.open}
+            onClick={viewChanges}
+          >
+            {t(
+              view.open ? "checkpoints.hideChanges" : "checkpoints.viewChanges",
+            )}
+          </button>
+        ) : null}
       </div>
       {view.result ? (
         <p className="turn-changes-result" role="status">
@@ -278,28 +349,54 @@ export function TurnChangesFooter({
           {view.error}
         </p>
       ) : null}
-      {view.open ? (
-        !view.list || view.list.status === "loading" ? (
+      {view.open || summary ? (
+        !items && (!view.list || view.list.status === "loading") ? (
           <p className="turn-changes-note">{t("checkpoints.loadingChanges")}</p>
-        ) : view.list.status === "failed" ? (
+        ) : view.list?.status === "failed" ? (
           <p className="turn-changes-error" role="alert">
             {view.list.message}
           </p>
-        ) : view.list.value.length === 0 ? (
+        ) : items?.length === 0 ? (
           <p className="turn-changes-note">{t("checkpoints.noChanges")}</p>
         ) : (
-          <ul className="turn-changes-list">
-            {view.list.value.map((item) => (
-              <ChangedFile
-                key={item.path}
-                checkpointId={checkpointId}
-                item={item}
-                state={view.files[item.path]}
-                update={update}
-                load={file}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="turn-changes-list">
+              {items
+                ?.slice(
+                  0,
+                  view.open || view.allFiles ? undefined : PREVIEW_FILES,
+                )
+                .map((item) => (
+                  <ChangedFile
+                    key={item.path}
+                    checkpointId={checkpointId}
+                    item={item}
+                    state={view.files[item.path]}
+                    update={update}
+                    load={file}
+                  />
+                ))}
+            </ul>
+            {items && items.length > PREVIEW_FILES && !view.open ? (
+              <button
+                className="turn-changes-more"
+                type="button"
+                aria-expanded={Boolean(view.allFiles)}
+                onClick={() =>
+                  update((current) => ({
+                    ...current,
+                    allFiles: !current.allFiles,
+                  }))
+                }
+              >
+                {view.allFiles
+                  ? t("checkpoints.showFewer")
+                  : t("checkpoints.showMore", {
+                      count: items.length - PREVIEW_FILES,
+                    })}
+              </button>
+            ) : null}
+          </>
         )
       ) : null}
     </div>
@@ -492,9 +589,6 @@ function ChangedFile({
   return (
     <li className="turn-change">
       <div className="turn-change-row">
-        <span className={`turn-change-kind turn-change-${item.kind}`}>
-          {t(`checkpoints.kind.${item.kind}`)}
-        </span>
         <button
           className="turn-change-path"
           type="button"
@@ -510,9 +604,22 @@ function ChangedFile({
             )
           }
         >
-          {path}
+          <FilePenLine size={12} aria-hidden="true" />
+          <span>{path}</span>
         </button>
+        {item.lines ? (
+          <ChangeCounts lines={item.lines} />
+        ) : (
+          <span className={`turn-change-kind turn-change-${item.kind}`}>
+            {t(`checkpoints.kind.${item.kind}`)}
+          </span>
+        )}
         {label ? <span className="turn-change-badge">{label}</span> : null}
+        <ChevronRight
+          className={`turn-change-chevron${open ? " is-open" : ""}`}
+          size={12}
+          aria-hidden="true"
+        />
       </div>
       {open ? (
         !content || content.status === "loading" ? (

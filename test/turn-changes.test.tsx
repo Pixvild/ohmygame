@@ -93,6 +93,40 @@ const texts = (selector: string) =>
   );
 
 describe("TurnChangesFooter", () => {
+  it("previews three saved files without requests, expands the list and opens a diff on demand", async () => {
+    const items: CheckpointChangeItem[] = Array.from({ length: 6 }, (_, index) => ({
+      path: `src/file-${index}.ts`, kind: "modified", lines: { added: index + 1, removed: 1 },
+    }));
+    const value = controls({ load: vi.fn(async () => items) });
+    await render(value, { files: 6, items });
+    expect(texts(".turn-change-path")).toEqual(items.slice(0, 3).map((item) => item.path));
+    expect(texts(".turn-changes-summary .change-counts")).toEqual(["+21-6"]);
+    expect(value.load).not.toHaveBeenCalled();
+    expect(value.file).not.toHaveBeenCalled();
+    await click("Show 3 more files");
+    expect(texts(".turn-change-path")).toHaveLength(6);
+    expect(value.load).not.toHaveBeenCalled();
+    await click("Show fewer files");
+    await click("View changes");
+    expect(value.load).toHaveBeenCalledTimes(1);
+    expect(value.file).toHaveBeenCalledWith("checkpoint-1", items[0].path);
+    expect(container.querySelector(".turn-change-diff")).not.toBeNull();
+    await click("Hide changes");
+    expect(texts(".turn-change-path")).toHaveLength(3);
+    expect(container.querySelector(".turn-change-diff")).toBeNull();
+  });
+
+  it("keeps saved statistics after the live list and an undo refresh the workspace", async () => {
+    const items = [{ path: "notes.txt", kind: "modified" as const, lines: { added: 2, removed: 1 } }];
+    const value = controls({ load: vi.fn<TurnChangesControls["load"]>(async () => [{ path: "notes.txt", kind: "modified", state: "undone" }]) });
+    await render(value, { files: 1, items });
+    await click("View changes");
+    expect(texts(".turn-change-row .change-counts")).toEqual(["+2-1"]);
+    await render(value, { files: 1, items, undone: true }, "reloaded-turn", 1);
+    expect(texts(".turn-change-row .change-counts")).toEqual(["+2-1"]);
+    expect(button("Undo")).toBeUndefined();
+  });
+
   it("loads the list when it is first opened and shows each file", async () => {
     const value = controls();
     await render(value);
@@ -111,9 +145,9 @@ describe("TurnChangesFooter", () => {
       "true",
     );
     expect(texts(".turn-change-row")).toEqual([
-      "Modifiedsrc/game.jsChanged later",
-      "Addedassets/hero.png",
-      "Removedold/notes.mdAlready put back",
+      "src/game.jsModifiedChanged later",
+      "assets/hero.pngAdded",
+      "old/notes.mdRemovedAlready put back",
     ]);
     expect(texts(".turn-change-badge")).toEqual([
       "Changed later",

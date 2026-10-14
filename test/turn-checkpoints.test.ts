@@ -146,7 +146,7 @@ async function fixture(
     checkpoints: {
       snapshot,
       changed: async (state, before, after) =>
-        (await store.diff(state, before, after)).length,
+        store.summarize(state, before, after),
     },
   });
   cleanups.push(() => manager.close());

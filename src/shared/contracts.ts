@@ -707,6 +707,8 @@ export type ThreadItem = (
       artifact?: ToolArtifact;
       images?: PromptImage[];
       webSearch?: WebSearchToolMetadata;
+      /** Actual text lines changed by this file tool, when available. */
+      lineChanges?: LineChanges;
     }
   | {
       id: string;
@@ -932,10 +934,17 @@ export interface CreateLibraryImageRequest {
   image: PromptImage & { mediaType: Extract<LibraryUploadMediaType, `image/${string}`> };
 }
 
+export interface LineChanges {
+  added: number;
+  removed: number;
+}
+
 /** The file changes of one Agent turn. */
 export interface TurnChanges {
   /** How many files the turn added, modified or removed. */
   files: number;
+  /** Immutable file summary saved when the turn ended. Absent in older sessions. */
+  items?: CheckpointChangeItem[];
   /** The changes were taken back with Undo. */
   undone?: boolean;
   /** How many of the files that undo left as they are, because they were changed again after the turn. */
@@ -946,6 +955,8 @@ export interface CheckpointChangeItem {
   /** Workspace path with forward slashes. */
   path: string;
   kind: "added" | "modified" | "removed";
+  /** Omitted for binary files or text beyond the preview limit. */
+  lines?: LineChanges;
   /**
    * How the file stands now: as the turn left it, as it was before the turn,
    * or changed again afterwards. Left out while the Agent is working.
@@ -1146,7 +1157,7 @@ export interface RuntimeEventData {
   "preview.updated": { preview: PreviewRuntimeState };
   "agent.started": { prompt: string; mentions?: PluginMention[]; images?: PromptImage[]; attachments?: ConversationAttachment[]; contexts?: PromptContextLabel[]; revision?: "last-turn" };
   "checkpoint.created": { checkpointId: string };
-  "checkpoint.completed": { checkpointId: string; files: number };
+  "checkpoint.completed": { checkpointId: string } & Pick<TurnChanges, "files" | "items">;
   "workspace.restored": { version: string; changed: string[]; recovery?: boolean; checkpointId?: string };
   "workspace.undone": { checkpointId: string; kept: number };
   "plan.mode.changed": PlanSessionState;
