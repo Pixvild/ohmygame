@@ -1,9 +1,11 @@
-import { Fragment } from "react";
-import type { DiffHunk } from "../shared/line-diff.js";
+import { Fragment, useMemo } from "react";
+import { lineDiff, type DiffHunk } from "../shared/line-diff.js";
+import type { CheckpointFileView } from "../shared/contracts.js";
+import { t } from "./i18n.js";
 
 const LINE_SIGNS = { same: " ", added: "+", removed: "-" } as const;
 
-/** Shared view for a single tool mutation and a turn's net file changes. */
+/** Shared view for tool mutations, turn changes and the Git workspace. */
 export function FileDiff({ hunks }: { hunks: DiffHunk[] }) {
   return (
     <div className="turn-change-diff">
@@ -26,5 +28,59 @@ export function FileDiff({ hunks }: { hunks: DiffHunk[] }) {
         </Fragment>
       ))}
     </div>
+  );
+}
+
+export function FileComparison({
+  view,
+  maxLines,
+  unchangedLabel,
+}: {
+  view: CheckpointFileView;
+  maxLines?: number;
+  unchangedLabel?: string;
+}) {
+  const binary = Boolean(view.before?.binary || view.after?.binary);
+  const truncated = Boolean(view.before?.truncated || view.after?.truncated);
+  const full = useMemo(
+    () =>
+      binary
+        ? []
+        : lineDiff(view.before?.content ?? "", view.after?.content ?? ""),
+    [view, binary],
+  );
+  let retained = 0;
+  const hunks =
+    maxLines === undefined
+      ? full
+      : full
+          .map((hunk) => {
+            const shown = hunk.slice(0, Math.max(0, maxLines - retained));
+            retained += hunk.length;
+            return shown;
+          })
+          .filter((hunk) => hunk.length);
+  const clipped = maxLines !== undefined && retained > maxLines;
+  if (binary)
+    return <p className="turn-changes-note">{t("checkpoints.binary")}</p>;
+  return (
+    <>
+      {hunks.length ? (
+        <FileDiff hunks={hunks} />
+      ) : (
+        <p className="turn-changes-note">
+          {!view.before || !view.after
+            ? t("checkpoints.emptyFile")
+            : truncated
+              ? t("checkpoints.samePart")
+              : (unchangedLabel ?? t("checkpoints.sameLines"))}
+        </p>
+      )}
+      {(truncated || clipped) && hunks.length ? (
+        <p className="turn-changes-note">
+          {t(clipped ? "checkpoints.diffTruncated" : "checkpoints.truncated")}
+        </p>
+      ) : null}
+    </>
   );
 }

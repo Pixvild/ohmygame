@@ -15,9 +15,8 @@ import type {
   TurnChanges,
 } from "../shared/contracts.js";
 import { t } from "./i18n.js";
-import { lineDiff } from "../shared/line-diff.js";
 import { ChangeCounts } from "./change-counts.js";
-import { FileDiff } from "./file-diff.js";
+import { FileComparison } from "./file-diff.js";
 
 type FileAction = "undo" | "reapply";
 
@@ -557,44 +556,10 @@ function ChangedFile({
             {content.message}
           </p>
         ) : (
-          <FileChanges view={content.value} />
+          <FileComparison view={content.value} />
         )
       ) : null}
     </li>
-  );
-}
-
-function FileChanges({ view }: { view: CheckpointFileView }) {
-  const binary = Boolean(view.before?.binary || view.after?.binary);
-  // Of a longer file only the beginning was read, so a change beyond it is not seen here.
-  const truncated = Boolean(view.before?.truncated || view.after?.truncated);
-  // A side that is not there compares as an empty text, so the other side shows whole.
-  const hunks = useMemo(
-    () =>
-      binary
-        ? []
-        : lineDiff(view.before?.content ?? "", view.after?.content ?? ""),
-    [view, binary],
-  );
-  if (binary)
-    return <p className="turn-changes-note">{t("checkpoints.binary")}</p>;
-  return (
-    <>
-      {hunks.length ? (
-        <FileDiff hunks={hunks} />
-      ) : (
-        <p className="turn-changes-note">
-          {!view.before || !view.after
-            ? t("checkpoints.emptyFile")
-            : truncated
-              ? t("checkpoints.samePart")
-              : t("checkpoints.sameLines")}
-        </p>
-      )}
-      {truncated && hunks.length ? (
-        <p className="turn-changes-note">{t("checkpoints.truncated")}</p>
-      ) : null}
-    </>
   );
 }
 

@@ -73,6 +73,7 @@ import {
   type Model3DAnimationAction,
 } from "../shared/contracts.js";
 import type { DesktopUpdateState } from "../shared/desktop-update.js";
+import type { WorkspaceGitChanges, WorkspaceGitFileView } from "../shared/workspace-git.js";
 import type { ExampleSummary } from "../shared/examples.js";
 import type { PlaytestWatchState } from "../shared/playtest.js";
 import type { NodeRuntimeResponse } from "../shared/playable-player-protocol.js";
@@ -637,6 +638,14 @@ export async function setProjectCoverMode(projectId: string, mode: ProjectCoverM
 
 export async function listWorkspaceFiles(projectId: string): Promise<WorkspaceFile[]> {
   return request(`/projects/${projectId}/files`);
+}
+
+export async function getWorkspaceGitChanges(projectId: string): Promise<WorkspaceGitChanges> {
+  return request(`/projects/${encodeURIComponent(projectId)}/git/changes`);
+}
+
+export async function getWorkspaceGitFile(projectId: string, filePath: string): Promise<WorkspaceGitFileView> {
+  return request(`/projects/${encodeURIComponent(projectId)}/git/file?path=${encodeURIComponent(filePath)}`);
 }
 
 export async function createWorkspaceEntry(projectId: string, parent: string, name: string, kind: "file" | "folder"): Promise<{ path: string }> {

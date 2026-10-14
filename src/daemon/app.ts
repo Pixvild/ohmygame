@@ -91,6 +91,7 @@ import { PluginSkillContentError, readPluginSkillContent, resolvePluginSkillFile
 import { LegacyMcpConfiguration } from "./legacy-mcp.js";
 import { hasPluginMentionToken, type InstallPluginRequest, type PluginSettings, type PluginSummary, type PluginDetail } from "../shared/plugins.js";
 import { getWorkspaceMedia, listWorkspaceFiles, locateWorkspaceEntry, readWorkspaceFile, validateWorkspaceFile, workspaceMediaInfo, WorkspaceError } from "./workspace.js";
+import { listWorkspaceGitChanges, readWorkspaceGitFile } from "./workspace-git.js";
 import { AssetLibrary, AssetLibraryError } from "./asset-library.js";
 import { AgentAttachmentError, AgentAttachmentStore, MAX_AGENT_ATTACHMENT_BYTES, MAX_AGENT_ATTACHMENTS_PER_TURN } from "./agent-attachments.js";
 import type { GameRuntimeAdapter } from "../shared/playtest.js";
@@ -1748,6 +1749,26 @@ export function createApp(options: AppOptions = {}) {
     await projects.setCoverMode(request.params.projectId, "auto");
     return reply.code(204).send();
   });
+
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/git/changes", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    return listWorkspaceGitChanges(project.workspacePath);
+  });
+
+  app.get<{ Params: { projectId: string }; Querystring: { path: string } }>(
+    "/projects/:projectId/git/file",
+    { schema: { querystring: assetPathQuerySchema } },
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      try { return await readWorkspaceGitFile(project.workspacePath, request.query.path); }
+      catch (cause) {
+        if (cause instanceof WorkspaceError) return reply.code(cause.code === "ENOENT" ? 404 : 400).send({ error: cause.message });
+        throw cause;
+      }
+    },
+  );
 
   app.get<{ Params: { projectId: string } }>("/projects/:projectId/files", async (request, reply) => {
     const project = projects.get(request.params.projectId);

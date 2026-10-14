@@ -13615,6 +13615,113 @@ button {
   flex: 1;
 }
 
+.file-explorer-views, .file-explorer-views nav {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.file-explorer-views {
+  justify-content: space-between;
+  padding: 6px 8px 0;
+}
+
+.file-explorer-views nav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.file-explorer-views nav button:hover,
+.file-explorer-views nav button[aria-pressed="true"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.git-change-count {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.git-changes-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 3px 6px;
+}
+
+.git-change-row {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.git-change-row:hover, .git-change-row.is-selected {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.git-change-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-change-kind {
+  flex: 0 0 10px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.git-change-kind-added { color: var(--diff-added); }
+.git-change-kind-removed { color: var(--diff-removed); }
+.git-change-unknown { color: var(--text-faint); }
+
+.git-changes-note {
+  margin: 0;
+  padding: 9px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.git-changes-note[role="alert"] { color: var(--danger); }
+.git-diff-base { margin-left: auto; color: var(--text-faint); }
+
+.git-diff-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.git-diff-content .turn-change-diff {
+  max-height: none;
+  margin: 0;
+}
+
 .file-tree-node {
   display: flex;
   width: calc(100% - 12px);
