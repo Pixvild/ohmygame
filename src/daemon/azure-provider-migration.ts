@@ -17,20 +17,25 @@ export async function migrateAzureProviderId(
   piAgentDirectory: string,
   dataDirectory: string,
 ): Promise<void> {
-  await updateJson(path.join(piAgentDirectory, "auth.json"), (config) =>
-    renameKey(config, []),
-  );
-  await updateJson(path.join(piAgentDirectory, "models.json"), (config) =>
-    renameKey(config, ["providers"]),
-  );
-  await updateJson(
-    path.join(piAgentDirectory, "settings.json"),
-    migratePiSettings,
-  );
-  await updateJson(
-    path.join(dataDirectory, "model-visibility.json"),
-    migrateVisibility,
-  );
+  const results = await Promise.allSettled([
+    updateJson(path.join(piAgentDirectory, "auth.json"), (config) =>
+      renameKey(config, []),
+    ),
+    updateJson(path.join(piAgentDirectory, "models.json"), (config) =>
+      renameKey(config, ["providers"]),
+    ),
+    updateJson(path.join(piAgentDirectory, "settings.json"), migratePiSettings),
+    updateJson(
+      path.join(dataDirectory, "model-visibility.json"),
+      migrateVisibility,
+    ),
+  ]);
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length)
+    throw new AggregateError(
+      failures.map((result) => result.reason),
+      "Could not migrate some Azure provider settings",
+    );
 }
 
 type Edit = { path: (string | number)[]; value: unknown };
@@ -122,6 +127,8 @@ async function updateJson(
     throw cause;
   }
   if (!text.includes(LEGACY_ID)) return;
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+  text = text.slice(bom.length);
   const errors: ParseError[] = [];
   const config: unknown = parse(text, errors, { allowTrailingComma: true });
   if (errors.length || !isObject(config))
@@ -140,7 +147,7 @@ async function updateJson(
     );
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, next, {
+    await writeFile(temporary, bom + next, {
       encoding: "utf8",
       mode: 0o600,
       flag: "wx",

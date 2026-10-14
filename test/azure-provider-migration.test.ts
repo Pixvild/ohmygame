@@ -100,4 +100,82 @@ describe("Azure provider migration", () => {
       settings,
     );
   });
+
+  it("preserves UTF-8 BOMs and JSONC comments while migrating Pi files", async () => {
+    const files = {
+      "auth.json":
+        '\uFEFF{ "azure-openai-responses": { "type": "api_key", "key": "secret" } }',
+      "models.json":
+        '\uFEFF{ // Deployment\n "providers": { "azure-openai-responses": { "baseUrl": "https://example.openai.azure.com" } },\n}',
+      "settings.json": '\uFEFF{ "defaultProvider": "azure-openai-responses" }',
+    };
+    const directory = await fixture(files);
+    await migrateAzureProviderId(directory, directory);
+    for (const name of Object.keys(files)) {
+      const text = await readFile(path.join(directory, name), "utf8");
+      expect(text.startsWith("\uFEFF")).toBe(true);
+      expect(text).not.toContain("azure-openai-responses");
+      expect(text).toContain('"azure"');
+    }
+    expect(
+      await readFile(path.join(directory, "models.json"), "utf8"),
+    ).toContain("// Deployment");
+    const migrated = await Promise.all(
+      Object.keys(files).map((name) =>
+        readFile(path.join(directory, name), "utf8"),
+      ),
+    );
+    await migrateAzureProviderId(directory, directory);
+    expect(
+      await Promise.all(
+        Object.keys(files).map((name) =>
+          readFile(path.join(directory, name), "utf8"),
+        ),
+      ),
+    ).toEqual(migrated);
+  });
+
+  it.each(["auth.json", "settings.json"])(
+    "migrates healthy files even when %s is invalid",
+    async (invalidFile) => {
+      const invalid = '{ "azure-openai-responses": ';
+      const directory = await fixture({
+        "auth.json": JSON.stringify({
+          "azure-openai-responses": { type: "api_key", key: "secret" },
+        }),
+        "models.json": JSON.stringify({
+          providers: {
+            "azure-openai-responses": {
+              baseUrl: "https://example.openai.azure.com",
+            },
+          },
+        }),
+        "settings.json": JSON.stringify({
+          defaultProvider: "azure-openai-responses",
+        }),
+        "model-visibility.json": JSON.stringify({
+          hidden: { "azure-openai-responses": ["gpt-4"] },
+          disabled: ["azure-openai-responses"],
+        }),
+        [invalidFile]: invalid,
+      });
+      await expect(
+        migrateAzureProviderId(directory, directory),
+      ).rejects.toThrow();
+      expect(await readFile(path.join(directory, invalidFile), "utf8")).toBe(
+        invalid,
+      );
+      expect(await read(directory, "models.json")).toEqual({
+        providers: { azure: { baseUrl: "https://example.openai.azure.com" } },
+      });
+      expect(await read(directory, "model-visibility.json")).toEqual({
+        hidden: { azure: ["gpt-4"] },
+        disabled: ["azure"],
+      });
+      if (invalidFile !== "auth.json")
+        expect(await read(directory, "auth.json")).toEqual({
+          azure: { type: "api_key", key: "secret" },
+        });
+    },
+  );
 });
