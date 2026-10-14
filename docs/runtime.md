@@ -107,7 +107,10 @@ state to avoid reopening a connection that changed since the list loaded.
 Existing provider credentials and models can be edited from Settings.
 
 Connecting, adding, or enabling a provider during setup makes its recommended
-language model the global default. The recommendation mirrors Pi's
+language model the global default. Navigation and completion stay disabled
+until the default is saved, including during catalog refreshes. If saving
+fails, **Retry** saves the default again without repeating authorization.
+The recommendation mirrors Pi's
 per-provider defaults for the popular providers and falls back to the
 provider's first visible model. The ready line names the default model and its
 provider; with more than one model available, it is a menu that changes the
