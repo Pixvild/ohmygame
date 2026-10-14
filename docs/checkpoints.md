@@ -14,9 +14,10 @@ fails, the range is unavailable; a failed before checkpoint prevents inference
 and tool execution.
 
 Tool groups expand into an internally scrolling list capped at 280px. Successful
-`edit` and `write` calls show their own line counts next to the tool label and its
-arrow, when available. Counts match the label color at rest and turn green/red on hover or
-keyboard focus.
+`edit` and `write` calls show their own line counts immediately after the tool
+label, when available. The expand arrow appears to the right of the label and
+counts on hover or keyboard focus. Counts match the label color at rest and
+turn green/red on hover or keyboard focus.
 They appear as soon as that call completes, while the rest of the turn can still
 be running. Expanding the call shows its actual Diff with the same green/red
 view as the turn summary. Tool previews retain up to 300 lines and 32,768 text characters;

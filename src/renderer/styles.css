@@ -10479,7 +10479,7 @@ button {
 }
 
 .tool-row-expandable:has(> .change-counts) {
-  grid-template-columns: 14px minmax(0, auto) 12px auto 14px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, auto) auto 12px 14px minmax(0, 1fr);
 }
 
 .tool-row .change-count-added,
