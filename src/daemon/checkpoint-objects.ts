@@ -10,6 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { createDeflate, createInflate, deflate, inflate } from "node:zlib";
@@ -322,7 +323,6 @@ export async function readBlobLimited(
   const chunks: Buffer[] = [];
   let length = 0;
   let tooLarge: CheckpointFileTooLargeError | undefined;
-  const { Writable } = await import("node:stream");
   const destination = new Writable({
     write(chunk: Buffer, _encoding, done) {
       length += chunk.length;

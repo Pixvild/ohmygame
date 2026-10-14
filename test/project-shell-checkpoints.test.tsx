@@ -310,7 +310,12 @@ describe("checkpoints in the project shell", () => {
     );
     expect(button("Undo")).toBeUndefined();
     expect(button("Undo the rest")).toBeDefined();
-    // The workspace views read the files again, and so does the open list.
+    // The turn marker does not also invalidate files. The project-wide event
+    // updates every editor and the open list once, after the lock is released.
+    expect(asked("/projects/project/files")).toBe(fileLists);
+    expect(asked(`${BASE}/changes`)).toBe(changeLists);
+    await act(async () => daemon.send(2, "workspace.restored", { version: "restored", changed: ["a.js"] }));
+    await settle();
     expect(asked("/projects/project/files")).toBeGreaterThan(fileLists);
     expect(asked(`${BASE}/changes`)).toBe(changeLists + 1);
     expect(container.querySelector(".turn-changes-result")!.textContent).toBe(

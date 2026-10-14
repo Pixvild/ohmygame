@@ -22,7 +22,6 @@ import {
 import { CheckpointStore } from "../src/daemon/checkpoints.js";
 import { CheckpointFileTooLargeError } from "../src/daemon/checkpoint-objects.js";
 import {
-  checkpointExtension,
   turnRange,
   CHECKPOINT_ENTRY,
   parseStoredCheckpoint,
@@ -136,7 +135,7 @@ async function fixture(
     undefined,
     undefined,
     undefined,
-    checkpointExtension(() => snapshot(project)),
+    () => snapshot(project),
   )) as AgentSession;
   const events = new RuntimeEventBus();
   const manager = new AgentManager(events, {

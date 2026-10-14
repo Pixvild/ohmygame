@@ -37,18 +37,17 @@ import { SessionImages } from "./session-images.js";
 import { installSessionImageRequests } from "./session-image-requests.js";
 import { AGENT_ERROR_ENTRY, assistantMessageError, normalizeAgentError, thrownAgentError } from "./agent-errors.js";
 import {
-  CHECKPOINT_ENTRY, CHECKPOINT_RESTORED_ENTRY, CHECKPOINT_UNDONE_ENTRY, TURN_END_ENTRY, parseStoredCheckpoint, parseStoredCheckpointUndone, parseStoredTurnEnd, turnRange,
+  CHECKPOINT_ENTRY, CHECKPOINT_RESTORED_ENTRY, CHECKPOINT_UNDONE_ENTRY, TURN_END_ENTRY, checkpointExtension, parseStoredCheckpoint, parseStoredCheckpointUndone, parseStoredTurnEnd, turnRange,
   type StoredCheckpointUndone, type StoredTurnEnd, type TurnRange,
 } from "./checkpoint-extension.js";
-
-const piSessions = new WeakSet<CodingSession>();
 
 export interface CodingSession {
   readonly messages: readonly unknown[];
   readonly model?: RuntimeModel;
+  /** Whether prompt() emits message_start for its initial user message. */
+  readonly emitsInitialUserMessage?: boolean;
   readonly sessionManager?: Pick<SessionManager, "appendCustomEntry" | "getBranch"> & Partial<Pick<SessionManager, "branch">>;
   prompt(prompt: string, options?: { images?: PiPromptImage[] }): Promise<void>;
-  sendCustomMessage?(message: { customType: string; content: string; display: boolean }, options?: { triggerTurn?: boolean }): Promise<void>;
   followUp?(prompt: string, images?: PiPromptImage[]): Promise<unknown>;
   steer?(prompt: string, images?: PiPromptImage[]): Promise<unknown>;
   compact?(customInstructions?: string): Promise<unknown>;
@@ -824,17 +823,20 @@ export class AgentManager {
     try {
       const { session } = await this.#getSession(project, conversation);
       const sessionManager = session.sessionManager;
-      if (!session.navigateTree || !sessionManager?.branch) throw new Error("The current agent session cannot restore checkpoints");
+      const navigate = session.navigateTree?.bind(session);
+      const selectBranch = sessionManager?.branch?.bind(sessionManager);
+      if (!navigate || !selectBranch || !sessionManager) throw new Error("The current agent session cannot restore checkpoints");
       const branch = sessionManager.getBranch();
       const index = branch.findIndex((entry) => entry.id === checkpointId);
       const entry = branch[index];
       const checkpoint = entry?.type === "custom" && entry.customType === CHECKPOINT_ENTRY ? parseStoredCheckpoint(entry.data) : undefined;
       const message = checkpoint && branch.slice(index + 1).find((candidate) => candidate.type === "message" && candidate.message.role === "user");
-      if (!checkpoint || !message) throw new CheckpointNotFoundError();
+      const originalLeaf = branch.at(-1)?.id;
+      if (!checkpoint || !message || !originalLeaf) throw new CheckpointNotFoundError();
 
       await restoreFiles(checkpoint.commit, async (undo) => {
         try {
-          const navigation = await session.navigateTree!(message.id, { summarize: false });
+          const navigation = await navigate(message.id, { summarize: false });
           if (navigation.cancelled) throw new Error("Restore was cancelled");
           // Pi moves back in memory only; an entry after the move makes it the conversation's end on disk too.
           sessionManager.appendCustomEntry(CHECKPOINT_RESTORED_ENTRY, { version: 1, checkpoint: checkpointId, undo });
@@ -842,7 +844,7 @@ export class AgentManager {
           appendPlanState(sessionManager, { mode: "normal" });
         } catch (cause) {
           try {
-            sessionManager.branch!(branch.at(-1)!.id);
+            selectBranch(originalLeaf);
             appendPlanState(sessionManager, { mode: "normal" });
           } catch (rollback) {
             throw new AggregateError([cause, rollback], "Could not restore the conversation after a failed rewind");
@@ -1543,13 +1545,6 @@ export class AgentManager {
     return managed;
   }
 
-  async notifyWorkspaceChange(projectId: string, conversationId: string, content: string): Promise<boolean> {
-    const session = this.#sessions.get(conversationKey(projectId, conversationId))?.session;
-    if (!session?.sendCustomMessage) return false;
-    await session.sendCustomMessage({ customType: "ohmygame-workspace-undo", content, display: false }, { triggerTurn: false });
-    return true;
-  }
-
   #forwardEvent(projectId: string, conversationId: string, event: AgentSessionEvent): void {
     const active = this.#activeTurns.get(conversationKey(projectId, conversationId));
     if (!active) return;
@@ -1562,7 +1557,7 @@ export class AgentManager {
       if (active.left && sessionManager) carryTurnEnds(sessionManager, active.left, true);
       active.left = undefined;
       active.entryBeforeMessage = sessionManager?.getBranch().at(-1)?.id;
-      if (initialMessage && piSessions.has(this.#sessions.get(key)!.session)) return;
+      if (initialMessage && this.#sessions.get(key)?.session.emitsInitialUserMessage) return;
       const steering = this.#steeringPrompts.get(key) ?? [];
       const pending = this.#pendingPrompts.get(key) ?? [];
       const started = steering[0] ?? pending[0];
@@ -2660,32 +2655,30 @@ export async function createPiSession(
   resolvePluginSkills?: () => Promise<PluginSkillRegistration[]>,
   mcp?: { factory: ExtensionFactory; host: PluginMcpHost },
   responsesTransport?: (provider: string) => ResponsesTransportMode,
-  checkpointFactory?: ExtensionFactory,
+  snapshotBeforeMessage?: () => Promise<string>,
 ): Promise<CodingSession> {
-  let checkpointFailure: unknown;
+  let checkpointFailure: { cause: unknown } | undefined;
   let stopForCheckpointFailure: () => void = () => {};
+  const failCheckpoint = (cause: unknown) => {
+    checkpointFailure ??= { cause };
+    stopForCheckpointFailure();
+  };
+  const assertCheckpoint = () => {
+    if (checkpointFailure) throw checkpointFailure.cause;
+  };
   const guardedCheckpoints: ExtensionFactory = async (pi) => {
     pi.on("before_agent_start", async (event) => {
       try {
         const notice = await readWorkspaceNotice(project);
         return notice ? { systemPrompt: `${event.systemPrompt}\n\nWorkspace restore notice (inspect current files before continuing):\n${notice}` } : undefined;
-      } catch (cause) { checkpointFailure = cause; stopForCheckpointFailure(); }
+      } catch (cause) { failCheckpoint(cause); }
     });
     pi.on("tool_call", () => checkpointFailure
       ? { block: true, reason: "Workspace checkpoint failed; no tools may run." } : undefined);
-    if (checkpointFactory) await checkpointFactory(new Proxy(pi, {
-      get(target, key, receiver) {
-        if (key !== "on") return Reflect.get(target, key, receiver);
-        return (event: string, handler: (...args: unknown[]) => unknown) => {
-          const on = target.on as unknown as (name: string, callback: (...args: unknown[]) => Promise<unknown>) => void;
-          on(event, async (...args) => {
-            if (checkpointFailure) return;
-            try { return await handler(...args); }
-            catch (cause) { checkpointFailure = cause; stopForCheckpointFailure(); }
-          });
-        };
-      },
-    }));
+    if (snapshotBeforeMessage) await checkpointExtension(async () => {
+      if (checkpointFailure) throw checkpointFailure.cause;
+      return snapshotBeforeMessage();
+    }, failCheckpoint)(pi);
   };
   // Trusted-local phase: cwd guides Pi but is not an OS security boundary.
   const { resourceLoader, sessionSettings, pluginSkills } = await createPiResourceLoader(project.workspacePath, agentDir, {
@@ -2709,12 +2702,11 @@ export async function createPiSession(
     sessionManager,
     settingsManager: sessionSettings,
   });
-  piSessions.add(session);
   stopForCheckpointFailure = () => { void session.abort().catch(() => {}); };
   const streamFunction = session.agent.streamFunction;
   session.agent.streamFunction = (...args) => {
     // Pi swallows extension exceptions and may call a provider with an aborted signal.
-    if (checkpointFailure) throw checkpointFailure;
+    assertCheckpoint();
     return streamFunction(...args);
   };
   installDeepSeekImageFiles(session, agentDir);
@@ -2723,10 +2715,11 @@ export async function createPiSession(
   try { await session.bindExtensions({ mode: "rpc" }); } catch (cause) { session.dispose(); throw cause; }
   const prompt = session.prompt.bind(session);
   return Object.assign(session, {
+    emitsInitialUserMessage: true,
     prompt: async (...args: Parameters<typeof prompt>) => {
       checkpointFailure = undefined;
       await prompt(...args);
-      if (checkpointFailure) throw checkpointFailure;
+      assertCheckpoint();
     },
     getSkills: () => skillCatalog(resourceLoader.getSkills().skills, pluginSkills),
   });

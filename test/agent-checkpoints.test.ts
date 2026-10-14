@@ -491,29 +491,43 @@ describe("Agent checkpoints", () => {
     expect(await file("notes.txt")).toBe("second");
   });
 
-  it("announces an Undo once and continues notifying other conversations after a session I/O failure", async () => {
-    const { project, another, send, ended, undo, published, file } =
-      await studio([{ write: { "notes.txt": "after" } }, { say: "Changed" }]);
+  it("announces an Undo once and supplies its durable notice to another conversation", async () => {
+    const {
+      project,
+      another,
+      send,
+      ended,
+      undo,
+      published,
+      file,
+      post,
+      requests,
+    } = await studio([{ write: { "notes.txt": "after" } }, { say: "Changed" }]);
     await writeFile(path.join(project.workspacePath, "notes.txt"), "before");
     await send("Change notes");
     const message = await ended("Change notes");
-    await another();
-    const notify = AgentManager.prototype.notifyWorkspaceChange;
-    let calls = 0;
-    const notices = vi
-      .spyOn(AgentManager.prototype, "notifyWorkspaceChange")
-      .mockImplementation(async function (this: AgentManager, ...args) {
-        if (++calls === 1) throw new Error("session I/O failure");
-        return notify.apply(this, args);
-      });
+    const other = await another();
     const response = await undo(message.checkpointId!);
     expect(response.statusCode, response.body).toBe(200);
-    expect(notices).toHaveBeenCalledTimes(2);
     expect(await file("notes.txt")).toBe("before");
     const events = await published("workspace.restored");
     expect(events).toHaveLength(1);
     expect(events[0]!.data.version).toBe(
       response.headers["x-workspace-version"],
+    );
+    const continued = await post("Inspect restored files", other);
+    expect(continued.statusCode, continued.body).toBe(202);
+    await vi.waitFor(
+      () => {
+        expect(
+          requests
+            .at(-1)!
+            .messages.filter((entry) => entry.role === "system")
+            .map((entry) => JSON.stringify(entry.content))
+            .join("\n"),
+        ).toMatch(/undid file changes from an earlier turn.*notes\.txt/);
+      },
+      { timeout: 15_000 },
     );
   });
 
@@ -1395,7 +1409,9 @@ describe("Agent turn changes", () => {
 
     const told = (request: ModelRequest) =>
       request.messages
-        .filter((message) => message.role === "user")
+        .filter(
+          (message) => message.role === "user" || message.role === "system",
+        )
         .map((message) => JSON.stringify(message.content))
         .join("\n");
     const note =
@@ -1411,7 +1427,7 @@ describe("Agent turn changes", () => {
       "What is there now?",
     ]);
 
-    // It is part of the stored conversation, so the model still has it after a restart.
+    // The durable project notice still reaches the model after a restart.
     await app.close();
     const restarted = start();
     await userMessages(restarted);
@@ -2219,38 +2235,13 @@ describe("The end of a turn", () => {
     expect(message!.changes).toEqual({ files: 1 });
   });
 
-  it("answers a list of changes from a read that began after the turn was closed", async () => {
-    const { app, base, detail, userMessages, send } = await studio(turn());
+  it("waits for turn closure before reading the completed range", async () => {
+    const { app, base, userMessages, send } = await studio(turn());
     const closing = hold("snapshot", 2);
     await send("Write the notes");
     await closing.reached;
     const [message] = await userMessages();
 
-    // Reads of one session file that overlap share one answer, so the first read after the wait may be given the
-    // file as it was before the end of the turn was written.
-    const view = ConversationManager.prototype.view;
-    const turnsClosed = AgentManager.prototype.turnsClosed;
-    let stale: unknown;
-    let waited = false;
-    vi.spyOn(AgentManager.prototype, "turnsClosed").mockImplementation(
-      async function (this: AgentManager, ...args) {
-        await turnsClosed.apply(this, args);
-        waited = true;
-      },
-    );
-    vi.spyOn(ConversationManager.prototype, "view").mockImplementation(
-      async function (this: ConversationManager, ...args) {
-        const manager = await view.apply(this, args);
-        if (!stale) {
-          const branch = manager.getBranch();
-          stale = { getBranch: () => branch };
-        }
-        if (!waited) return manager;
-        waited = false;
-        return stale as never;
-      },
-    );
-    await detail();
     const reading = app.inject({
       method: "GET",
       url: `${base}/checkpoints/${message!.checkpointId}/changes`,

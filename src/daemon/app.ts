@@ -31,7 +31,7 @@ import { PUBLISH_GAME_TITLE_MAX_LENGTH } from "../shared/publish-v1.js";
 import { clampReasoningLevel, parseReasoningLevel, supportedReasoningLevels } from "../shared/reasoning.js";
 import { matchesBearerToken } from "./access.js";
 import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
-import { TURN_END_ENTRY, checkpointExtension } from "./checkpoint-extension.js";
+import { TURN_END_ENTRY } from "./checkpoint-extension.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
 import { ConversationImageStore } from "./conversation-images.js";
@@ -758,7 +758,7 @@ export function createApp(options: AppOptions = {}) {
         () => resolvePluginSkills([bundledPlugins, localPlugins], pluginSettings, project.type),
         Object.keys(effectiveMcp.mcpServers).length ? { factory: await pluginCapabilities.host.extension(effectiveMcp), host: pluginCapabilities.host } : undefined,
         (provider) => providerModelSettings.responsesTransport(provider),
-        checkpointExtension(() => snapshotWorkspace(project)),
+        () => snapshotWorkspace(project),
       );
     }),
     activeToolNames: (project, mode, session) => {

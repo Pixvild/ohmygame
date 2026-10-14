@@ -286,15 +286,14 @@ export async function removeCanvasAssetReferences(workspace: string, assetIds: s
 }
 type StoredJob = ToolJob & { input?: RunToolRequest; recoveryId?: string };
 export class CanvasStore {
-  #projectExecutions = new Map<string, Set<Promise<void>>>();
+  readonly #executions = new Map<string, Set<Promise<void>>>();
 
-  isProjectBusy(id: string): boolean { return Boolean(this.#projectExecutions.get(id)?.size); }
+  isProjectBusy(id: string): boolean { return Boolean(this.#executions.get(id)?.size); }
   async waitForProject(id: string): Promise<void> {
-    while (this.#projectExecutions.get(id)?.size) await Promise.allSettled([...this.#projectExecutions.get(id)!]);
+    while (this.#executions.get(id)?.size) await Promise.allSettled([...this.#executions.get(id)!]);
   }
   readonly #jobs = new Map<string, StoredJob[]>();
   readonly #controllers = new Map<string, AbortController>();
-  readonly #executions = new Set<Promise<void>>();
   #closed = false;
   constructor(private readonly projects: ProjectManager, private readonly library: AssetLibrary, private readonly tools: ToolRunner) {}
   #project(id: string) {
@@ -464,14 +463,13 @@ export class CanvasStore {
       this.#jobs.set(id, [job, ...jobs.filter((job) => job.status === "running"), ...jobs.filter((job) => job.status !== "running").slice(0, 80)]); await this.#saveJobs(id); return { job, prepared };
     });
     const controller = new AbortController(); this.#controllers.set(job.id, controller);
-    const execution = this.#execute(id, job, prepared, controller); this.#executions.add(execution);
-    let executions = this.#projectExecutions.get(id);
-    if (!executions) { executions = new Set(); this.#projectExecutions.set(id, executions); }
+    const execution = this.#execute(id, job, prepared, controller);
+    let executions = this.#executions.get(id);
+    if (!executions) { executions = new Set(); this.#executions.set(id, executions); }
     executions.add(execution);
     void execution.finally(() => {
-      this.#executions.delete(execution);
       executions.delete(execution);
-      if (!executions.size) this.#projectExecutions.delete(id);
+      if (!executions.size) this.#executions.delete(id);
     });
     const { input: _input, recoveryId: _recoveryId, ...publicJob } = job; return structuredClone(publicJob);
   }
@@ -566,5 +564,5 @@ export class CanvasStore {
     return this.start(id, job.context!.boardId!, job.context!.nodeId, job.toolId, job.input, undefined, job.recoveryId ?? job.id);
   }
   async cancelProject(id: string) { for (const job of this.#jobs.get(id) ?? []) if (job.status === "running") await this.cancel(id, job.id); this.#jobs.delete(id); }
-  async close() { this.#closed = true; for (const controller of this.#controllers.values()) controller.abort(); await Promise.allSettled(this.#executions); }
+  async close() { this.#closed = true; for (const controller of this.#controllers.values()) controller.abort(); await Promise.allSettled([...this.#executions.values()].flatMap((executions) => [...executions])); }
 }

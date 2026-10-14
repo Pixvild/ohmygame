@@ -141,20 +141,28 @@ function isCount(value: unknown): value is number {
  */
 export function checkpointExtension(
   snapshot: () => Promise<string>,
+  onFailure?: (cause: unknown) => void,
 ): ExtensionFactory {
   return (pi) => {
     pi.on("message_end", async (event) => {
       if (event.message.role !== "user") return;
-      let checkpoint: StoredCheckpoint;
       try {
-        checkpoint = { version: 1, commit: await snapshot() };
+        pi.appendEntry(CHECKPOINT_ENTRY, {
+          version: 1,
+          commit: await snapshot(),
+        } satisfies StoredCheckpoint);
       } catch (cause) {
         // An entry without a commit says that this message has no checkpoint. A message that replaces an edited
         // one comes right after that one's checkpoint entry, and without this it would be read as its own.
-        pi.appendEntry(CHECKPOINT_ENTRY, { version: 1 });
+        try {
+          pi.appendEntry(CHECKPOINT_ENTRY, { version: 1 });
+        } finally {
+          // Pi reports extension errors but does not stop the run. The host
+          // must latch the failure even when recording the empty entry fails.
+          onFailure?.(cause);
+        }
         throw cause;
       }
-      pi.appendEntry(CHECKPOINT_ENTRY, checkpoint);
     });
   };
 }

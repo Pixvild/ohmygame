@@ -1981,33 +1981,28 @@ describe("AgentManager", () => {
     await manager.close();
   });
 
-  it("marks a turn as undone without independently sending workspace notices", async () => {
+  it("marks a turn as undone after its files change, including partial Undo", async () => {
     const { session, entries, userMessage } = checkpointSession();
     session.prompt.mockImplementation(async () => userMessage("1", "a".repeat(40)));
-    const sendCustomMessage = vi.fn<NonNullable<CodingSession["sendCustomMessage"]>>(async () => {});
-    Object.assign(session, { sendCustomMessage });
     const manager = new AgentManager(new RuntimeEventBus(), { createSession: async () => session, checkpoints: { snapshot: async () => "b".repeat(40), changed: async () => 24 } });
     const project = createProject();
     const conversation = createConversation(project);
     await manager.prompt(project, conversation, "Build").result;
     const previous = "c".repeat(40);
 
-    // With nothing but files to leave alone, nothing was undone: the turn is not marked and the model is not told.
+    // With nothing but files to leave alone, nothing was undone: the turn is not marked.
     const kept = { previous, changed: [], conflicts: ["src/game.ts"] };
     await expect(manager.undoCheckpoint(project, conversation, "checkpoint-1", async () => kept)).resolves.toBe(kept);
     const refusal = new Error("These files cannot be put back");
     await expect(manager.undoCheckpoint(project, conversation, "checkpoint-1", async () => { throw refusal; })).rejects.toBe(refusal);
     await expect(manager.undoCheckpoint(project, conversation, "checkpoint-9", async () => kept)).rejects.toThrow("Checkpoint not found");
     expect(entries.at(-1)).toMatchObject({ customType: TURN_END_ENTRY });
-    expect(sendCustomMessage).not.toHaveBeenCalled();
 
     const changed = Array.from({ length: 23 }, (_, index) => `src/file-${index}.ts`);
     const undo = vi.fn(async () => ({ previous, changed, conflicts: ["src/game.ts"] }));
     await manager.undoCheckpoint(project, conversation, "checkpoint-1", undo);
     expect(undo).toHaveBeenCalledExactlyOnceWith({ before: "a".repeat(40), after: "b".repeat(40) });
     expect(entries.at(-1)).toMatchObject({ customType: CHECKPOINT_UNDONE_ENTRY, data: { version: 1, checkpoint: "checkpoint-1", previous, kept: 1 } });
-    // Workspace notifications are sent once by the routes after the whole operation succeeds.
-    expect(sendCustomMessage).not.toHaveBeenCalled();
     await manager.undoCheckpoint(project, conversation, "checkpoint-1", async () => ({ previous, changed: [], conflicts: [] }));
     expect(entries.at(-1)).toMatchObject({ customType: CHECKPOINT_UNDONE_ENTRY, data: { kept: 0 } });
     expect(manager.isProjectBusy(project.id)).toBe(false);

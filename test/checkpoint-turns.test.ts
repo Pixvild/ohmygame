@@ -93,6 +93,26 @@ describe("stored turn ends", () => {
 });
 
 describe("checkpointExtension", () => {
+  it("reports a snapshot failure to the host even when the failure entry cannot be written", async () => {
+    const failure = new Error("snapshot failed");
+    const reported = vi.fn();
+    let ended!: (event: { message: { role: string } }) => Promise<void>;
+    await checkpointExtension(async () => {
+      throw failure;
+    }, reported)({
+      on: (_event: string, handler: typeof ended) => {
+        ended = handler;
+      },
+      appendEntry: () => {
+        throw new Error("session write failed");
+      },
+    } as never);
+    await expect(ended({ message: { role: "user" } })).rejects.toThrow(
+      "session write failed",
+    );
+    expect(reported).toHaveBeenCalledExactlyOnceWith(failure);
+  });
+
   it("takes a checkpoint before each user message, and writes an entry without a commit when the snapshot fails", async () => {
     const entries: Array<{ customType: string; data: unknown }> = [];
     let ended!: (event: { message: { role: string } }) => Promise<void>;

@@ -130,7 +130,6 @@ export function registerCheckpointRoutes(
       throw Object.assign(new Error("Conversation not found"), {
         statusCode: 404,
       });
-    await conversations.view(project, conversation);
     const range = turnRange(
       (await conversations.view(project, conversation)).getBranch(),
       turnId,
@@ -140,52 +139,30 @@ export function registerCheckpointRoutes(
   }
 
   type AfterUnlock = (notify: () => void) => void;
+  type WorkspaceChange = {
+    kind: "undo" | "restore" | "recovery";
+    checkpointId?: string;
+    conversationId?: string;
+  };
 
   async function announce(
     project: ProjectState,
-    afterUnlock: AfterUnlock,
     changed: string[],
-    recovery = false,
-    checkpointId?: string,
-    restore = false,
-    conversationId?: string,
+    context: WorkspaceChange,
+    afterUnlock: AfterUnlock,
+    incomplete = false,
   ) {
+    const { checkpointId, conversationId } = context;
+    const recovery = incomplete || context.kind === "recovery";
+    const restore = context.kind === "restore";
     const version = writes.changed(project.id);
-    // Persist a model-visible notice in every conversation, including ones
-    // whose model session is not currently loaded. Conversation history stays.
+    // One durable project notice is injected into every later model request,
+    // including other conversations and sessions loaded after a restart.
     const content = `The user ${recovery ? "recovered an interrupted file restore" : restore ? "restored the workspace and rewound one conversation" : "undid file changes from an earlier turn"}. ${restore ? "Other conversations were preserved." : "The conversation was preserved."} Inspect the current files before continuing. Changed workspace paths: ${JSON.stringify(changed)}.`;
     try {
       await writeWorkspaceNotice(project, content, version);
-      for (const summary of await conversations.list(project)) {
-        try {
-          const stored = await conversations.get(project, summary.id);
-          if (
-            stored &&
-            !(await agents.notifyWorkspaceChange(
-              project.id,
-              summary.id,
-              content,
-            ))
-          ) {
-            conversations
-              .open(project, stored)
-              .appendCustomMessageEntry(
-                "ohmygame-workspace-undo",
-                content,
-                false,
-              );
-          }
-        } catch (cause) {
-          // The durable project notice still reaches this session on its next
-          // model request. One damaged session must not prevent notifying others.
-          app.log.warn(
-            { err: cause, conversationId: summary.id },
-            "Could not record workspace notice in conversation",
-          );
-        }
-      }
     } finally {
-      // Even a session I/O error must invalidate editors after file mutation.
+      // Even a notice I/O error must invalidate editors after file mutation.
       afterUnlock(() =>
         events.publish(
           project.id,
@@ -200,7 +177,6 @@ export function registerCheckpointRoutes(
         ),
       );
     }
-    return version;
   }
   const assertIdle = (id: string) => {
     if (agents.isProjectBusy(id) || options.busy(id))
@@ -225,10 +201,9 @@ export function registerCheckpointRoutes(
       track: (changed: string[]) => void,
       afterUnlock: AfterUnlock,
     ) => Promise<T>,
-    kind: "undo" | "restore" | "recovery",
-    checkpointId?: string,
-    conversationId?: string,
+    context: WorkspaceChange,
   ): Promise<T> {
+    const { kind } = context;
     // Closing a turn may itself need the write lock for its final snapshot.
     await agents.turnsClosed(projectId);
     const notifications: Array<() => void> = [];
@@ -263,15 +238,7 @@ export function registerCheckpointRoutes(
           );
           if (changed.size > 0 || kind === "recovery" || kind === "restore") {
             announced = true;
-            await announce(
-              project,
-              afterUnlock,
-              [...changed],
-              kind === "recovery",
-              checkpointId,
-              kind === "restore",
-              conversationId,
-            );
+            await announce(project, [...changed], context, afterUnlock);
           } else
             await writeWorkspaceNotice(
               project,
@@ -285,12 +252,10 @@ export function registerCheckpointRoutes(
           if (!announced && (incomplete || changed.size > 0))
             await announce(
               project,
-              afterUnlock,
               [...changed],
+              context,
+              afterUnlock,
               incomplete,
-              checkpointId,
-              kind === "restore",
-              conversationId,
             );
           else if (!announced)
             await writeWorkspaceNotice(
@@ -367,22 +332,17 @@ export function registerCheckpointRoutes(
           request.params.checkpointId,
         );
         const filePath = request.query.path;
-        if (
-          !(await store.diff(project, range.before, range.after)).some(
-            (change) => change.path === filePath,
-          )
-        )
-          return reply.code(404).send({ error: "File not found" });
-        const side = async (commit: string): Promise<CheckpointFile | null> => {
-          if (workspaceMediaInfo(filePath))
-            return await store
-              .read(project, commit, filePath, 0)
-              .then((content) => (content ? { binary: true } : null))
-              .catch((cause) => {
-                if (cause instanceof CheckpointFileTooLargeError)
-                  return { binary: true };
-                throw cause;
-              });
+        const change = (
+          await store.diff(project, range.before, range.after)
+        ).find((change) => change.path === filePath);
+        if (!change) return reply.code(404).send({ error: "File not found" });
+        const media = Boolean(workspaceMediaInfo(filePath));
+        const side = async (
+          commit: string,
+          held: boolean,
+        ): Promise<CheckpointFile | null> => {
+          if (!held) return null;
+          if (media) return { binary: true };
           try {
             const content = await store.read(
               project,
@@ -418,8 +378,8 @@ export function registerCheckpointRoutes(
           }
         };
         const [before, after] = await Promise.all([
-          side(range.before),
-          side(range.after),
+          side(range.before, change.kind !== "added"),
+          side(range.after, change.kind !== "removed"),
         ]);
         return { path: filePath, before, after } satisfies CheckpointFileView;
       } catch (cause) {
@@ -492,7 +452,7 @@ export function registerCheckpointRoutes(
               );
             return { changed: result.changed, conflicts: result.conflicts };
           },
-          "undo",
+          { kind: "undo" },
         );
       } catch (cause) {
         if (cause instanceof CheckpointConflictError) {
@@ -537,9 +497,11 @@ export function registerCheckpointRoutes(
               },
             );
           },
-          "restore",
-          request.params.checkpointId,
-          request.params.conversationId,
+          {
+            kind: "restore",
+            checkpointId: request.params.checkpointId,
+            conversationId: request.params.conversationId,
+          },
         );
         return reply.code(204).send();
       } catch (cause) {
@@ -599,7 +561,7 @@ export function registerCheckpointRoutes(
               track((await store.restore(project, previous)).changed);
             });
           },
-          "recovery",
+          { kind: "recovery" },
         );
         return reply.code(204).send();
       } catch (cause) {

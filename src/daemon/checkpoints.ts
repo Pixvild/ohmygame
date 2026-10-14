@@ -340,12 +340,13 @@ export class CheckpointStore {
    * An unreadable or malformed record is an error, not an absent recovery.
    */
   async unfinished(project: CheckpointProject): Promise<string | undefined> {
+    return this.#unfinished(checkpointDirectory(project));
+  }
+
+  async #unfinished(gitdir: string): Promise<string | undefined> {
     let text: string;
     try {
-      text = await readFile(
-        path.join(checkpointDirectory(project), UNFINISHED_FILE),
-        "utf8",
-      );
+      text = await readFile(path.join(gitdir, UNFINISHED_FILE), "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;
@@ -353,15 +354,8 @@ export class CheckpointStore {
     const { previous } = JSON.parse(text) as { previous?: unknown };
     if (typeof previous !== "string" || !/^[0-9a-f]{40}$/.test(previous))
       throw new Error("Invalid checkpoint recovery record");
-    await readCommit(checkpointDirectory(project), previous);
+    await readCommit(gitdir, previous);
     return previous;
-  }
-
-  async #noted(gitdir: string): Promise<string | undefined> {
-    return this.unfinished({
-      workspacePath: "",
-      storagePath: path.dirname(gitdir),
-    });
   }
 
   /**
@@ -386,10 +380,8 @@ export class CheckpointStore {
         );
       const gitdir = checkpointDirectory(project);
       const target = await readCommit(gitdir, commit);
-      const { current, changes, omitted } = await this.#planned(
-        project,
-        (snapshot) => this.#compare(gitdir, snapshot, target),
-      );
+      const current = await this.#snapshot(project);
+      const { changes, omitted } = await this.#compare(gitdir, current, target);
       // A file of the target that is left out, though the target could read its place, is one whose place cannot be read now.
       const missed = unread([target]);
       const unreadable = paths(
@@ -447,16 +439,14 @@ export class CheckpointStore {
         Array.isArray(options.conflicts.overwrite)
           ? new Set<string>(options.conflicts.overwrite)
           : undefined;
-      const { current, changes, changedAgain, unreadable } =
-        await this.#planned(project, (snapshot) =>
-          this.#undoing(
-            gitdir,
-            before,
-            after,
-            snapshot,
-            overwrite !== undefined,
-          ),
-        );
+      const current = await this.#snapshot(project);
+      const { changes, changedAgain, unreadable } = await this.#undoing(
+        gitdir,
+        before,
+        after,
+        current,
+        overwrite !== undefined,
+      );
       const blocked = [
         ...unreadable,
         ...(await this.#blocked(project, current, changes, [before, after])),
@@ -581,19 +571,6 @@ export class CheckpointStore {
   }
 
   /**
-   * Records the workspace and plans changes against that record. Snapshot
-   * verifies reused objects and repairs damage from the source files before
-   * reporting success, so the content that will be replaced is recoverable.
-   */
-  async #planned<T extends { changes: Change[] }>(
-    project: CheckpointProject,
-    plan: (current: Snapshot) => Promise<T>,
-  ): Promise<T & { current: Snapshot }> {
-    const current = await this.#snapshot(project);
-    return { ...(await plan(current)), current };
-  }
-
-  /**
    * Looks at the workspace before anything in it is changed. Throws when a
    * file to replace or remove is no longer what the snapshot holds. Returns
    * the files that cannot be created because something these changes do not
@@ -715,7 +692,7 @@ export class CheckpointStore {
       return whole ? await rm(unfinished, { force: true }) : undefined;
     // A note that is there already names the last state that was whole, which the workspace as this operation found
     // it is not. So that note stays as it is, and only a restore that runs to its end removes it.
-    const earlier = await this.#noted(gitdir);
+    const earlier = await this.#unfinished(gitdir);
     const previous = earlier ?? current.commit;
     // Says, until the end is reached, where to go back to if this process does not get there.
     if (!earlier)

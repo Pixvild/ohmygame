@@ -88,8 +88,9 @@ rollback keeps the original recovery target and is reported instead of hidden.
 
 The durable `workspace-restore-notice.txt` beside the checkpoint store is written
 before mutation and updated after restoration. It preserves the workspace version
-across daemon restarts and supplies model context even if recording a notice in
-an individual conversation fails.
+across daemon restarts. Every later model request reads this notice into its
+system prompt, so all conversations receive the current workspace context without
+appending duplicate messages to their histories.
 
 ## Code and verification
 

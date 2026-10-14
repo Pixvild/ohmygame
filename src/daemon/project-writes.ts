@@ -51,25 +51,20 @@ export class ProjectWrites {
     {
       version: string;
       active: number;
-      locked: boolean;
-      mutating?: boolean;
+      lock?: { kind: "snapshot" | "mutation"; done: Promise<void> };
       drained?: () => void;
-      unlocked?: Promise<void>;
     }
   >();
   #state(id: string) {
     let state = this.#states.get(id);
     if (!state) {
-      state = { version: "0", active: 0, locked: false };
+      state = { version: "0", active: 0 };
       this.#states.set(id, state);
     }
     return state;
   }
-  isLocked(id: string): boolean {
-    return this.#state(id).locked;
-  }
   isMutating(id: string): boolean {
-    return this.#state(id).mutating === true;
+    return this.#state(id).lock?.kind === "mutation";
   }
   version(id: string): string {
     return this.#state(id).version;
@@ -94,7 +89,7 @@ export class ProjectWrites {
   }
   enter(id: string, version?: string): () => void {
     const state = this.#state(id);
-    if (state.locked)
+    if (state.lock)
       throw new ProjectWriteError(
         "The workspace is being checkpointed or restored. Try again when it finishes.",
         "workspace_busy",
@@ -109,32 +104,31 @@ export class ProjectWrites {
     };
   }
   async exclusive<T>(id: string, operation: () => Promise<T>): Promise<T> {
-    return this.#exclusive(id, operation, true);
+    return this.#exclusive(id, operation, "mutation");
   }
   /** Snapshots can wait for another snapshot or restore without failing a new
    * turn. Editor writes still drain and are refused while a snapshot reads. */
   async snapshot<T>(id: string, operation: () => Promise<T>): Promise<T> {
     const state = this.#state(id);
-    while (state.locked) await state.unlocked;
-    return this.#exclusive(id, operation, false);
+    while (state.lock) await state.lock.done;
+    return this.#exclusive(id, operation, "snapshot");
   }
   async #exclusive<T>(
     id: string,
     operation: () => Promise<T>,
-    mutating: boolean,
+    kind: "snapshot" | "mutation",
   ): Promise<T> {
     const state = this.#state(id);
-    if (state.locked)
+    if (state.lock)
       throw new ProjectWriteError(
         "Another workspace operation is running.",
         "workspace_busy",
       );
-    state.locked = true;
-    state.mutating = mutating;
     let unlock!: () => void;
-    state.unlocked = new Promise<void>((resolve) => {
+    const done = new Promise<void>((resolve) => {
       unlock = resolve;
     });
+    state.lock = { kind, done };
     try {
       if (state.active)
         await new Promise<void>((resolve) => {
@@ -143,8 +137,7 @@ export class ProjectWrites {
       return await operation();
     } finally {
       state.drained = undefined;
-      state.locked = false;
-      state.mutating = false;
+      state.lock = undefined;
       unlock();
     }
   }

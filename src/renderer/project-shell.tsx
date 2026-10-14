@@ -200,17 +200,15 @@ export function ProjectShell({
           void getUnfinishedRestore(projectId).then((pending) => { if (!disposed) setUnfinishedRestore(pending); }).catch(() => {});
         }
         if (event.type === "agent.completed") setWorkspaceRevision((value) => value + 1);
-        if (event.type === "workspace.restored" || event.type === "workspace.undone") {
-          if (event.type === "workspace.undone") setWorkspaceRevision((value) => value + 1);
-          // Whatever was cut off before, this one ran to its end.
+        if (event.type === "workspace.undone") {
           setUnfinishedRestore(false);
-          // A restored conversation lost its later messages. An undone turn is marked by the event itself: reading
-          // the conversation for it would drop a turn that started before the answer came.
-          if (event.type === "workspace.restored" && event.conversationId === selectedConversationId) {
-            void getConversation(projectId, selectedConversationId, true)
-              .then((detail) => dispatch({ type: "conversation-loaded", detail }))
-              .catch(() => {});
-          }
+        }
+        // A restored conversation lost its later messages. Undo is marked by
+        // the event; reloading its conversation could drop a newly started turn.
+        if (event.type === "workspace.restored" && event.conversationId === selectedConversationId) {
+          void getConversation(projectId, selectedConversationId, true)
+            .then((detail) => { if (!disposed) dispatch({ type: "conversation-loaded", detail }); })
+            .catch(() => {});
         }
         if (event.type === "conversation.renamed") {
           setConversations((current) => current.map((conversation) =>
@@ -249,9 +247,9 @@ export function ProjectShell({
       try {
         await waitForRuntime();
         const [project, availableConversations] = await Promise.all([getProject(projectId), listConversations(projectId)]);
+        if (disposed) return;
         setWorkspaceEpoch(workspaceVersion(projectId));
         void getUnfinishedRestore(projectId).then((pending) => { if (!disposed) setUnfinishedRestore(pending); }).catch((cause: unknown) => { if (!disposed) dispatch({ type: "notice", message: errorMessage(cause) }); });
-        if (disposed) return;
         if (project.workspaceAvailable === false) {
           dispatch({ type: "fatal", message: t("projectShell.folderMissing") });
           return;
@@ -278,13 +276,6 @@ export function ProjectShell({
         });
         subscribe(detail.cursor, selected.id);
         if (runtime.recovered) setWorkspaceRevision((value) => value + 1);
-        // The app may have quit in the middle of a restore or an undo.
-        void getUnfinishedRestore(projectId).then((unfinished) => {
-          if (!disposed) setUnfinishedRestore(unfinished);
-        }).catch(() => {});
-
-
-
       } catch (error) {
         if (!disposed) dispatch({ type: "fatal", message: errorMessage(error) });
       }
@@ -300,12 +291,12 @@ export function ProjectShell({
 
   const previewSupported = supportsWebPreview(state.project);
   useEffect(() => {
-    if (!previewSupported || runtime.status !== "ready") return;
+    if (!previewSupported || unfinishedRestore || runtime.status !== "ready") return;
     const leaseId = crypto.randomUUID();
     void acquirePreview(projectId, leaseId, true, previewPaused).catch(() => {});
     const timer = setInterval(() => { void acquirePreview(projectId, leaseId).catch(() => {}); }, 20_000);
     return () => { clearInterval(timer); void releasePreview(projectId, leaseId).catch(() => {}); };
-  }, [projectId, previewSupported, runtime.generation, runtime.status]);
+  }, [projectId, previewSupported, unfinishedRestore, runtime.generation, runtime.status]);
 
   useEffect(() => {
     if (!state.project || state.phase !== "ready" || !conversationId || state.conversation?.id === conversationId) return;

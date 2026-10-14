@@ -13,7 +13,10 @@ import {
   TURN_END_ENTRY,
 } from "../src/daemon/checkpoint-extension.js";
 import type { ProjectState } from "../src/shared/contracts.js";
-import { readWorkspaceVersion } from "../src/daemon/workspace-notice.js";
+import {
+  readWorkspaceNotice,
+  readWorkspaceVersion,
+} from "../src/daemon/workspace-notice.js";
 
 const cleanup: Array<() => unknown | Promise<unknown>> = [];
 afterEach(async () => {
@@ -39,13 +42,6 @@ async function fixture() {
         abort: async () => {},
         dispose() {},
         subscribe: () => () => {},
-        sendCustomMessage: async (message) => {
-          session.appendCustomMessageEntry(
-            message.customType,
-            message.content,
-            message.display,
-          );
-        },
       };
     },
   });
@@ -174,15 +170,12 @@ it("serves persisted and live turn diffs, undoes only files, and rejects old edi
   expect(
     restored.getBranch().filter((entry) => entry.type === "message"),
   ).toHaveLength(2);
+  expect(await readWorkspaceNotice(project)).toContain(
+    "undid file changes from an earlier turn",
+  );
   expect(
-    restored
-      .getBranch()
-      .some(
-        (entry) =>
-          entry.type === "custom_message" &&
-          entry.customType === "ohmygame-workspace-undo",
-      ),
-  ).toBe(true);
+    restored.getBranch().some((entry) => entry.type === "custom_message"),
+  ).toBe(false);
   const stale = await app.inject({
     method: "POST",
     url: `/projects/${project.id}/files`,
