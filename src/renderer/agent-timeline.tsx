@@ -677,11 +677,11 @@ function ToolActivity({ item, completed = false }: { item: Extract<ThreadItem, {
     <div className={`tool-activity tool-row${expandable ? " tool-row-expandable" : ""} timeline-activity tool-${item.status}`}>
       <Icon size={13} aria-hidden="true" />
       <span className="tool-label" title={label}>{label}</span>
-      {item.type === "dynamicToolCall" && ["edit", "write"].includes(item.tool) && item.status === "completed" && item.lineChanges ? <ChangeCounts lines={item.lineChanges} /> : <span />}
       {expandable ? <ChevronRight className="tool-detail-chevron" size={12} aria-hidden="true" /> : null}
       <span className="tool-result" aria-label={item.status}>
         {item.status === "failed" ? <X size={12} /> : null}
       </span>
+      {item.type === "dynamicToolCall" && ["edit", "write"].includes(item.tool) && item.status === "completed" && item.lineChanges ? <ChangeCounts lines={item.lineChanges} /> : null}
     </div>
   );
   if (!expandable) return row;
