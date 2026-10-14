@@ -6,19 +6,19 @@ import {
   RefreshCw,
   X,
 } from "./icons.js";
-import { getCheckpointRecovery, recoverCheckpoint, undoTurnFiles } from "./api.js";
 import { observeWorkspaceVersion, workspaceVersion } from "./workspace-version.js";
 import {
   Activity,
   useEffect,
   useCallback,
+  useMemo,
   useReducer,
   useRef,
   useState,
   lazy,
   Suspense,
 } from "react";
-import type { AgentModel, AgentModelRef, AgentReasoningLevel, ConversationCapabilities, ConversationSummary, PendingPrompt, PluginMention, ProjectState, PromptAttachment, PromptContext, PromptImage, PromptMode, PromptReference, ThreadItem } from "../shared/contracts.js";
+import type { AgentModel, AgentModelRef, AgentReasoningLevel, CheckpointChangeItem, ConversationCapabilities, ConversationSummary, PendingPrompt, PluginMention, ProjectState, PromptAttachment, PromptContext, PromptImage, PromptMode, PromptReference, ThreadItem } from "../shared/contracts.js";
 import { findAgentModel, preferredAgentModel } from "../shared/agent-models.js";
 import { isWebRuntimeProjectType, supportsWebPreview } from "../shared/project-runtime.js";
 import {
@@ -35,12 +35,18 @@ import {
   getConversation,
   getConversationContextUsage,
   getConversationCapabilities,
+  getCheckpointChanges,
+  getCheckpointFile,
   getProject,
+  getUnfinishedChanges,
+  getUnfinishedRestore,
   listModels,
   listConversations,
   publishProject,
   removePendingPrompt,
   renameConversation,
+  restoreCheckpoint,
+  restoreUnfinished,
   reviseLastPrompt,
   refinePlan,
   sendPrompt,
@@ -49,10 +55,12 @@ import {
   setConversationReasoning,
   startPreview,
   subscribeToProject,
+  undoCheckpoint,
   waitForRuntime,
 } from "./api.js";
 import { ConversationMenu } from "./conversation-menu.js";
 import { AgentTimeline } from "./agent-timeline.js";
+import type { TurnChangesControls } from "./turn-changes.js";
 import { CodingWorkspace } from "./coding-workspace.js";
 import { PlayableEditorWorkspace } from "./playable-editor-workspace.js";
 import type { PlayableChatState } from "./playable-chat.js";
@@ -70,6 +78,7 @@ import { usePlaytestAskRequests } from "./playable-playtest.js";
 import { useRuntimeConnection } from "./runtime-connection.js";
 import { ErrorBoundary } from "./error-boundary.js";
 import { WorkspaceShell, WorkspaceAgentPane } from "./workspace-shell.js";
+import { t } from "./i18n.js";
 
 interface ProjectShellProps {
   projectId: string;
@@ -89,6 +98,8 @@ interface ProjectShellProps {
 const CanvasWorkspace = lazy(() => import("./canvas-workspace.js").then((module) => ({ default: module.CanvasWorkspace })));
 const GODOT_WORKSPACE_OPEN_STORAGE_KEY = "ohmygame-godot-workspace-open";
 const EMPTY_CAPABILITIES: ConversationCapabilities = { plugins: [], skills: [] };
+/** How many of those files are named before they are only counted. */
+const NAMED_UNFINISHED_FILES = 10;
 
 export function ProjectShell({
   projectId,
@@ -126,7 +137,8 @@ export function ProjectShell({
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
   const [workspaceEpoch, setWorkspaceEpoch] = useState(() => workspaceVersion(projectId));
   const [restoring, setRestoring] = useState(false);
-  const [recoveryPending, setRecoveryPending] = useState(false);
+  /** Set while a restore or an undo that was cut off has not been taken back, unless the user put the offer aside. */
+  const [unfinishedRestore, setUnfinishedRestore] = useState(false);
   const [openFileRequest, setOpenFileRequest] = useState<{ path: string; id: number }>();
   const [modelChanging, setModelChanging] = useState(false);
   const [capabilities, setCapabilities] = useState<ConversationCapabilities>(EMPTY_CAPABILITIES);
@@ -182,12 +194,24 @@ export function ProjectShell({
           observeWorkspaceVersion(projectId, event.data.version);
           setWorkspaceEpoch(event.data.version);
           setWorkspaceRevision((value) => value + 1);
-          void Promise.all([getProject(projectId), getConversation(projectId, selectedConversationId, true)]).then(([project, detail]) => {
-            if (!disposed) dispatch({ type: "initialized", project, detail });
-          }).catch((cause: unknown) => { if (!disposed) dispatch({ type: "notice", message: errorMessage(cause) }); });
-          void getCheckpointRecovery(projectId).then((result) => { if (!disposed) setRecoveryPending(result.pending); }).catch(() => {});
+          void getProject(projectId).then((project) => {
+            if (!disposed) dispatch({ type: "project-updated", project });
+          }).catch(() => {});
+          void getUnfinishedRestore(projectId).then((pending) => { if (!disposed) setUnfinishedRestore(pending); }).catch(() => {});
         }
         if (event.type === "agent.completed") setWorkspaceRevision((value) => value + 1);
+        if (event.type === "workspace.restored" || event.type === "workspace.undone") {
+          if (event.type === "workspace.undone") setWorkspaceRevision((value) => value + 1);
+          // Whatever was cut off before, this one ran to its end.
+          setUnfinishedRestore(false);
+          // A restored conversation lost its later messages. An undone turn is marked by the event itself: reading
+          // the conversation for it would drop a turn that started before the answer came.
+          if (event.type === "workspace.restored" && event.conversationId === selectedConversationId) {
+            void getConversation(projectId, selectedConversationId, true)
+              .then((detail) => dispatch({ type: "conversation-loaded", detail }))
+              .catch(() => {});
+          }
+        }
         if (event.type === "conversation.renamed") {
           setConversations((current) => current.map((conversation) =>
             conversation.id === event.data.conversation.id ? event.data.conversation : conversation));
@@ -205,7 +229,7 @@ export function ProjectShell({
         const [project, detail] = await Promise.all([getProject(projectId), getConversation(projectId, selectedConversationId, true)]);
         if (disposed) return detail.cursor;
         setWorkspaceEpoch(workspaceVersion(projectId));
-        void getCheckpointRecovery(projectId).then((result) => { if (!disposed) setRecoveryPending(result.pending); }).catch(() => {});
+        void getUnfinishedRestore(projectId).then((pending) => { if (!disposed) setUnfinishedRestore(pending); }).catch(() => {});
         dispatch({ type: "initialized", project, detail });
         setWorkspaceRevision((value) => value + 1);
         return detail.cursor;
@@ -226,10 +250,10 @@ export function ProjectShell({
         await waitForRuntime();
         const [project, availableConversations] = await Promise.all([getProject(projectId), listConversations(projectId)]);
         setWorkspaceEpoch(workspaceVersion(projectId));
-        void getCheckpointRecovery(projectId).then((result) => { if (!disposed) setRecoveryPending(result.pending); }).catch((cause: unknown) => { if (!disposed) dispatch({ type: "notice", message: errorMessage(cause) }); });
+        void getUnfinishedRestore(projectId).then((pending) => { if (!disposed) setUnfinishedRestore(pending); }).catch((cause: unknown) => { if (!disposed) dispatch({ type: "notice", message: errorMessage(cause) }); });
         if (disposed) return;
         if (project.workspaceAvailable === false) {
-          dispatch({ type: "fatal", message: "The selected workspace folder is no longer available." });
+          dispatch({ type: "fatal", message: t("projectShell.folderMissing") });
           return;
         }
         setConversations(availableConversations);
@@ -254,6 +278,10 @@ export function ProjectShell({
         });
         subscribe(detail.cursor, selected.id);
         if (runtime.recovered) setWorkspaceRevision((value) => value + 1);
+        // The app may have quit in the middle of a restore or an undo.
+        void getUnfinishedRestore(projectId).then((unfinished) => {
+          if (!disposed) setUnfinishedRestore(unfinished);
+        }).catch(() => {});
 
 
 
@@ -365,7 +393,7 @@ export function ProjectShell({
   }, [auth.state.status, state.phase, state.project?.id, state.project?.type, state.agent.status, sendingInitialPrompt, publishing]);
 
   if (state.phase === "fatal") {
-    return <FatalState message={state.notice ?? "Could not reach the local runtime."} onHome={onHome} />;
+    return <FatalState message={state.notice ?? t("projectShell.runtimeUnreachable")} onHome={onHome} />;
   }
 
   const project = state.project;
@@ -380,29 +408,6 @@ export function ProjectShell({
   ));
   const currentConversationBusy = Boolean(activeTurn);
   const agentBusy = sendingInitialPrompt || currentConversationBusy || state.agent.status === "running" || state.agent.status === "cancelling";
-  const undoFiles = useCallback(async (turnId: string, conflicts?: "keep" | "overwrite") => {
-    const current = state.conversation;
-    if (!current) throw new Error("Conversation unavailable");
-    setRestoring(true);
-    try {
-      await saveDesign.current?.();
-      const result = await undoTurnFiles(projectId, current.id, turnId, conflicts);
-      observeWorkspaceVersion(projectId, result.version);
-      setWorkspaceEpoch(result.version);
-      const [project, detail] = await Promise.all([getProject(projectId), getConversation(projectId, current.id, true)]);
-      dispatch({ type: "initialized", project, detail });
-    } finally { setRestoring(false); }
-  }, [projectId, state.conversation]);
-  async function recoverFiles() {
-    setRestoring(true);
-    try {
-      const result = await recoverCheckpoint(projectId);
-      observeWorkspaceVersion(projectId, result.version);
-      setWorkspaceEpoch(result.version);
-      setRecoveryPending(false);
-    } catch (cause) { dispatch({ type: "notice", message: errorMessage(cause) }); }
-    finally { setRestoring(false); }
-  }
   const activePlanItem = activeTurn
     ? activeTurn.items.findLast((item) => item.type === "plan")
     : undefined;
@@ -535,6 +540,43 @@ export function ProjectShell({
       return false;
     }
   }, [project, conversation, agentBusy, state.pendingPrompts.length, state.connection]);
+
+  const restoreToMessage = useCallback((checkpointId: string) => {
+    if (!project || !conversation || agentBusy || restoring || unfinishedRestore || publishing || state.pendingPrompts.length > 0 || state.connection !== "open") return;
+    if (!window.confirm(t("checkpoints.restoreConfirm"))) return;
+    dispatch({ type: "notice", message: undefined });
+    setRestoring(true);
+    void (async () => {
+      try {
+        await saveDesign.current?.();
+        await restoreCheckpoint(project.id, conversation.id, checkpointId);
+      } catch (error) {
+        if (leftUnfinished(error)) setUnfinishedRestore(true);
+        dispatch({ type: "notice", message: errorMessage(error) });
+      } finally { setRestoring(false); }
+    })();
+  }, [project, conversation, agentBusy, restoring, unfinishedRestore, publishing, state.pendingPrompts.length, state.connection]);
+
+  const loadedConversationId = conversation?.id;
+  const turnChangesDisabled = agentBusy || restoring || unfinishedRestore || publishing || state.connection !== "open";
+  const turnChanges = useMemo((): TurnChangesControls | undefined => loadedConversationId === undefined ? undefined : {
+    disabled: turnChangesDisabled,
+    load: (checkpointId) => getCheckpointChanges(projectId, loadedConversationId, checkpointId),
+    file: (checkpointId, path) => getCheckpointFile(projectId, loadedConversationId, checkpointId, path),
+    undo: async (checkpointId, conflicts, expected) => {
+      setRestoring(true);
+      try {
+        await saveDesign.current?.();
+        return { status: "done", ...await undoCheckpoint(projectId, loadedConversationId, checkpointId, conflicts, expected) };
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409 && error.conflicts) {
+          return { status: "conflicts", conflicts: error.conflicts, blocked: Boolean(error.blocked) };
+        }
+        if (leftUnfinished(error)) setUnfinishedRestore(true);
+        return { status: "failed", message: errorMessage(error) };
+      } finally { setRestoring(false); }
+    },
+  }, [projectId, loadedConversationId, turnChangesDisabled]);
 
   async function stopAgent() {
     const turnId = activeTurn?.id;
@@ -711,8 +753,8 @@ export function ProjectShell({
               type="button"
               disabled={!project || creatingConversation}
               onClick={() => void newConversation()}
-              title="New conversation"
-              aria-label="New conversation"
+              title={t("projectShell.newConversation")}
+              aria-label={t("projectShell.newConversation")}
             >
               {creatingConversation ? <LoaderCircle className="spin" size={14} /> : <MessageSquarePlus size={14} />}
             </button>
@@ -729,8 +771,8 @@ export function ProjectShell({
                 className="icon-button pane-header-action"
                 type="button"
                 onClick={() => setGodotWorkspaceVisibility(true)}
-                title="Show workspace"
-                aria-label="Show workspace"
+                title={t("projectShell.showWorkspace")}
+                aria-label={t("projectShell.showWorkspace")}
               >
                 <PanelToggle size={14} />
               </button>
@@ -739,31 +781,28 @@ export function ProjectShell({
                 className="icon-button pane-header-action"
                 type="button"
                 onClick={() => setAgentCollapsed(true)}
-                title="Hide agent"
-                aria-label="Hide agent"
+                title={t("projectShell.hideAgent")}
+                aria-label={t("projectShell.hideAgent")}
               >
                 <PanelToggle size={14} />
               </button>
             ) : null}
       </>}>
           <div className="timeline" aria-live="polite">
-            {recoveryPending ? <div className="turn-changes-panel" role="alert">
-              <p>A file restore was interrupted. Recover the workspace to its state before that operation to continue. The conversation is preserved.</p>
-              <button type="button" disabled={restoring || agentBusy || publishing} onClick={() => void recoverFiles()}>Recover files</button>
-            </div> : null}
             {state.phase === "loading" ? <TimelineSkeleton /> : null}
             <Activity mode={agentIsCollapsed ? "hidden" : "visible"}>
-              <ErrorBoundary label="Conversation" resetKey={conversation?.id}>
+              <ErrorBoundary label={t("errorBoundary.label.conversation")} resetKey={conversation?.id}>
               <AgentTimeline
                 turns={state.turns}
                 projectId={projectId}
                 workspacePath={project?.workspacePath}
                 onOpenWorkspaceFile={project ? openWorkspaceFile : undefined}
-                revisionDisabled={agentBusy || restoring || recoveryPending || state.plan.mode !== "normal" || state.pendingPrompts.length > 0 || state.connection !== "open"}
-                undoDisabled={agentBusy || restoring || recoveryPending || publishing || state.connection !== "open"}
-                onUndoTurn={undoFiles}
+                revisionDisabled={agentBusy || restoring || unfinishedRestore || state.plan.mode !== "normal" || state.pendingPrompts.length > 0 || state.connection !== "open"}
                 waitingForInput={Boolean(questionnaire)}
                 onRevise={revisePrompt}
+                onRestore={restoreToMessage}
+                changeControls={turnChanges}
+                workspaceRevision={workspaceRevision}
                 onAddToChat={addToChat}
               />
               </ErrorBoundary>
@@ -790,12 +829,18 @@ export function ProjectShell({
           ) : null}
 
           {initialPrompt && initialPrompt.generation !== runtime.generation && !initialPromptAttempted.current ? <div className="paused-initial-prompt" role="status">
-            <p>Your initial message was paused while the service restarted.</p>
-            <details><summary>Review message</summary><pre>{initialPrompt.prompt}</pre>
-              {initialPrompt.images.length || initialPrompt.attachments?.length ? <p>{initialPrompt.images.length + (initialPrompt.attachments?.length ?? 0)} attachments retained</p> : null}
+            <p>{t("projectShell.promptPaused")}</p>
+            <details><summary>{t("projectShell.reviewMessage")}</summary><pre>{initialPrompt.prompt}</pre>
+              {initialPrompt.images.length || initialPrompt.attachments?.length ? <p>{t("projectShell.attachmentsRetained", { count: initialPrompt.images.length + (initialPrompt.attachments?.length ?? 0) })}</p> : null}
             </details>
-            <button type="button" disabled={runtime.status !== "ready" || state.connection !== "open" || !conversation || conversation.id !== conversationId} onClick={sendInitialPrompt}>Send original message</button>
+            <button type="button" disabled={runtime.status !== "ready" || state.connection !== "open" || !conversation || conversation.id !== conversationId} onClick={sendInitialPrompt}>{t("projectShell.sendOriginal")}</button>
           </div> : null}
+          {unfinishedRestore ? <UnfinishedRestoreBanner
+            projectId={projectId}
+            disabled={agentBusy || state.connection !== "open"}
+            workspaceRevision={workspaceRevision}
+            onClose={() => setUnfinishedRestore(false)}
+          /> : null}
           {!questionnaire && state.plan.mode !== "awaiting_approval" ? <Composer
             key={conversation?.id}
             projectId={project?.id}
@@ -807,7 +852,7 @@ export function ProjectShell({
             pendingPrompts={state.pendingPrompts}
             plan={activePlan}
             planMode={state.plan.mode}
-            notice={state.connection === "reconnecting" ? "Connection lost. Reconnecting..." : state.notice}
+            notice={state.connection === "reconnecting" ? t("projectShell.reconnecting") : state.notice}
             models={modelCatalog.models}
             modelStatus={modelCatalog.status}
             model={effectiveModel}
@@ -843,7 +888,7 @@ export function ProjectShell({
           /> : null}
       </WorkspaceAgentPane>}
     >
-      <ErrorBoundary key={`${projectId}:${workspaceEpoch}`} label="Workspace" resetKey={project?.id} onHome={onHome}>
+      <ErrorBoundary key={`${projectId}:${workspaceEpoch}`} label={t("errorBoundary.label.workspace")} resetKey={project?.id} onHome={onHome}>
       {!project ? <section className="viewer-pane" /> : project.type !== "interactive-story" && project.type !== "asset-canvas" ? (
         <CodingWorkspace
           project={project}
@@ -915,10 +960,67 @@ export function ProjectShell({
 
 function TimelineSkeleton() {
   return (
-    <div className="timeline-skeleton" aria-label="Loading project">
+    <div className="timeline-skeleton" aria-label={t("projectShell.loading")}>
       <span />
       <span />
       <span />
+    </div>
+  );
+}
+
+/**
+ * Offers to take back a restore or an undo that was cut off. Taking it back
+ * restores files too, so it first lists what it does to them and asks.
+ */
+function UnfinishedRestoreBanner({ projectId, disabled, workspaceRevision, onClose }: {
+  projectId: string;
+  disabled: boolean;
+  workspaceRevision: number;
+  /** Nothing is left to offer, or the user put the offer aside. */
+  onClose: () => void;
+}) {
+  const [changes, setChanges] = useState<CheckpointChangeItem[]>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  // The list holds for the files as they stood when it was read, so the user is asked again once they changed.
+  useEffect(() => { setChanges(undefined); }, [workspaceRevision]);
+
+  async function attempt(request: () => Promise<void>): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await request();
+    } catch (cause) {
+      // Nothing is unfinished any more: a later restore or undo ran to its end.
+      if (cause instanceof ApiError && cause.status === 404) return onClose();
+      setChanges(undefined);
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="unfinished-restore" role="status">
+      <p>{t("checkpoints.unfinished.interrupted")}</p>
+      {error ? <p className="unfinished-restore-error" role="alert">{error}</p> : null}
+      {changes?.length === 0 ? <>
+        <p>{t("checkpoints.unfinished.alreadyBack")}</p>
+        <div className="unfinished-restore-actions">
+          <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => { await restoreUnfinished(projectId); onClose(); })}>{t("checkpoints.unfinished.ok")}</button>
+        </div>
+      </> : changes ? <>
+        <p>{t("checkpoints.unfinished.willPutBack", { count: changes.length })}</p>
+        <ul className="unfinished-restore-files">
+          {changes.slice(0, NAMED_UNFINISHED_FILES).map((change) => <li key={change.path}><span>{t(`checkpoints.unfinished.kind.${change.kind}`)}</span>{change.path}</li>)}
+          {changes.length > NAMED_UNFINISHED_FILES ? <li>{t("checkpoints.andMore", { count: changes.length - NAMED_UNFINISHED_FILES })}</li> : null}
+        </ul>
+        <div className="unfinished-restore-actions">
+          <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => { await restoreUnfinished(projectId); onClose(); })}>{t("checkpoints.unfinished.putBack", { count: changes.length })}</button>
+          <button type="button" disabled={busy} onClick={onClose}>{t("checkpoints.unfinished.notNow")}</button>
+        </div>
+      </> : <button type="button" disabled={busy || disabled} onClick={() => void attempt(async () => setChanges(await getUnfinishedChanges(projectId)))}>{t("checkpoints.unfinished.putFilesBack")}</button>}
     </div>
   );
 }
@@ -927,11 +1029,11 @@ function FatalState({ message, onHome }: { message: string; onHome: () => void }
   return (
     <main className="fatal-state">
       <X size={24} />
-      <h1>Workspace unavailable</h1>
+      <h1>{t("projectShell.unavailable")}</h1>
       <p>{message}</p>
       <div className="fatal-actions">
-        <button type="button" onClick={onHome}><ArrowLeft size={15} />Home</button>
-        <button type="button" onClick={() => window.location.reload()}><RefreshCw size={15} />Reload</button>
+        <button type="button" onClick={onHome}><ArrowLeft size={15} />{t("sidebar.home")}</button>
+        <button type="button" onClick={() => window.location.reload()}><RefreshCw size={15} />{t("common.reload")}</button>
       </div>
     </main>
   );
@@ -939,6 +1041,11 @@ function FatalState({ message, onHome }: { message: string; onHome: () => void }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Whether a restore or an undo failed part way and could not take back what it had already changed. */
+function leftUnfinished(error: unknown): boolean {
+  return error instanceof ApiError && (error.code === "CHECKPOINT_INCOMPLETE" || error.code === "workspace_recovery");
 }
 
 async function initialConversationModel(): Promise<AgentModelRef | undefined> {

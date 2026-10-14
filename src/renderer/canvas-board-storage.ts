@@ -3,6 +3,7 @@ import type { AssetCanvasDocument, ToolJob } from "../shared/contracts.js";
 import { isAssetCanvasDocument, withoutContentNodeSizes } from "../shared/asset-canvas.js";
 import { mergeCanvasDocument, type CanvasBoardDetail } from "../shared/canvas-workspace.js";
 import { cancelCanvasJob, generateCanvasMedia, getCanvasBoard, listCanvasJobs, saveCanvasBoard } from "./canvas-api.js";
+import { t } from "./i18n.js";
 
 export interface CanvasBoardStorage {
   key: string;
@@ -19,7 +20,7 @@ export interface CanvasBoardStorage {
 export interface CanvasBoardConflict { local: AssetCanvasDocument; remote: CanvasBoardDetail }
 
 const canvasOnly = ({ id: _id, ...canvas }: CanvasBoardDetail["board"]): AssetCanvasDocument => canvas;
-const conflictMessage = "The board was edited elsewhere. Choose a version before saving.";
+const conflictMessage = t("canvas.boardEditedElsewhere");
 
 export function createCanvasBoardStorage({ projectId, boardId, onConflict, flushDocuments }: {
   projectId: string;
@@ -60,7 +61,7 @@ export function createCanvasBoardStorage({ projectId, boardId, onConflict, flush
   };
   const ready = async () => {
     if (loading) await loading;
-    if (!base) throw new Error("Reload the canvas before saving. Your edits are kept in this session.");
+    if (!base) throw new Error(t("canvas.reloadBeforeSaving"));
   };
   return {
     key: `${projectId}:${boardId}`,

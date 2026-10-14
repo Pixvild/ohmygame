@@ -88,6 +88,50 @@ function objectFile(project: Awaited<ReturnType<typeof game>>, oid: string) {
   );
 }
 
+it("rolls files back when persisting the associated conversation rewind fails", async () => {
+  const project = await game();
+  const file = path.join(project.workspacePath, "src/a.ts");
+  const store = new CheckpointStore();
+  const target = await store.snapshot(project);
+  await writeFile(file, "two");
+  const previous = await store.snapshot(project);
+  await expect(
+    store.restore(project, target, async (undo) => {
+      expect(undo).toBe(previous);
+      expect(await store.unfinished(project)).toBe(previous);
+      expect(await readFile(file, "utf8")).toBe("one");
+      throw new Error("conversation I/O failure");
+    }),
+  ).rejects.toThrow("conversation I/O failure");
+  expect(await readFile(file, "utf8")).toBe("two");
+  expect(await store.unfinished(project)).toBeUndefined();
+});
+
+it("retains the original recovery target when a rewind failure cannot roll files back", async () => {
+  const project = await game();
+  const file = path.join(project.workspacePath, "src/a.ts");
+  const store = new CheckpointStore();
+  const target = await store.snapshot(project);
+  await writeFile(file, "two");
+  const previous = await store.snapshot(project);
+  await expect(
+    store.restore(project, target, async () => {
+      hooks.beforeRename = async (destination) => {
+        if (destination === file) throw new Error("rollback I/O failure");
+      };
+      throw new Error("conversation I/O failure");
+    }),
+  ).rejects.toMatchObject({ previous, found: previous });
+  expect(await store.unfinished(project)).toBe(previous);
+  await expect(store.restore(project, target)).rejects.toBeInstanceOf(
+    CheckpointIncompleteError,
+  );
+  hooks.beforeRename = undefined;
+  await new CheckpointStore().restore(project, previous);
+  expect(await readFile(file, "utf8")).toBe("two");
+  expect(await store.unfinished(project)).toBeUndefined();
+});
+
 it("retains recovery when bookkeeping fails after creating a file", async () => {
   const project = await game();
   const file = path.join(project.workspacePath, "src/a.ts");
@@ -263,7 +307,7 @@ it("blocks other mutations until an interrupted operation is recovered, includin
       store.undo(
         project,
         { before: original, after: partial },
-        { conflicts: "overwrite" },
+        { conflicts: { overwrite: [] } },
       ),
   ]) {
     await expect(operation()).rejects.toMatchObject({ previous: original });
@@ -456,7 +500,7 @@ it("preserves generated history and caches while restoring creative state, inclu
     ...root,
     { mode: "40000", name: "canvas", oid: canvas },
   ]);
-  const legacy = await writeCommit(gitdir, legacyTree, undefined);
+  const legacy = await writeCommit(gitdir, legacyTree, undefined, []);
   expect(await store.diff(project, original, legacy)).toEqual([]);
   await writeFile(assets, "new assets");
   const after = await store.snapshot(project);

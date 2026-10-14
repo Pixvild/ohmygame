@@ -15,6 +15,7 @@ export class ProjectWriteError extends Error {
  * New requests are refused, rather than queued with stale editor content. */
 export class ProjectWrites {
   #requests = new WeakMap<FastifyRequest, () => void>();
+  #running = new WeakSet<FastifyRequest>();
   track(request: FastifyRequest, release: () => void): void {
     this.#requests.set(request, release);
   }
@@ -29,23 +30,32 @@ export class ProjectWrites {
     app.addHook("onRoute", (route) => {
       const handler = route.handler;
       route.handler = async function (request, reply) {
+        writes.#running.add(request);
         try {
           return await handler.call(this, request, reply);
         } finally {
+          writes.#running.delete(request);
           writes.release(request);
         }
       };
     });
     app.addHook("onResponse", async (request) => {
-      writes.release(request);
+      if (!writes.#running.has(request)) writes.release(request);
     });
     app.addHook("onError", async (request) => {
-      writes.release(request);
+      if (!writes.#running.has(request)) writes.release(request);
     });
   }
   #states = new Map<
     string,
-    { version: string; active: number; locked: boolean; drained?: () => void }
+    {
+      version: string;
+      active: number;
+      locked: boolean;
+      mutating?: boolean;
+      drained?: () => void;
+      unlocked?: Promise<void>;
+    }
   >();
   #state(id: string) {
     let state = this.#states.get(id);
@@ -54,6 +64,12 @@ export class ProjectWrites {
       this.#states.set(id, state);
     }
     return state;
+  }
+  isLocked(id: string): boolean {
+    return this.#state(id).locked;
+  }
+  isMutating(id: string): boolean {
+    return this.#state(id).mutating === true;
   }
   version(id: string): string {
     return this.#state(id).version;
@@ -64,13 +80,8 @@ export class ProjectWrites {
   changed(id: string): string {
     return (this.#state(id).version = randomUUID());
   }
-  enter(id: string, version?: string): () => void {
+  assertVersion(id: string, version?: string): void {
     const state = this.#state(id);
-    if (state.locked)
-      throw new ProjectWriteError(
-        "The workspace is being checkpointed or restored. Try again when it finishes.",
-        "workspace_busy",
-      );
     if (
       (version !== undefined && version !== state.version) ||
       (version === undefined && state.version !== "0")
@@ -80,6 +91,15 @@ export class ProjectWrites {
         "workspace_stale",
       );
     }
+  }
+  enter(id: string, version?: string): () => void {
+    const state = this.#state(id);
+    if (state.locked)
+      throw new ProjectWriteError(
+        "The workspace is being checkpointed or restored. Try again when it finishes.",
+        "workspace_busy",
+      );
+    this.assertVersion(id, version);
     state.active++;
     let released = false;
     return () => {
@@ -89,6 +109,20 @@ export class ProjectWrites {
     };
   }
   async exclusive<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    return this.#exclusive(id, operation, true);
+  }
+  /** Snapshots can wait for another snapshot or restore without failing a new
+   * turn. Editor writes still drain and are refused while a snapshot reads. */
+  async snapshot<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    const state = this.#state(id);
+    while (state.locked) await state.unlocked;
+    return this.#exclusive(id, operation, false);
+  }
+  async #exclusive<T>(
+    id: string,
+    operation: () => Promise<T>,
+    mutating: boolean,
+  ): Promise<T> {
     const state = this.#state(id);
     if (state.locked)
       throw new ProjectWriteError(
@@ -96,6 +130,11 @@ export class ProjectWrites {
         "workspace_busy",
       );
     state.locked = true;
+    state.mutating = mutating;
+    let unlock!: () => void;
+    state.unlocked = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
     try {
       if (state.active)
         await new Promise<void>((resolve) => {
@@ -105,6 +144,8 @@ export class ProjectWrites {
     } finally {
       state.drained = undefined;
       state.locked = false;
+      state.mutating = false;
+      unlock();
     }
   }
 }

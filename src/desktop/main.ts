@@ -13,6 +13,7 @@ import { SYSTEM_PROXY_TARGET } from "../shared/network-settings.js";
 import { createNetworkDispatcher } from "../daemon/proxy.js";
 import { electronProxyConfig, prepareDesktopNetwork, proxyCredentials } from "./network.js";
 import { loadEnvironmentFiles } from "../daemon/environment.js";
+import { ignoreBrokenStdio } from "./stdio.js";
 import { createDesktopWindow, fitPlaytestContentSize, isValidPlaytestViewport, waitForRenderer, windowsTitleBarOverlay } from "./window.js";
 import { DesktopUpdatePreparationError, DesktopUpdater } from "./updater.js";
 import { ElectronPlaytestDriver } from "./playtest-driver.js";
@@ -22,6 +23,8 @@ import { AsyncTaskPool } from "./async-task-pool.js";
 import { PROJECT_FILE_OPEN_MODES, type ProjectFileOpenMode } from "../shared/contracts.js";
 import type { PlaytestWatchState } from "../shared/playtest.js";
 import type { WebGamePlayerRequest, WebGamePreviewLayout } from "../shared/web-game-player.js";
+
+ignoreBrokenStdio();
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(moduleDirectory, "../..");
@@ -64,7 +67,6 @@ let shutdown: Promise<void> | undefined;
 let updater: DesktopUpdater | undefined;
 const oauth = new OAuthCallbackFlow(() => mainWindow?.webContents.send("ohmygame:auth-callback"));
 const windowMenuLabels = new Set(["File", "Edit", "View", "Window"]);
-let applicationIconDataUrl: Promise<string> | undefined;
 
 async function stopServices(): Promise<void> {
   webGamePlayers.close();
@@ -161,11 +163,6 @@ handle("ohmygame:set-appearance", (event, appearance: unknown) => {
   if (process.platform === "win32" && senderWindow === mainWindow) {
     senderWindow.setTitleBarOverlay(windowsTitleBarOverlay(nativeTheme.shouldUseDarkColors));
   }
-});
-handle("ohmygame:window-menu-icon", async (event) => {
-  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error("Invalid window menu source");
-  applicationIconDataUrl ??= app.getFileIcon(process.execPath, { size: "small" }).then((icon) => icon.toDataURL());
-  return applicationIconDataUrl;
 });
 handle("ohmygame:popup-window-menu", (event, label: unknown, x: unknown, y: unknown) => {
   if (!mainWindow || event.sender !== mainWindow.webContents || typeof label !== "string" ||
@@ -363,6 +360,7 @@ handle("ohmygame:open-playtest", async (event, projectId: unknown, viewport: unk
     rendererUrl: useBuiltRenderer ? undefined : developmentRendererUrl,
     rendererFile: useBuiltRenderer ? path.join(moduleDirectory, "../renderer/index.html") : undefined,
     rendererHash: `#/playtest/${encodeURIComponent(projectId)}`,
+    nativeTitleBar: true,
     contentSize: size,
     aspectRatio,
     minWidth: Math.max(1, Math.round(size.width / 2)),

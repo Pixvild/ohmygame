@@ -74,9 +74,13 @@ Development on localhost uses a local debug account when either Supabase value
 is missing. Click **Sign in** to use it. Local publishing builds the game and
 serves a temporary snapshot in Community while the daemon runs.
 
-Connect a language model in **Settings → Providers & Models** when testing real
-agent conversations. Image, video, and 3D generation need their corresponding
-providers. Public tests use fixtures and simulated providers.
+New installations show a two-step welcome and model connection flow. Click
+**Start creating** on the provider screen after connecting a language model,
+or **Skip and start** to enter without setup. Connect a language model there or in
+**Settings → Providers & Models** when testing real agent conversations. Image,
+video, and 3D generation need their corresponding providers, which can be
+connected in Settings when needed. Public tests use fixtures and simulated
+providers.
 
 Bun installs dependencies and runs the build/test toolchain. The standalone
 daemon and pinned plugin preparation use Node; desktop development runs the

@@ -30,6 +30,14 @@ daemon itself on an available loopback port, waits for `/health`, and passes
 the daemon address plus a random process-scoped token through the isolated
 preload bridge. The renderer has no Node.js access.
 
+The main desktop window starts at 1200 × 780 logical pixels, centered on the
+display containing the pointer. It fits within 90% of that display's available
+width and 88% of its available height, excluding system panels and the Dock.
+Its usual minimum is 960 × 640; smaller displays lower the minimum to fit the
+initial window. First-run setup shares this window with the home screen, so
+finishing setup does not resize it. Playtest and capture windows keep their
+explicit content dimensions.
+
 Bun 1.4.2 installs dependencies and executes builds, tests, and most preparation
 scripts. Pinned Plugin archives are prepared with Node and store their entries
 uncompressed, so their locked ZIP checksums do not depend on the zlib build;
@@ -63,6 +71,51 @@ See [preview isolation and service recovery](runtime-recovery.md) for behavior,
 recovery limits, and validation scenarios.
 See [preview configuration and lifecycle](preview-runtime.md) for startup modes,
 automatic policy, idle collection, logs, and browser storage.
+
+## First-run setup
+
+The home route reads the daemon's `/settings/onboarding` preference before
+opening the studio. The daemon stores version 1 state in `onboarding.json`
+under its data directory: `status` is `pending`, `completed`, or `skipped`,
+and `step` is `welcome` or `connect`. Atomic, serialized writes retain the
+current step across restarts. Completing setup requires a language model in
+the same enabled, visible catalog used by the home composer. This checks
+configuration and catalog availability, without sending an inference request.
+The provider screen enables **Start creating** only when a language model is
+available; it records `completed`. The separate **Skip and start** action
+is a text button without a hover background. It records `skipped` and allows
+configuration later in Settings. **Next** and the provider screen's actions
+sit near the bottom, above the step indicators. Saved built-in
+and custom connections show **Connected** instead of offering setup again.
+Disabled connections offer **Enable** without changing credentials. Before
+starting or retrying setup, the renderer refreshes the provider's saved state to avoid
+reopening a connection that changed since the list loaded. Existing provider
+credentials and models can be edited from Settings.
+
+An installation with no preference but existing projects or a configured
+language provider is marked completed once. Media credentials alone do not
+count as language setup. A saved completion or skip remains valid if providers
+are later removed. Damaged preferences are logged and reinitialized rather
+than blocking project access. Project links, playtest windows, and thumbnail
+renderers do not pass through the home gate.
+
+**Settings → About → View getting started** reopens the welcome. Moving to the
+connection step with **Next** saves a pending preference again. The two bottom
+step indicators are buttons for switching between the welcome and provider
+screens. Selecting the provider step also returns from its inline forms to
+the provider list. Step navigation is disabled while saving. The welcome's
+illustration plays once per visit in 5.2 seconds. Only the forming game world
+is visible at first: terrain rises, paths unfold, water reshapes, and trees
+grow in sequence. Its outline then morphs into a small OhMyGame logo beside
+the wordmark, followed by **Your own game studio.** and **Next**. Hidden
+controls stay out of keyboard navigation. Reduced-motion preferences show the
+final logo, title, and controls immediately. The connection screen reuses
+the daemon's provider authentication flow and custom-provider form; it does
+not require an OhMyGame cloud account. The add button beside provider search
+opens that form inline. Settings uses the same form in its existing dialog.
+Saving or cancelling returns to the provider list without adding a persisted
+setup step. Image, video, and 3D connections and default models are configured
+in Settings and do not change the language-only completion requirement.
 
 ## Network proxy
 
@@ -275,32 +328,94 @@ Each project lives under the daemon data directory:
 ```text
 projects/<project-id>/
 ├── project.json   project identity and latest publication
-├── cover.webp     custom cover; its presence stops automatic replacement
+├── cover.webp     uploaded cover, retained while automatic mode is enabled
 ├── cover-auto.webp last automatic cover, retained when a custom cover is applied
+├── cover-frozen.webp frozen automatic cover or Interactive Story thumbnail
+├── cover-state.json explicit cover mode, including when no cover exists
 ├── preview-origin.json stable local preview port
-├── checkpoints/   internal Git object store for per-turn file Diff and Undo
-├── workspace-restore-notice.txt durable restore notice and workspace version
+├── checkpoints/   snapshots of the workspace, one bare Git repository
 ├── workspace/     the project files (or an existing folder in the desktop app)
 └── session/       Pi session files, one per conversation
 ```
 
 Removing a project never deletes an existing folder used as its workspace.
 
-Each consumed agent message records its file changes for **File changes** and
-explicit **Undo files**. Editing a message preserves the current files; Undo
-preserves the conversation and reloads workspace editors. Checkpoint objects
-live outside the workspace and do not require a workspace Git repository.
-See [turn file changes and Undo](checkpoints.md) for conflict choices, writer
-coordination, excluded files, and interrupted-restore recovery.
+## Checkpoints
+
+Web Game, General Game and Interactive Story projects record the workspace
+around every Agent turn, so that what a turn did to the files can be seen and
+taken back.
+
+A snapshot is taken before each user message reaches the model, including
+queued and steering messages, and again when the run ends. The two snapshots
+enclose the turn. They are commits in `checkpoints/`, a bare Git repository
+beside the workspace that the daemon writes itself. It never uses the
+workspace's own `.git` or `.gitignore`, and writes nothing into the workspace.
+A snapshot of an unchanged workspace is the commit that is already there.
+
+A message whose turn changed files shows **N files changed** below it. The row
+opens a list of the files that were added, modified or removed, and each file
+opens a line diff. Text is shown up to 256 KiB a side; images, audio, video and
+3D models are listed without content. The list is the difference between the
+two snapshots, so it holds everything that changed in the project during the
+turn, including edits made by hand. Agent turns in different conversations of
+the same project run one at a time, since they share these files.
+
+![A turn's changed files with the line diff of one of them](assets/turn-changes.webp)
+
+**Undo** takes back the files of one turn and leaves the conversation as it
+is. Files that still are as the turn left them are put back. Files that are
+already back are left alone. A file that was changed again afterwards, or that
+cannot come back because something newer is in its place, is a conflict: the
+undo then changes nothing and asks whether to keep those files and undo the
+rest, or to overwrite them. Overwriting is refused when more files have become
+conflicts since the list was shown. The Agent is told which files went back
+by a note in the conversation that starts no turn, so that its next reply does
+not build on files that are gone. A turn that was undone says so, and a turn
+with files that were kept can be undone the rest of the way later.
+
+![Undo asking what to do with a file that was changed again after the turn](assets/turn-undo-conflict.webp)
+
+**Restore to before this message** is a separate action on a user message. It
+puts the whole workspace back to the snapshot taken before that message and
+removes the message and everything after it from the conversation. Editing a
+message does neither: it leaves the workspace as it is.
+
+Both actions first record the workspace as it is, so nothing they replace is
+lost from the store, and both are refused while an Agent is working in the
+project. If the app quits in the middle of one, the project offers to put the
+files back to how they were before it started the next time it is opened.
+
+These paths are not part of a snapshot and are never written or removed by an
+undo or a restore:
+
+- `node_modules` and `.git`, at any depth.
+- `dist`, `build`, `out`, `.godot`, `.ohmygame`, `.ohmygame-install-pending`,
+  `.data/agent-attachments` and `canvas/jobs.json`, at the workspace root.
+- A file or folder the daemon is not allowed to read.
+
+All project types use workspace checkpoints. The shared asset Library, generation
+history, and Godot cache stay outside restoration. A failed before snapshot blocks
+inference and tools. See [checkpoints.md](checkpoints.md) for write coordination,
+workspace versions, model notices, and recovery. The store only grows; nothing removes
+old snapshots yet. Permission bits other than "executable" are not recorded.
 
 Project covers are saved independently of publishing. Selecting an image in the
 publish dialog previews it; **Apply cover** saves it and stops automatic cover
-replacement. **Restore automatic cover** returns to the last automatic cover,
-or an Interactive Story's Scene thumbnail when available. Automatic captures
+replacement. The **Automatic** switch beside **Cover** can also stop replacement
+without uploading an image: it freezes the current cover, including an
+Interactive Story's Scene thumbnail, or keeps the cover empty if none exists.
+Turning it back on returns to the last automatic cover, or an Interactive
+Story's Scene thumbnail when available. Uploaded covers are retained: turning
+**Automatic** off again restores the uploaded image. Without an uploaded image,
+turning it off freezes the current automatic cover. Automatic captures
 cannot overwrite a custom cover, including captures already in flight. Existing
 covers from older app versions are protected as custom covers until the user
-restores automatic mode. Restoring removes the custom cover; the automatic
-cover is retained separately. Duplicating a project preserves both covers.
+enables **Automatic**. Enabling it removes only the frozen snapshot and saves
+automatic mode; uploaded and automatic covers are retained separately.
+Unreadable JSON or invalid mode values fall back to custom mode when an uploaded
+cover exists, or automatic mode otherwise. The preference survives restarts.
+Duplicating a project preserves the covers and the selected mode.
 The Community cover is a snapshot in the published Deployment and changes only
 when an update is published; publication details show that snapshot.
 

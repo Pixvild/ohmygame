@@ -21,7 +21,12 @@ import {
 } from "../src/daemon/agent.js";
 import { CheckpointStore } from "../src/daemon/checkpoints.js";
 import { CheckpointFileTooLargeError } from "../src/daemon/checkpoint-objects.js";
-import { sessionCheckpoints } from "../src/daemon/turn-checkpoints.js";
+import {
+  checkpointExtension,
+  turnRange,
+  CHECKPOINT_ENTRY,
+  parseStoredCheckpoint,
+} from "../src/daemon/checkpoint-extension.js";
 import { ProjectWrites } from "../src/daemon/project-writes.js";
 import { RuntimeEventBus } from "../src/shared/events.js";
 import type { ProjectState } from "../src/shared/contracts.js";
@@ -117,6 +122,10 @@ async function fixture(
     project.workspacePath,
     path.join(directory, "sessions"),
   );
+  const store = new CheckpointStore();
+  const snapshot = vi.fn(
+    snapshotOverride ?? ((state: ProjectState) => store.snapshot(state)),
+  );
   const session = (await createPiSession(
     project,
     sessionManager,
@@ -124,22 +133,22 @@ async function fixture(
     runtime,
     model,
     agentDir,
-  )) as AgentSession & {
-    setCheckpointHooks: NonNullable<
-      import("../src/daemon/agent.js").CodingSession["setCheckpointHooks"]
-    >;
-  };
-  const store = new CheckpointStore();
-  const snapshot = vi.fn(
-    snapshotOverride ?? ((state: ProjectState) => store.snapshot(state)),
-  );
+    undefined,
+    undefined,
+    undefined,
+    checkpointExtension(() => snapshot(project)),
+  )) as AgentSession;
   const events = new RuntimeEventBus();
   const manager = new AgentManager(events, {
     createSession: async () => {
       await loading;
       return session;
     },
-    snapshot,
+    checkpoints: {
+      snapshot,
+      changed: async (state, before, after) =>
+        (await store.diff(state, before, after)).length,
+    },
   });
   cleanups.push(() => manager.close());
   const conversation = {
@@ -167,8 +176,32 @@ async function fixture(
   };
 }
 
+function checkpointId(
+  events: RuntimeEventBus,
+  turnId: string,
+): string | undefined {
+  const event = events
+    .since("project")
+    .find(
+      (candidate) =>
+        candidate.type === "checkpoint.created" && candidate.turnId === turnId,
+    );
+  return event?.type === "checkpoint.created"
+    ? event.data.checkpointId
+    : undefined;
+}
+function rangeFor(
+  session: SessionManager,
+  events: RuntimeEventBus,
+  turnId: string,
+) {
+  const id = checkpointId(events, turnId);
+  return id ? turnRange(session.getBranch(), id) : undefined;
+}
+
 it("captures consumed follow-ups and steering at file boundaries, rather than enqueue time", async () => {
   const {
+    events,
     project,
     session,
     sessionManager,
@@ -243,11 +276,10 @@ it("captures consumed follow-ups and steering at file boundaries, rather than en
   expect(snapshot).toHaveBeenCalledTimes(1);
   release.resolve();
   await first.result;
-  expect(snapshot).toHaveBeenCalledTimes(6);
-  const checkpoints = sessionCheckpoints(sessionManager.getBranch());
-  const firstRange = checkpoints.get(first.turnId)!;
-  const steerRange = checkpoints.get(steer.turnId)!;
-  const followRange = checkpoints.get(follow.turnId)!;
+  expect(snapshot).toHaveBeenCalledTimes(4);
+  const firstRange = rangeFor(sessionManager, events, first.turnId)!;
+  const steerRange = rangeFor(sessionManager, events, steer.turnId)!;
+  const followRange = rangeFor(sessionManager, events, follow.turnId)!;
   expect(
     Buffer.from(
       (await store.read(project, firstRange.after!, "game.txt"))!,
@@ -272,19 +304,18 @@ it("captures consumed follow-ups and steering at file boundaries, rather than en
   const users = conversationItems(restarted, false).filter(
     (item) => item.type === "userMessage",
   );
-  expect(users.map((item) => item.checkpoint?.id)).toEqual([
-    first.turnId,
-    steer.turnId,
-    follow.turnId,
+  expect(users.map((item) => item.checkpointId)).toEqual([
+    checkpointId(events, first.turnId),
+    checkpointId(events, steer.turnId),
+    checkpointId(events, follow.turnId),
   ]);
 });
 
 it("fails closed before inference/tools when the before checkpoint fails", async () => {
-  const { project, session, manager, conversation, runtime } = await fixture(
-    async () => {
+  const { events, project, session, manager, conversation, runtime } =
+    await fixture(async () => {
       throw new Error("snapshot disk failure");
-    },
-  );
+    });
   const inference = vi.fn(() =>
     stream(
       assistant(
@@ -312,6 +343,7 @@ it("fails closed before inference/tools when the before checkpoint fails", async
 
 it("records partial files on cancellation without rewinding the conversation", async () => {
   const {
+    events,
     project,
     session,
     sessionManager,
@@ -361,9 +393,7 @@ it("records partial files on cancellation without rewinding the conversation", a
   await manager.cancel(project.id, conversation.summary.id, turn.turnId);
   await expect(turn.result).resolves.toBe("cancelled");
   expect(snapshot).toHaveBeenCalledTimes(2);
-  expect(
-    sessionCheckpoints(sessionManager.getBranch()).get(turn.turnId)?.after,
-  ).toBeDefined();
+  expect(rangeFor(sessionManager, events, turn.turnId)?.after).toBeDefined();
   expect(
     await readFile(path.join(project.workspacePath, "partial.txt"), "utf8"),
   ).toBe("partial");
@@ -375,7 +405,7 @@ it("records partial files on cancellation without rewinding the conversation", a
 });
 
 it("bounds preview reads of highly compressed files and validates readable blobs", async () => {
-  const { project, store } = await fixture();
+  const { events, project, store } = await fixture();
   await writeFile(
     path.join(project.workspacePath, "huge.txt"),
     "a".repeat(2 * 1024 * 1024),
@@ -393,7 +423,7 @@ it("bounds preview reads of highly compressed files and validates readable blobs
 });
 
 it("keeps failed turn changes reviewable and closes the after checkpoint before reporting failure", async () => {
-  const { project, manager, conversation, runtime, sessionManager } =
+  const { events, project, manager, conversation, runtime, sessionManager } =
     await fixture();
   let calls = 0;
   runtime.streamSimple = () =>
@@ -414,9 +444,7 @@ it("keeps failed turn changes reviewable and closes the after checkpoint before 
       : stream({ ...assistant([], "error"), errorMessage: "model failure" });
   const turn = manager.prompt(project, conversation, "Write");
   await expect(turn.result).rejects.toThrow("model failure");
-  expect(
-    sessionCheckpoints(sessionManager.getBranch()).get(turn.turnId)?.after,
-  ).toBeDefined();
+  expect(rangeFor(sessionManager, events, turn.turnId)?.after).toBeDefined();
   expect(
     await readFile(path.join(project.workspacePath, "failed.txt"), "utf8"),
   ).toBe("partial failure");
@@ -432,19 +460,24 @@ it("marks a missing after snapshot unavailable instead of presenting a complete 
   runtime.streamSimple = () =>
     stream(assistant([{ type: "text", text: "Done" }]));
   const turn = manager.prompt(project, conversation, "Read");
-  await expect(turn.result).rejects.toThrow("after snapshot failure");
+  await expect(turn.result).resolves.toBe("completed");
+  expect(rangeFor(sessionManager, events, turn.turnId)).toBeUndefined();
+  const id = checkpointId(events, turn.turnId);
+  const entry = sessionManager.getBranch().find((entry) => entry.id === id);
   expect(
-    sessionCheckpoints(sessionManager.getBranch()).get(turn.turnId),
-  ).toEqual({
-    id: turn.turnId,
-    before: "a".repeat(40),
-    error: "after snapshot failure",
-  });
-  expect(events.since(project.id).at(-1)?.type).toBe("agent.error");
+    entry?.type === "custom"
+      ? parseStoredCheckpoint(entry.data)?.commit
+      : undefined,
+  ).toBe("a".repeat(40));
+  expect(
+    events
+      .since(project.id)
+      .some((event) => event.type === "checkpoint.completed"),
+  ).toBe(false);
 });
 
 it("adds the durable workspace notice to later model requests", async () => {
-  const { project, manager, conversation, runtime } = await fixture();
+  const { events, project, manager, conversation, runtime } = await fixture();
   const { writeWorkspaceNotice } =
     await import("../src/daemon/workspace-notice.js");
   await writeWorkspaceNotice(
@@ -524,11 +557,49 @@ it("waits for an HTTP write handler even after its client disconnects", async ()
   expect(order).toEqual(["write", "restore"]);
 });
 
+it("waits for a write handler that continues after sending its response", async () => {
+  const app = Fastify();
+  const writes = new ProjectWrites();
+  const release = deferred();
+  const order: string[] = [];
+  writes.install(app);
+  app.addHook("preHandler", async (request) => {
+    writes.track(request, writes.enter("one"));
+  });
+  app.post("/write", async (_request, reply) => {
+    reply.send({ accepted: true });
+    await release.promise;
+    order.push("write");
+  });
+  cleanups.push(
+    () => app.close(),
+    () => release.resolve(),
+  );
+  expect((await app.inject({ method: "POST", url: "/write" })).statusCode).toBe(
+    200,
+  );
+  const restoring = writes.exclusive("one", async () => {
+    order.push("restore");
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(order).toEqual([]);
+  release.resolve();
+  await restoring;
+  expect(order).toEqual(["write", "restore"]);
+});
+
 it("associates an initial consumed message correctly when a follow-up arrives during session loading", async () => {
   const loading = deferred();
   cleanups.push(() => loading.resolve());
-  const { project, manager, conversation, runtime, sessionManager, snapshot } =
-    await fixture(undefined, loading.promise);
+  const {
+    events,
+    project,
+    manager,
+    conversation,
+    runtime,
+    sessionManager,
+    snapshot,
+  } = await fixture(undefined, loading.promise);
   runtime.streamSimple = () =>
     stream(assistant([{ type: "text", text: "Done" }]));
   const first = manager.prompt(project, conversation, "First");
@@ -541,17 +612,27 @@ it("associates an initial consumed message correctly when a follow-up arrives du
   loading.resolve();
   await queued.result;
   await first.result;
-  expect(snapshot).toHaveBeenCalledTimes(4);
+  expect(snapshot).toHaveBeenCalledTimes(3);
   expect(
     conversationItems(sessionManager.getBranch())
       .filter((item) => item.type === "userMessage")
-      .map((item) => item.checkpoint?.id),
-  ).toEqual([first.turnId, queued.turnId]);
+      .map((item) => item.checkpointId),
+  ).toEqual([
+    checkpointId(events, first.turnId),
+    checkpointId(events, queued.turnId),
+  ]);
 });
 
 it("edits conversation history while preserving files and checkpoints the current files for the replacement", async () => {
-  const { project, manager, conversation, runtime, sessionManager, store } =
-    await fixture();
+  const {
+    events,
+    project,
+    manager,
+    conversation,
+    runtime,
+    sessionManager,
+    store,
+  } = await fixture();
   runtime.streamSimple = () =>
     stream(assistant([{ type: "text", text: "Done" }]));
   const original = manager.prompt(project, conversation, "First");
@@ -567,9 +648,7 @@ it("edits conversation history while preserving files and checkpoints the curren
     async (reference) => reference,
   );
   await revised.result;
-  const checkpoint = sessionCheckpoints(sessionManager.getBranch()).get(
-    revised.turnId,
-  )!;
+  const checkpoint = rangeFor(sessionManager, events, revised.turnId)!;
   expect(
     Buffer.from(
       (await store.read(project, checkpoint.before, "game.txt"))!,
@@ -584,26 +663,28 @@ it("edits conversation history while preserving files and checkpoints the curren
   expect(users.map((item) => item.text)).toEqual(["Replacement"]);
 });
 
-it("keeps before-checkpoint events immutable when the after snapshot finishes", async () => {
+it("reports checkpoint creation and completion as separate immutable events", async () => {
   const { project, manager, conversation, runtime, events } = await fixture();
   runtime.streamSimple = () =>
     stream(assistant([{ type: "text", text: "Done" }]));
   await manager.prompt(project, conversation, "First").result;
-  const updates = events
+  const created = events
     .since(project.id)
-    .flatMap((event) =>
-      event.type === "item.updated" && event.data.item.type === "userMessage"
-        ? [event.data.item]
-        : [],
-    );
-  expect(updates).toHaveLength(2);
-  expect(updates[0]!).toHaveProperty("checkpoint.before");
-  expect(updates[0]!).not.toHaveProperty("checkpoint.after");
-  expect(updates[1]!).toHaveProperty("checkpoint.after");
+    .find((event) => event.type === "checkpoint.created");
+  const completed = events
+    .since(project.id)
+    .find((event) => event.type === "checkpoint.completed");
+  expect(created?.data).toEqual({
+    checkpointId:
+      completed?.type === "checkpoint.completed"
+        ? completed.data.checkpointId
+        : undefined,
+  });
+  expect(completed?.data).toMatchObject({ files: 0 });
 });
 
 it("blocks inference if the durable workspace notice cannot be read", async () => {
-  const { project, manager, conversation, runtime } = await fixture();
+  const { events, project, manager, conversation, runtime } = await fixture();
   await mkdir(path.join(project.storagePath!, "workspace-restore-notice.txt"));
   const inference = vi.fn(() =>
     stream(assistant([{ type: "text", text: "Done" }])),

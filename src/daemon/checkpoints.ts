@@ -26,6 +26,7 @@ import {
   fromSource,
   initialize,
   readBlobLimited,
+  readCommit,
   readCommitTree,
   readHead,
   readObject,
@@ -38,6 +39,7 @@ import {
   writeHead,
   writeObject,
   writeTree,
+  type Commit,
   type TreeEntry,
 } from "./checkpoint-objects.js";
 
@@ -57,7 +59,10 @@ export interface CheckpointRestoreResult {
 }
 
 export interface CheckpointUndoResult extends CheckpointRestoreResult {
-  /** Paths that could not simply be put back, in path order. See `CheckpointStore.undo`. */
+  /**
+   * Paths that could not simply be put back, in path order. See `CheckpointStore.undo`. With `"keep"` they were left
+   * as they are, and with a list of paths to overwrite they were overwritten.
+   */
   conflicts: string[];
 }
 
@@ -68,13 +73,24 @@ export interface CheckpointRange {
 }
 
 export interface CheckpointUndoOptions {
-  /** What to do with conflicts: leave those paths as they are, or put them back as well. Without it an undo with conflicts is refused. */
-  conflicts?: "keep" | "overwrite";
+  /**
+   * What to do with conflicts: leave those paths as they are, or overwrite the ones that are listed. A file that
+   * became a conflict after the list was made is not in it, and so refuses the undo. A path that is in the list is
+   * overwritten as it is when the undo runs, also when it was saved again meanwhile: `previous` holds it. Without
+   * this an undo with conflicts is refused.
+   */
+  conflicts?: "keep" | { overwrite: readonly string[] };
 }
 
-/** A restore or an undo was refused because of these paths. The workspace was not touched. */
+/**
+ * A restore or an undo was refused because of these paths. The workspace was not touched. `blocked` are the ones
+ * among them that cannot be put back whatever the caller chooses.
+ */
 export class CheckpointConflictError extends Error {
-  constructor(readonly conflicts: string[]) {
+  constructor(
+    readonly conflicts: string[],
+    readonly blocked: string[],
+  ) {
     super(
       `These files cannot be put back without losing later changes: ${conflicts.join(", ")}`,
     );
@@ -94,10 +110,16 @@ export class CheckpointChangedError extends Error {
   }
 }
 
-/** A restore or an undo failed part way and could not take back all it had changed. `previous` holds the workspace as it was before. */
+/**
+ * A restore or an undo failed part way and could not take back all it had changed. `previous` holds the workspace as
+ * it was before, or as it was before an earlier restore or undo that never came to an end. `found` holds the
+ * workspace as this operation found it. The two differ only after such an earlier one, and what was done to the
+ * workspace since then is in `found` alone.
+ */
 export class CheckpointIncompleteError extends Error {
   constructor(
     readonly previous: string,
+    readonly found: string,
     cause: unknown,
   ) {
     super("The workspace is partly changed", { cause });
@@ -138,9 +160,8 @@ interface RecordedFile extends FileSignature {
 type Signatures = Map<string, RecordedFile>;
 type StatCache = Map<string, FileSignature & FileEntry>;
 
-interface Snapshot {
+interface Snapshot extends Commit {
   commit: string;
-  tree: string;
   /** Every file the snapshot holds, as the walk saw it. */
   seen: Signatures;
   paths: WorkspacePaths;
@@ -155,6 +176,12 @@ interface Walk {
   seen: Signatures;
   paths: WorkspacePaths;
   objects: ObjectVerifier;
+  unreadable: string[];
+}
+
+interface Comparison {
+  changes: Change[];
+  omitted: Change[];
 }
 
 /** The changes an operation has made so far, and what each file it wrote looked like afterwards. */
@@ -188,8 +215,11 @@ const EXCLUDED_AT_ROOT = new Set([
 ]);
 const TEMPORARY_PREFIX = ".ohmygame-checkpoint-";
 const TEMPORARY_SUFFIX = ".tmp";
-// A file that is gone by the time it is read, or that may not be read, is left out of a snapshot like an excluded one.
-const UNREADABLE = new Set(["ENOENT", "ENOTDIR", "EISDIR", "EACCES", "EPERM"]);
+// A file that is gone by the time it is read is left out of a snapshot: the folder it was listed in changed meanwhile.
+const GONE = new Set(["ENOENT", "ENOTDIR", "EISDIR"]);
+// A file or folder that is there and may not be read, or that another program holds open on Windows, is left out as
+// well, and the snapshot names it: otherwise the path would look later like one that was not there.
+const UNREADABLE = new Set(["EACCES", "EPERM", "EBUSY"]);
 
 /** The git directory that holds a project's checkpoints. It is outside the workspace and is removed with the project. */
 export function checkpointDirectory(project: CheckpointProject): string {
@@ -215,7 +245,8 @@ function temporary(name: string): boolean {
  * Snapshots of a project's workspace in a git object store, so the changes
  * between two snapshots can be shown and undone. The store never uses the
  * workspace's own `.git` or `.gitignore`. Excluded paths are never recorded
- * and never touched.
+ * and never touched. Neither is a path that could not be read when one of the
+ * snapshots an operation looks at was taken: each snapshot names those paths.
  *
  * A restore or an undo replaces or removes a file only when a snapshot holds
  * it exactly as it is on disk, so what it overwrites can be had back. The
@@ -235,17 +266,35 @@ export class CheckpointStore {
     );
   }
 
-  /** Lists the files that differ between two snapshots, in path order. */
+  /**
+   * Resolves when no snapshot, restore or undo of the project is under way or
+   * waiting in this store. A caller that is about to remove the project waits
+   * for it, because an operation that is still running writes to the store.
+   * From then on until the folder is gone it must ask for no further one: an
+   * operation that starts while the folder is being removed writes into it.
+   */
+  async settled(project: CheckpointProject): Promise<void> {
+    const key = checkpointDirectory(project);
+    // An operation that is asked for while this waits is waited for as well.
+    for (
+      let queued = this.#queues.get(key);
+      queued;
+      queued = this.#queues.get(key)
+    )
+      await queued;
+  }
+
+  /** Lists the files that differ between two snapshots, in path order. A path that either of them could not read is not listed. */
   async diff(
     project: CheckpointProject,
     from: string,
     to: string,
   ): Promise<CheckpointChange[]> {
     const gitdir = checkpointDirectory(project);
-    const changes = await this.#diff(
+    const { changes } = await this.#compare(
       gitdir,
-      await readCommitTree(gitdir, from),
-      await readCommitTree(gitdir, to),
+      await readCommit(gitdir, from),
+      await readCommit(gitdir, to),
     );
     return changes
       .map((change): CheckpointChange => ({
@@ -304,38 +353,54 @@ export class CheckpointStore {
     const { previous } = JSON.parse(text) as { previous?: unknown };
     if (typeof previous !== "string" || !/^[0-9a-f]{40}$/.test(previous))
       throw new Error("Invalid checkpoint recovery record");
+    await readCommit(checkpointDirectory(project), previous);
     return previous;
+  }
+
+  async #noted(gitdir: string): Promise<string | undefined> {
+    return this.unfinished({
+      workspacePath: "",
+      storagePath: path.dirname(gitdir),
+    });
   }
 
   /**
    * Puts the whole workspace back to a snapshot. Only files that differ are
    * written or removed. It is refused, with nothing touched, when a file
    * cannot come back because something that is not part of checkpoints, such
-   * as a folder of excluded files, is in its place.
-   * If an operation is unfinished, only restoring its recovery checkpoint is allowed.
+   * as a folder of excluded files, is in its place, or because its place cannot be read now.
+   * An unfinished operation must be restored to its recorded recovery checkpoint first.
    */
   restore(
     project: CheckpointProject,
     commit: string,
+    complete?: (previous: string) => Promise<void>,
   ): Promise<CheckpointRestoreResult> {
     return this.#serialize(project, async () => {
       const recovering = await this.unfinished(project);
       if (recovering && commit !== recovering)
         throw new CheckpointIncompleteError(
           recovering,
+          (await this.#snapshot(project)).commit,
           new Error("Recover the unfinished checkpoint operation first"),
         );
       const gitdir = checkpointDirectory(project);
-      const target = await readCommitTree(gitdir, commit);
-      const { current, changes } = await this.#planned(
+      const target = await readCommit(gitdir, commit);
+      const { current, changes, omitted } = await this.#planned(
         project,
-        async (snapshot) => ({
-          changes: await this.#diff(gitdir, snapshot.tree, target),
-        }),
+        (snapshot) => this.#compare(gitdir, snapshot, target),
       );
-      const blocked = await this.#blocked(project, current, changes);
-      if (blocked.length) throw new CheckpointConflictError(blocked);
-      await this.#apply(project, current, changes, recovering);
+      // A file of the target that is left out, though the target could read its place, is one whose place cannot be read now.
+      const missed = unread([target]);
+      const unreadable = paths(
+        omitted.filter((change) => change.to && !within(change.path, missed)),
+      );
+      const blocked = [
+        ...unreadable,
+        ...(await this.#blocked(project, current, changes, [target])),
+      ].sort(compare);
+      if (blocked.length) throw new CheckpointConflictError(blocked, blocked);
+      await this.#apply(project, current, changes, true, complete);
       return { previous: current.commit, changed: paths(changes) };
     });
   }
@@ -346,11 +411,16 @@ export class CheckpointStore {
    *
    * A file is a conflict when it was changed again afterwards, or when it
    * cannot come back because something that appeared afterwards is in its
-   * place. With conflicts the undo is refused, with nothing touched, unless
-   * the caller says to keep those files as they are or to overwrite them.
-   * Files that are not part of checkpoints are never removed, so a file they
-   * block is refused even then.
-   * An unfinished operation must be recovered before starting another undo.
+   * place. What is in its place is then a conflict as well, under its own
+   * path. With conflicts the undo is refused, with nothing touched, unless
+   * the caller says to keep those paths as they are or lists every one of
+   * them as a path to overwrite. Files that are not part of checkpoints are
+   * never removed, so a file they block is refused even then, and so is a
+   * file of the range that cannot be read now.
+   *
+   * A path that one of the two snapshots could not read is not part of the
+   * changes between them: what was changed there or below is not taken back,
+   * and a file that was moved away from there counts as one that was added.
    */
   undo(
     project: CheckpointProject,
@@ -362,53 +432,94 @@ export class CheckpointStore {
       if (unfinished)
         throw new CheckpointIncompleteError(
           unfinished,
+          (await this.#snapshot(project)).commit,
           new Error("Recover the unfinished checkpoint operation first"),
         );
       const gitdir = checkpointDirectory(project);
       const [before, after] = await Promise.all([
-        readCommitTree(gitdir, range.before),
-        readCommitTree(gitdir, range.after),
+        readCommit(gitdir, range.before),
+        readCommit(gitdir, range.after),
       ]);
-      const { current, changes, changedAgain } = await this.#planned(
-        project,
-        (snapshot) =>
+      // The option can come from code without types, and nothing but a list of paths gives leave to overwrite.
+      const overwrite =
+        options.conflicts &&
+        typeof options.conflicts === "object" &&
+        Array.isArray(options.conflicts.overwrite)
+          ? new Set<string>(options.conflicts.overwrite)
+          : undefined;
+      const { current, changes, changedAgain, unreadable } =
+        await this.#planned(project, (snapshot) =>
           this.#undoing(
             gitdir,
             before,
             after,
-            snapshot.tree,
-            options.conflicts === "overwrite",
+            snapshot,
+            overwrite !== undefined,
           ),
-      );
-      const blocked = await this.#blocked(project, current, changes);
+        );
+      const blocked = [
+        ...unreadable,
+        ...(await this.#blocked(project, current, changes, [before, after])),
+      ].sort(compare);
       const conflicts = [...new Set([...changedAgain, ...blocked])].sort(
         compare,
       );
-      if (conflicts.length && !options.conflicts)
-        throw new CheckpointConflictError(conflicts);
-      if (blocked.length && options.conflicts === "overwrite")
-        throw new CheckpointConflictError(blocked);
+      // Overwriting loses the later state of every conflict, so the caller must have named each of them.
+      const refused = overwrite
+        ? blocked.length > 0 || conflicts.some((file) => !overwrite.has(file))
+        : conflicts.length > 0 && options.conflicts !== "keep";
+      if (refused && !overwrite) {
+        // What no choice can put back shows only when the conflicts are overwritten: while they are kept, more is in the way.
+        const overwriting = await this.#undoing(
+          gitdir,
+          before,
+          after,
+          current,
+          true,
+        );
+        throw new CheckpointConflictError(
+          conflicts,
+          [
+            ...unreadable,
+            ...(await this.#blocked(project, current, overwriting.changes, [
+              before,
+              after,
+            ])),
+          ].sort(compare),
+        );
+      }
+      if (refused) throw new CheckpointConflictError(conflicts, blocked);
       const applied = changes.filter(
         (change) => !blocked.includes(change.path),
       );
-      await this.#apply(project, current, applied);
+      await this.#apply(project, current, applied, false);
       return { previous: current.commit, changed: paths(applied), conflicts };
     });
   }
 
-  /** Works out from the trees alone what an undo changes and which files were changed again after the range. */
+  /**
+   * Works out from the snapshots alone what an undo changes, which paths were
+   * changed again after the range, and which files of the range cannot be
+   * read now.
+   */
   async #undoing(
     gitdir: string,
-    before: string,
-    after: string,
-    current: string,
+    before: Commit,
+    after: Commit,
+    current: Commit,
     overwrite: boolean,
-  ): Promise<{ changes: Change[]; changedAgain: string[] }> {
-    const [ranged, since, back] = await Promise.all([
-      this.#diff(gitdir, before, after),
-      this.#diff(gitdir, after, current),
-      this.#diff(gitdir, current, before),
-    ]);
+  ): Promise<{
+    changes: Change[];
+    changedAgain: string[];
+    unreadable: string[];
+  }> {
+    // What happened since the range is told from all three snapshots, so that nothing one of them could not read is written or removed.
+    const [{ changes: ranged }, { changes: since }, { changes: back }] =
+      await Promise.all([
+        this.#compare(gitdir, before, after),
+        this.#compare(gitdir, after, current, [before]),
+        this.#compare(gitdir, current, before, [after]),
+      ]);
     const inRange = new Set(paths(ranged));
     const edited = new Set(paths(since));
     // What it takes to bring the files of the range back; files that are already back are not in it.
@@ -439,13 +550,18 @@ export class CheckpointStore {
         : [];
 
     // An obstacle that the range itself left there goes away with the undo; one that appeared or changed later stays.
-    const changedAgain = wanted
-      .filter(
-        (change) =>
-          edited.has(change.path) ||
-          obstacles(change).some((obstacle) => edited.has(obstacle.path)),
-      )
-      .map((change) => change.path);
+    const later = (change: Change): string[] =>
+      paths(obstacles(change)).filter((obstacle) => edited.has(obstacle));
+    // Such a later file is named under its own path as well: overwriting removes it.
+    const changedAgain = [
+      ...new Set(
+        wanted.flatMap((change) =>
+          edited.has(change.path) || later(change).length
+            ? [change.path, ...later(change)]
+            : [],
+        ),
+      ),
+    ];
     const changes = new Map(
       wanted
         .filter((change) => overwrite || !changedAgain.includes(change.path))
@@ -456,7 +572,12 @@ export class CheckpointStore {
       for (const obstacle of obstacles(change))
         changes.set(obstacle.path, obstacle);
     }
-    return { changes: [...changes.values()], changedAgain };
+    const now = unread([current]);
+    return {
+      changes: [...changes.values()],
+      changedAgain,
+      unreadable: paths(ranged).filter((file) => within(file, now)),
+    };
   }
 
   /**
@@ -477,14 +598,18 @@ export class CheckpointStore {
    * file to replace or remove is no longer what the snapshot holds. Returns
    * the files that cannot be created because something these changes do not
    * remove is in their place: a file whose name differs only in case on a
-   * file system that ignores case, or a folder with excluded files.
+   * file system that ignores case, a folder with files that are excluded or
+   * that a snapshot could not read, or a place that may not be looked at.
+   * `also` are the snapshots the changes were told from beside this one.
    */
   async #blocked(
     project: CheckpointProject,
     current: Snapshot,
     changes: Change[],
+    also: Commit[],
   ): Promise<string[]> {
     const workspace = project.workspacePath;
+    const unreadable = unread([current, ...also]);
     const removing = new Set<string>();
     await all(
       changes.map(
@@ -508,8 +633,11 @@ export class CheckpointStore {
       if (!found) {
         found = this.#limit(async () => {
           await current.paths.check(relative);
-          const stats = await present(path.join(workspace, relative));
-          if (!stats) return "free";
+          const stats = await lstat(path.join(workspace, relative)).catch(
+            (error: NodeJS.ErrnoException) => error.code ?? "",
+          );
+          if (typeof stats === "string")
+            return UNREADABLE.has(stats) ? "taken" : "free";
           if (stats.isDirectory()) return "folder";
           return removing.has(identity(stats)) ? "free" : "taken";
         });
@@ -530,7 +658,7 @@ export class CheckpointStore {
         if (
           found === "taken" ||
           (found === "folder" &&
-            !(await current.paths.holdsOnly(change.path, removing)))
+            !(await current.paths.holdsOnly(change.path, removing, unreadable)))
         )
           blocked.push(change.path);
       }),
@@ -569,20 +697,28 @@ export class CheckpointStore {
     return stats;
   }
 
-  /** Makes the changes. When that fails part way, the ones already made are taken back. */
+  /**
+   * Makes the changes. When that fails part way, the ones already made are
+   * taken back. `whole` says that the workspace is a snapshot again once the
+   * changes are made, as after a restore.
+   */
   async #apply(
     project: CheckpointProject,
     current: Snapshot,
     changes: Change[],
-    recovering?: string,
+    whole: boolean,
+    complete?: (previous: string) => Promise<void>,
   ): Promise<void> {
     const gitdir = checkpointDirectory(project);
     const unfinished = path.join(gitdir, UNFINISHED_FILE);
-    if (changes.length === 0) return await rm(unfinished, { force: true });
+    if (changes.length === 0 && !complete)
+      return whole ? await rm(unfinished, { force: true }) : undefined;
+    // A note that is there already names the last state that was whole, which the workspace as this operation found
+    // it is not. So that note stays as it is, and only a restore that runs to its end removes it.
+    const earlier = await this.#noted(gitdir);
+    const previous = earlier ?? current.commit;
     // Says, until the end is reached, where to go back to if this process does not get there.
-    const previous = recovering ?? current.commit;
-    // Recovery must keep the original complete state across retries and crashes.
-    if (!recovering)
+    if (!earlier)
       await writeAtomically(gitdir, unfinished, JSON.stringify({ previous }));
     const progress: Progress = { made: [], written: new Map() };
     try {
@@ -594,6 +730,9 @@ export class CheckpointStore {
         false,
         current.paths,
       );
+      // Keep the recovery checkpoint until the associated conversation rewind
+      // has been persisted too. Its failure rolls files back in this operation.
+      await complete?.(current.commit);
     } catch (cause) {
       // The content to return to is already in the store, so this needs no room for a new snapshot.
       const inverse = progress.made.map((change): Change => ({
@@ -609,13 +748,17 @@ export class CheckpointStore {
         true,
         current.paths,
       ).catch(() => {
-        throw new CheckpointIncompleteError(previous, cause);
+        throw new CheckpointIncompleteError(previous, current.commit, cause);
       });
-      if (recovering) throw new CheckpointIncompleteError(previous, cause);
+      if (earlier)
+        throw new CheckpointIncompleteError(previous, current.commit, cause);
       await rm(unfinished, { force: true });
       throw cause;
     }
-    await rm(unfinished, { force: true });
+    if (whole || !earlier)
+      await rm(unfinished, { force: true }).catch((cause) => {
+        throw new CheckpointIncompleteError(previous, current.commit, cause);
+      });
   }
 
   /**
@@ -736,6 +879,9 @@ export class CheckpointStore {
 
   async #snapshot(project: CheckpointProject): Promise<Snapshot> {
     const gitdir = checkpointDirectory(project);
+    // A project that is being removed has no workspace any more, and must not get the folder of its store back.
+    // Listing the workspace shows that it is there and that it is a folder.
+    await fromSource(readdir(project.workspacePath));
     await initialize(gitdir);
     const paths = await WorkspacePaths.open(project.workspacePath);
     const walk: Walk = {
@@ -747,6 +893,7 @@ export class CheckpointStore {
       seen: new Map(),
       paths,
       objects: this.#objects,
+      unreadable: [],
     };
     const tree =
       (await this.#writeDirectory(walk, "")) ??
@@ -757,22 +904,33 @@ export class CheckpointStore {
       path.join(gitdir, STAT_CACHE_FILE),
       JSON.stringify(Object.fromEntries(walk.settled)),
     ).catch(() => {});
+    const unreadable = walk.unreadable.sort(compare);
     const head = await readHead(gitdir);
-    const headTree =
-      head && (await readCommitTree(gitdir, head).catch(() => undefined));
-    if (head && headTree === tree)
-      return { commit: head, tree, seen: walk.seen, paths };
+    const recorded = head
+      ? await readCommit(gitdir, head).catch(() => undefined)
+      : undefined;
+    if (
+      head &&
+      recorded?.tree === tree &&
+      recorded.unreadable.join("\0") === unreadable.join("\0")
+    )
+      return { commit: head, tree, unreadable, seen: walk.seen, paths };
     const commit = await writeCommit(
       gitdir,
       tree,
-      headTree ? head : undefined,
+      recorded ? head : undefined,
+      unreadable,
       walk.objects,
     );
     await writeHead(gitdir, commit);
-    return { commit, tree, seen: walk.seen, paths };
+    return { commit, tree, unreadable, seen: walk.seen, paths };
   }
 
-  /** Writes one folder as a tree and returns its id, or undefined when nothing in it is kept. */
+  /**
+   * Writes one folder as a tree and returns its id, or undefined when nothing
+   * in it is kept. An entry that may not be read is noted, a folder once and
+   * under its own path, and left out.
+   */
   async #writeDirectory(
     walk: Walk,
     relative: string,
@@ -813,13 +971,12 @@ export class CheckpointStore {
             const oid = await this.#writeDirectory(walk, entryPath);
             return oid ? { mode: TREE_MODE, name, oid } : undefined;
           } catch (error) {
+            if (!(error instanceof SourceError)) throw error;
             // The workspace is in use: something listed a moment ago, such as a build tool's temporary file, can be gone by now.
-            if (
-              error instanceof SourceError &&
-              UNREADABLE.has(error.code ?? "")
-            )
-              return undefined;
-            throw error;
+            if (GONE.has(error.code ?? "")) return undefined;
+            if (!UNREADABLE.has(error.code ?? "")) throw error;
+            walk.unreadable.push(entryPath);
+            return undefined;
           }
         }),
       )
@@ -891,7 +1048,32 @@ export class CheckpointStore {
     }
   }
 
-  /** Collects the files that differ between two trees. Subtrees with the same id are skipped whole. */
+  /**
+   * Compares two snapshots. Every comparison goes through here, because this
+   * is where the paths a snapshot could not read are left out: such a path,
+   * and everything below it, is not part of a comparison that looks at that
+   * snapshot. The snapshot does not tell what was there, so the path must not
+   * show as added or removed, and must be neither written nor removed. That
+   * holds for the path in whichever spelling: see `folded`. `also` are
+   * further snapshots the caller looks at together with these two.
+   */
+  async #compare(
+    gitdir: string,
+    from: Commit,
+    to: Commit,
+    also: Commit[] = [],
+  ): Promise<Comparison> {
+    const unreadable = unread([from, to, ...also]);
+    const comparison: Comparison = { changes: [], omitted: [] };
+    for (const change of await this.#diff(gitdir, from.tree, to.tree))
+      (within(change.path, unreadable)
+        ? comparison.omitted
+        : comparison.changes
+      ).push(change);
+    return comparison;
+  }
+
+  /** Collects the files that differ between two trees, for `#compare` alone. Subtrees with the same id are skipped whole. */
   async #diff(
     gitdir: string,
     from: string | undefined,
@@ -980,6 +1162,29 @@ function parents(filePath: string): string[] {
   return names.slice(1).map((_, index) => names.slice(0, index + 1).join("/"));
 }
 
+/**
+ * One spelling for all the names that a file system may take for the same name: many ignore case, and some how an
+ * accented letter is put together. Where a file system tells such names apart, this only leaves more alone.
+ */
+function folded(filePath: string): string {
+  return filePath.normalize("NFC").toLowerCase();
+}
+
+/** The paths that these snapshots could not read, spelled as `within` looks for them. */
+function unread(snapshots: Commit[]): Set<string> {
+  return new Set(
+    snapshots.flatMap((snapshot) => snapshot.unreadable.map(folded)),
+  );
+}
+
+/** Whether a path is one of these places or is below one of them, in whichever spelling. */
+function within(filePath: string, places: ReadonlySet<string>): boolean {
+  const spelled = folded(filePath);
+  return (
+    places.has(spelled) || parents(spelled).some((folder) => places.has(folder))
+  );
+}
+
 function signatureOf(stats: Stats): FileSignature {
   return {
     size: stats.size,
@@ -1048,7 +1253,10 @@ class WorkspacePaths {
     const stats = await present(path.join(this.workspace, relative));
     if (
       !stats?.isDirectory() ||
-      this.#directories.get(relative) !== identity(stats)
+      (this.#directories.get(relative) ??
+        [...this.#directories].find(
+          ([name]) => folded(name) === folded(relative),
+        )?.[1]) !== identity(stats)
     )
       throw new CheckpointChangedError(file || ".");
   }
@@ -1088,6 +1296,7 @@ class WorkspacePaths {
   async holdsOnly(
     relative: string,
     removing: ReadonlySet<string>,
+    unreadable: ReadonlySet<string>,
   ): Promise<boolean> {
     await this.directory(relative);
     for (const entry of await readdir(path.join(this.workspace, relative), {
@@ -1095,9 +1304,10 @@ class WorkspacePaths {
     })) {
       const entryPath = `${relative}/${entry.name}`;
       // An excluded file is never removed, even when it is a hard link to an included one.
-      if (excluded(entryPath)) return false;
+      if (excluded(entryPath) || within(entryPath, unreadable)) return false;
       if (entry.isDirectory()) {
-        if (!(await this.holdsOnly(entryPath, removing))) return false;
+        if (!(await this.holdsOnly(entryPath, removing, unreadable)))
+          return false;
       } else {
         await this.check(entryPath);
         if (

@@ -22,6 +22,7 @@ desktop lifecycle and native game windows; shared modules define contracts.
 | Desktop lifecycle and updates    | `src/desktop/main.ts`, `src/desktop/daemon-supervisor.ts`, `src/desktop/updater.ts`                                                           | [Runtime](runtime.md), [service recovery](runtime-recovery.md), [desktop releases](desktop-releases.md)                 | `test/daemon-supervisor.test.ts`, `test/desktop-updater.test.ts`, `test/desktop-runtime-packaging.test.ts`                          |
 | Publishing and Community         | `src/daemon/publish/`, `src/shared/publish-v1.ts`, `src/renderer/publish-dialog.tsx`                                                          | [Cloud integration](../CONTRIBUTING.md#cloud-integration), [runtime publishing](runtime.md#publishing)                  | `test/publish-client.test.ts`, `test/publish-dialog.test.tsx`; remote contracts in `test/publish.test.ts` need private cloud access |
 | Shared UI and project navigation | `src/renderer/app.tsx`, `src/renderer/projects.tsx`, `src/renderer/project-shell.tsx`, `src/renderer/styles.css`                              | [Local setup](../CONTRIBUTING.md#start-local-development), the affected module guide                                    | `test/projects-page.test.ts`, `test/project-card.test.ts`, `test/project-types.test.ts`                                             |
+| First-run setup                  | `src/renderer/onboarding.tsx`, `src/renderer/onboarding-demo.tsx`, `src/renderer/use-onboarding.ts`, `src/renderer/use-model-provider-auth.ts`, `src/renderer/custom-provider-dialog.tsx`, `src/daemon/onboarding.ts`       | [First run](../README.md#first-run), [setup state](runtime.md#first-run-setup)                                             | `test/onboarding.test.ts`, `test/onboarding-renderer.test.tsx`                                                                         |
 
 These are entry points, not an exhaustive ownership map. HTTP API and event
 definitions live in the code; use the corresponding shared types and tests
@@ -31,7 +32,7 @@ when changing a contract.
 
 [Turn file changes and Undo](checkpoints.md) covers message checkpoints, file
 conflicts, workspace versions, and recovery. Start with `src/daemon/checkpoints.ts`,
-`src/daemon/agent.ts`, and `src/renderer/turn-file-changes.tsx`; the focused suites
+`src/daemon/agent.ts`, and `src/renderer/turn-changes.tsx`; the focused suites
 are `test/checkpoints.test.ts`, `test/turn-checkpoints.test.ts`, and
 `test/checkpoint-routes.test.ts`.
 
@@ -48,6 +49,7 @@ are `test/checkpoints.test.ts`, `test/turn-checkpoints.test.ts`, and
 | [agent-errors.md](agent-errors.md)               | Error classification, diagnostics, redaction, and the Pi compatibility patch.                                                  |
 | [model-image-history.md](model-image-history.md) | Request image budgets, recall, OpenAI continuation, and file lifecycle.                                                        |
 | [desktop-releases.md](desktop-releases.md)       | Maintainer packaging, signing, update feeds, publishing, and rollback.                                                         |
+| [ui-languages.md](ui-languages.md)               | Renderer translations, language selection, what stays in English, and terminology.                                             |
 
 [Playable Nodes](playable-nodes/README.md) has its own vocabulary and index:
 [runtime](playable-nodes/runtime.md) is the node contract,

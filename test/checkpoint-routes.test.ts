@@ -8,7 +8,10 @@ import {
   CheckpointStore,
   checkpointDirectory,
 } from "../src/daemon/checkpoints.js";
-import { TURN_CHECKPOINT_ENTRY } from "../src/daemon/turn-checkpoints.js";
+import {
+  CHECKPOINT_ENTRY,
+  TURN_END_ENTRY,
+} from "../src/daemon/checkpoint-extension.js";
 import type { ProjectState } from "../src/shared/contracts.js";
 import { readWorkspaceVersion } from "../src/daemon/workspace-notice.js";
 
@@ -21,7 +24,31 @@ async function fixture() {
     path.join(tmpdir(), "ohmygame-checkpoint-routes-"),
   );
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
-  const app = createApp({ dataDirectory: directory });
+  const app = createApp({
+    dataDirectory: directory,
+    createSession: async (project, conversation) => {
+      const session = SessionManager.open(
+        conversation.sessionPath,
+        undefined,
+        project.workspacePath,
+      );
+      return {
+        messages: [],
+        sessionManager: session,
+        prompt: async () => {},
+        abort: async () => {},
+        dispose() {},
+        subscribe: () => () => {},
+        sendCustomMessage: async (message) => {
+          session.appendCustomMessageEntry(
+            message.customType,
+            message.content,
+            message.display,
+          );
+        },
+      };
+    },
+  });
   cleanup.push(() => app.close());
   const project = (
     await app.inject({
@@ -37,10 +64,9 @@ async function fixture() {
     project.workspacePath,
     path.join(project.storagePath!, "session"),
   );
-  session.appendCustomEntry(TURN_CHECKPOINT_ENTRY, {
+  const checkpointId = session.appendCustomEntry(CHECKPOINT_ENTRY, {
     version: 1,
-    id: "live-turn",
-    before,
+    commit: before,
   });
   const userId = session.appendMessage({
     role: "user",
@@ -72,13 +98,13 @@ async function fixture() {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   });
-  session.appendCustomEntry(TURN_CHECKPOINT_ENTRY, {
+  session.appendCustomEntry(TURN_END_ENTRY, {
     version: 1,
-    id: "live-turn",
-    before,
-    after,
+    checkpoint: checkpointId,
+    commit: after,
+    files: (await store.diff(project, before, after)).length,
   });
-  const base = `/projects/${project.id}/conversations/${session.getSessionId()}/turns`;
+  const base = `/projects/${project.id}/conversations/${session.getSessionId()}/checkpoints`;
   return {
     directory,
     app,
@@ -86,6 +112,7 @@ async function fixture() {
     store,
     session,
     userId,
+    checkpointId,
     base,
     before,
     after,
@@ -93,37 +120,41 @@ async function fixture() {
 }
 
 it("serves persisted and live turn diffs, undoes only files, and rejects old editor writes", async () => {
-  const { app, project, session, userId, base } = await fixture();
-  for (const id of ["live-turn", userId]) {
+  const { checkpointId, app, project, session, userId, base } = await fixture();
+  for (const id of [checkpointId]) {
     const changes = await app.inject({
       method: "GET",
       url: `${base}/${id}/changes`,
     });
     expect(changes.statusCode, changes.body).toBe(200);
     expect(changes.json().changes).toEqual([
-      { path: "created.txt", kind: "added" },
-      { path: "game.txt", kind: "modified" },
+      { path: "created.txt", kind: "added", state: "applied" },
+      { path: "game.txt", kind: "modified", state: "applied" },
     ]);
   }
   expect(
     (
       await app.inject({
         method: "GET",
-        url: `${base}/live-turn/changes?path=game.txt`,
+        url: `${base}/${checkpointId}/file?path=game.txt`,
       })
     ).json(),
-  ).toEqual({ path: "game.txt", before: "before", after: "after" });
+  ).toEqual({
+    path: "game.txt",
+    before: { binary: false, content: "before" },
+    after: { binary: false, content: "after" },
+  });
   expect(
     (
       await app.inject({
         method: "GET",
-        url: `${base}/live-turn/changes?path=../secret`,
+        url: `${base}/${checkpointId}/file?path=../secret`,
       })
     ).statusCode,
   ).toBe(404);
   const undo = await app.inject({
     method: "POST",
-    url: `${base}/live-turn/undo`,
+    url: `${base}/${checkpointId}/undo`,
     payload: {},
   });
   expect(undo.statusCode, undo.body).toBe(200);
@@ -163,7 +194,7 @@ it("serves persisted and live turn diffs, undoes only files, and rejects old edi
   const fresh = await app.inject({
     method: "POST",
     url: `/projects/${project.id}/files`,
-    headers: { "x-workspace-version": undo.json().version },
+    headers: { "x-workspace-version": undo.headers["x-workspace-version"] },
     payload: { name: "fresh.txt", kind: "file" },
   });
   expect(fresh.statusCode, fresh.body).toBe(201);
@@ -171,27 +202,26 @@ it("serves persisted and live turn diffs, undoes only files, and rejects old edi
     (
       await app.inject({
         method: "POST",
-        url: `${base}/live-turn/undo`,
+        url: `${base}/${checkpointId}/undo`,
         payload: {},
       })
     ).statusCode,
-  ).toBe(409);
+  ).toBe(200);
 });
 
 it.each(["keep", "overwrite"] as const)(
   "returns no-write conflicts and honors explicit %s",
   async (policy) => {
-    const { app, project, base } = await fixture();
+    const { checkpointId, app, project, base } = await fixture();
     await writeFile(path.join(project.workspacePath, "game.txt"), "later edit");
     const refused = await app.inject({
       method: "POST",
-      url: `${base}/live-turn/undo`,
+      url: `${base}/${checkpointId}/undo`,
       payload: {},
     });
     expect(refused.statusCode, refused.body).toBe(409);
     expect(await readWorkspaceVersion(project)).toBe("0");
     expect(refused.json()).toMatchObject({
-      code: "checkpoint_conflict",
       conflicts: ["game.txt"],
     });
     expect(
@@ -199,8 +229,11 @@ it.each(["keep", "overwrite"] as const)(
     ).toBe("new");
     const accepted = await app.inject({
       method: "POST",
-      url: `${base}/live-turn/undo`,
-      payload: { conflicts: policy },
+      url: `${base}/${checkpointId}/undo`,
+      payload: {
+        conflicts: policy,
+        ...(policy === "overwrite" ? { expected: ["game.txt"] } : {}),
+      },
     });
     expect(accepted.statusCode, accepted.body).toBe(200);
     expect(
@@ -210,7 +243,7 @@ it.each(["keep", "overwrite"] as const)(
 );
 
 it("recovers the recorded interrupted operation and blocks creative writes until recovery", async () => {
-  const { app, project, before } = await fixture();
+  const { checkpointId, app, project, before } = await fixture();
   await writeFile(
     path.join(checkpointDirectory(project), "ohmygame-unfinished.json"),
     JSON.stringify({ previous: before }),
@@ -219,10 +252,10 @@ it("recovers the recorded interrupted operation and blocks creative writes until
     (
       await app.inject({
         method: "GET",
-        url: `/projects/${project.id}/checkpoint-recovery`,
+        url: `/projects/${project.id}/checkpoints/unfinished`,
       })
     ).json(),
-  ).toEqual({ pending: true });
+  ).toEqual({ unfinished: true });
   const blocked = await app.inject({
     method: "POST",
     url: `/projects/${project.id}/files`,
@@ -239,9 +272,9 @@ it("recovers the recorded interrupted operation and blocks creative writes until
   }
   const result = await app.inject({
     method: "POST",
-    url: `/projects/${project.id}/checkpoint-recovery`,
+    url: `/projects/${project.id}/checkpoints/unfinished/restore`,
   });
-  expect(result.statusCode, result.body).toBe(200);
+  expect(result.statusCode, result.body).toBe(204);
   expect(
     await readFile(path.join(project.workspacePath, "game.txt"), "utf8"),
   ).toBe("before");
@@ -249,17 +282,17 @@ it("recovers the recorded interrupted operation and blocks creative writes until
     (
       await app.inject({
         method: "GET",
-        url: `/projects/${project.id}/checkpoint-recovery`,
+        url: `/projects/${project.id}/checkpoints/unfinished`,
       })
     ).json(),
-  ).toEqual({ pending: false });
+  ).toEqual({ unfinished: false });
 });
 
 it("preserves the restored workspace version across daemon restart", async () => {
-  const { app, directory, project, base } = await fixture();
+  const { checkpointId, app, directory, project, base } = await fixture();
   const undo = await app.inject({
     method: "POST",
-    url: `${base}/live-turn/undo`,
+    url: `${base}/${checkpointId}/undo`,
     payload: {},
   });
   expect(undo.statusCode, undo.body).toBe(200);
@@ -270,7 +303,9 @@ it("preserves the restored workspace version across daemon restart", async () =>
     method: "GET",
     url: `/projects/${project.id}`,
   });
-  expect(read.headers["x-workspace-version"]).toBe(undo.json().version);
+  expect(read.headers["x-workspace-version"]).toBe(
+    undo.headers["x-workspace-version"],
+  );
   const stale = await restarted.inject({
     method: "POST",
     url: `/projects/${project.id}/files`,
@@ -281,7 +316,8 @@ it("preserves the restored workspace version across daemon restart", async () =>
 });
 
 it("shows binary and oversized files without unbounded text reads", async () => {
-  const { app, project, store, session, base, before } = await fixture();
+  const { checkpointId, app, project, store, session, base, before } =
+    await fixture();
   await writeFile(
     path.join(project.workspacePath, "binary.bin"),
     Buffer.from([0, 1, 255]),
@@ -291,21 +327,25 @@ it("shows binary and oversized files without unbounded text reads", async () => 
     "x".repeat(300 * 1024),
   );
   const after = await store.snapshot(project);
-  session.appendCustomEntry(TURN_CHECKPOINT_ENTRY, {
+  const previewId = session.appendCustomEntry(CHECKPOINT_ENTRY, {
     version: 1,
-    id: "live-turn",
-    before,
-    after,
+    commit: before,
   });
-  for (const [filePath, unavailable] of [
-    ["binary.bin", "binary"],
-    ["large.txt", "too_large"],
-  ]) {
-    const diff = await app.inject({
-      method: "GET",
-      url: `${base}/live-turn/changes?path=${filePath}`,
-    });
-    expect(diff.statusCode, diff.body).toBe(200);
-    expect(diff.json()).toEqual({ path: filePath, unavailable });
-  }
+  session.appendCustomEntry(TURN_END_ENTRY, {
+    version: 1,
+    checkpoint: previewId,
+    commit: after,
+    files: (await store.diff(project, before, after)).length,
+  });
+  const binary = await app.inject({
+    method: "GET",
+    url: `${base}/${previewId}/file?path=binary.bin`,
+  });
+  expect(binary.json().after).toEqual({ binary: true });
+  const large = await app.inject({
+    method: "GET",
+    url: `${base}/${previewId}/file?path=large.txt`,
+  });
+  expect(large.json().after).toMatchObject({ truncated: true, binary: false });
+  expect(large.json().after.content).toHaveLength(256 * 1024);
 });

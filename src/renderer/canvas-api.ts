@@ -4,6 +4,7 @@ import type { CanvasDocumentDetail, CanvasDocumentGenerationRequest, CanvasDocum
 import type { CanvasBoardDetail, CanvasWorkspaceDetail, CanvasWorkspaceIndex } from "../shared/canvas-workspace.js";
 import { request } from "./api.js";
 import type { WorkspaceRequestInit } from "./workspace-version.js";
+import { t } from "./i18n.js";
 
 const base = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/canvas`;
 const query = (documentId?: string) => documentId ? `?documentId=${encodeURIComponent(documentId)}` : "";
@@ -35,7 +36,7 @@ async function canvasRequest<T>(path: string, init: WorkspaceRequestInit = {}): 
   const signal = AbortSignal.timeout(10_000);
   try { return await request<T>(path, { ...init, signal }); }
   catch (cause) {
-    if (signal.aborted) throw new Error("The local canvas service took too long to respond. Try again.");
+    if (signal.aborted) throw new Error(t("canvas.timeout"));
     throw cause;
   }
 }

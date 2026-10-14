@@ -1,9 +1,14 @@
 import { isUtf8 } from "node:buffer";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import type { ProjectState } from "../shared/contracts.js";
-import type { TurnFileDiff } from "../shared/checkpoints.js";
+import type {
+  CheckpointFile,
+  CheckpointFileView,
+  CheckpointUndoRequest,
+  ProjectState,
+} from "../shared/contracts.js";
 import type { RuntimeEventBus } from "../shared/events.js";
-import type { AgentManager } from "./agent.js";
+import { CheckpointNotFoundError, type AgentManager } from "./agent.js";
+import { workspaceMediaInfo } from "./workspace.js";
 import type { ConversationManager } from "./conversations.js";
 import type { ProjectManager } from "./projects.js";
 import type { PreviewManager } from "./preview.js";
@@ -14,10 +19,7 @@ import {
 } from "./checkpoints.js";
 import { CheckpointFileTooLargeError } from "./checkpoint-objects.js";
 import { ProjectWriteError, ProjectWrites } from "./project-writes.js";
-import {
-  sessionCheckpoints,
-  TURN_CHECKPOINT_ENTRY,
-} from "./turn-checkpoints.js";
+import { turnRange } from "./checkpoint-extension.js";
 import {
   readWorkspaceNotice,
   writeWorkspaceNotice,
@@ -34,20 +36,34 @@ export function registerCheckpointRoutes(
     previews: PreviewManager;
     events: RuntimeEventBus;
     busy: (id: string) => boolean;
+    snapshot: (project: ProjectState) => Promise<string>;
   },
 ) {
   const { store, writes, projects, conversations, agents, previews, events } =
     options;
   // Cancel remains available while a boundary waits for generation to settle.
   const exempt = (url: string) =>
-    /\/(?:events|checkpoint-recovery)(?:\?|$)/.test(url) ||
-    /\/turns\/[^/]+\/(?:changes|undo)(?:\?|$)/.test(url) ||
+    /\/checkpoints\/|\/events(?:\?|$)/.test(url) ||
     /\/cancel(?:\?|$)/.test(url);
   app.addHook("preHandler", async (request, reply) => {
     const id = (request.params as { projectId?: string }).projectId;
     if (!id) return;
     reply.header("x-workspace-version", writes.version(id));
     if (exempt(request.url)) return;
+    if (
+      request.method === "DELETE" &&
+      /^\/projects\/[^/?]+(?:\?|$)/.test(request.url)
+    ) {
+      try {
+        writes.assertVersion(
+          id,
+          request.headers["x-workspace-version"] as string | undefined,
+        );
+      } catch (cause) {
+        return failure(cause, reply);
+      }
+      return;
+    }
     try {
       const project = projects.get(id);
       if (
@@ -61,6 +77,23 @@ export function registerCheckpointRoutes(
             "Recover the interrupted file restore before changing this workspace.",
           code: "workspace_recovery",
         });
+      }
+      if (/\/conversations(?:\/|\?|$)/.test(request.url)) {
+        if (
+          request.method !== "GET" &&
+          writes.isMutating(id) &&
+          !agents.isProjectBusy(id)
+        )
+          throw new ProjectWriteError(
+            "Another workspace operation is running.",
+            "workspace_busy",
+          );
+        if (request.method !== "GET")
+          writes.assertVersion(
+            id,
+            request.headers["x-workspace-version"] as string | undefined,
+          );
+        return;
       }
       writes.track(
         request,
@@ -76,6 +109,14 @@ export function registerCheckpointRoutes(
     }
   });
 
+  app.addHook("onSend", async (request, reply) => {
+    const id = (request.params as { projectId?: string }).projectId;
+    // A normal read's content belongs to its pre-handler version. A restore
+    // can start after its handler settles, before this response is sent.
+    if (id && exempt(request.url))
+      reply.header("x-workspace-version", writes.version(id));
+  });
+
   async function target(
     projectId: string,
     conversationId: string,
@@ -89,105 +130,75 @@ export function registerCheckpointRoutes(
       throw Object.assign(new Error("Conversation not found"), {
         statusCode: 404,
       });
-    const checkpoint = sessionCheckpoints(
+    await conversations.view(project, conversation);
+    const range = turnRange(
       (await conversations.view(project, conversation)).getBranch(),
-    ).get(turnId);
-    if (!checkpoint)
-      throw Object.assign(new Error("This turn has no file checkpoint"), {
-        statusCode: 404,
-      });
-    if (!checkpoint.after || checkpoint.error)
-      throw new ProjectWriteError(
-        "This turn has no complete file checkpoint.",
-        "workspace_busy",
-      );
-    return {
-      project,
-      conversation,
-      checkpoint,
-      range: { before: checkpoint.before, after: checkpoint.after },
-    };
+      turnId,
+    );
+    if (!range) throw new CheckpointNotFoundError();
+    return { project, conversation, range };
   }
 
-  const base =
-    "/projects/:projectId/conversations/:conversationId/turns/:turnId";
-  type Params = { projectId: string; conversationId: string; turnId: string };
-  app.get<{ Params: Params; Querystring: { path?: string } }>(
-    `${base}/changes`,
-    async (request, reply) => {
-      try {
-        const { project, range } = await target(
-          request.params.projectId,
-          request.params.conversationId,
-          request.params.turnId,
-        );
-        const changes = await store.diff(project, range.before, range.after);
-        if (request.query.path === undefined) return { changes };
-        const filePath = request.query.path;
-        if (!changes.some((change) => change.path === filePath))
-          return reply.code(404).send({ error: "Changed file not found" });
-        const result: TurnFileDiff = { path: filePath };
-        try {
-          const [before, after] = await Promise.all([
-            store.read(project, range.before, filePath, 256 * 1024),
-            store.read(project, range.after, filePath, 256 * 1024),
-          ]);
-          if (
-            [before, after].some(
-              (data) =>
-                data && (!isUtf8(Buffer.from(data)) || data.includes(0)),
-            )
-          )
-            result.unavailable = "binary";
-          else {
-            if (before) result.before = Buffer.from(before).toString("utf8");
-            if (after) result.after = Buffer.from(after).toString("utf8");
-          }
-        } catch (cause) {
-          if (cause instanceof CheckpointFileTooLargeError)
-            result.unavailable = "too_large";
-          else throw cause;
-        }
-        return result;
-      } catch (cause) {
-        return failure(cause, reply);
-      }
-    },
-  );
+  type AfterUnlock = (notify: () => void) => void;
 
   async function announce(
     project: ProjectState,
+    afterUnlock: AfterUnlock,
     changed: string[],
     recovery = false,
+    checkpointId?: string,
+    restore = false,
+    conversationId?: string,
   ) {
     const version = writes.changed(project.id);
     // Persist a model-visible notice in every conversation, including ones
     // whose model session is not currently loaded. Conversation history stays.
-    const content = `The user ${recovery ? "recovered an interrupted file restore" : "undid file changes from an earlier turn"}. The conversation was preserved. Inspect the current files before continuing. Changed workspace paths: ${JSON.stringify(changed)}.`;
+    const content = `The user ${recovery ? "recovered an interrupted file restore" : restore ? "restored the workspace and rewound one conversation" : "undid file changes from an earlier turn"}. ${restore ? "Other conversations were preserved." : "The conversation was preserved."} Inspect the current files before continuing. Changed workspace paths: ${JSON.stringify(changed)}.`;
     try {
       await writeWorkspaceNotice(project, content, version);
       for (const summary of await conversations.list(project)) {
-        const stored = await conversations.get(project, summary.id);
-        if (
-          stored &&
-          !(await agents.notifyWorkspaceChange(project.id, summary.id, content))
-        ) {
-          conversations
-            .open(project, stored)
-            .appendCustomMessageEntry(
-              "ohmygame-workspace-undo",
+        try {
+          const stored = await conversations.get(project, summary.id);
+          if (
+            stored &&
+            !(await agents.notifyWorkspaceChange(
+              project.id,
+              summary.id,
               content,
-              false,
-            );
+            ))
+          ) {
+            conversations
+              .open(project, stored)
+              .appendCustomMessageEntry(
+                "ohmygame-workspace-undo",
+                content,
+                false,
+              );
+          }
+        } catch (cause) {
+          // The durable project notice still reaches this session on its next
+          // model request. One damaged session must not prevent notifying others.
+          app.log.warn(
+            { err: cause, conversationId: summary.id },
+            "Could not record workspace notice in conversation",
+          );
         }
       }
     } finally {
       // Even a session I/O error must invalidate editors after file mutation.
-      events.publish(project.id, "workspace.restored", {
-        version,
-        changed,
-        ...(recovery ? { recovery } : {}),
-      });
+      afterUnlock(() =>
+        events.publish(
+          project.id,
+          "workspace.restored",
+          {
+            version,
+            changed,
+            ...(recovery ? { recovery } : {}),
+            ...(checkpointId ? { checkpointId } : {}),
+          },
+          conversationId ? { conversationId } : undefined,
+        ),
+      );
     }
     return version;
   }
@@ -199,68 +210,338 @@ export function registerCheckpointRoutes(
       );
   };
 
-  app.post<{ Params: Params; Body: { conflicts?: "keep" | "overwrite" } }>(
-    `${base}/undo`,
+  type CheckpointParams = {
+    projectId: string;
+    conversationId: string;
+    checkpointId: string;
+  };
+  const checkpointBase =
+    "/projects/:projectId/conversations/:conversationId/checkpoints/:checkpointId";
+
+  async function protect<T>(
+    projectId: string,
+    operation: (
+      project: ProjectState,
+      track: (changed: string[]) => void,
+      afterUnlock: AfterUnlock,
+    ) => Promise<T>,
+    kind: "undo" | "restore" | "recovery",
+    checkpointId?: string,
+    conversationId?: string,
+  ): Promise<T> {
+    // Closing a turn may itself need the write lock for its final snapshot.
+    await agents.turnsClosed(projectId);
+    const notifications: Array<() => void> = [];
+    const afterUnlock: AfterUnlock = (notify) => notifications.push(notify);
+    try {
+      return await writes.exclusive(projectId, async () => {
+        assertIdle(projectId);
+        const project = projects.get(projectId);
+        if (!project)
+          throw Object.assign(new Error("Project not found"), {
+            statusCode: 404,
+          });
+        if (kind !== "recovery" && (await store.unfinished(project)))
+          throw new ProjectWriteError(
+            "Recover the interrupted file restore first.",
+            "workspace_busy",
+          );
+        await previews.stop(project);
+        const previousNotice = await readWorkspaceNotice(project);
+        const changed = new Set<string>();
+        let incomplete = false;
+        let announced = false;
+        await writeWorkspaceNotice(
+          project,
+          `A workspace ${kind} was requested. Inspect current files before continuing.`,
+        );
+        try {
+          const result = await operation(
+            project,
+            (paths) => paths.forEach((file) => changed.add(file)),
+            afterUnlock,
+          );
+          if (changed.size > 0 || kind === "recovery" || kind === "restore") {
+            announced = true;
+            await announce(
+              project,
+              afterUnlock,
+              [...changed],
+              kind === "recovery",
+              checkpointId,
+              kind === "restore",
+              conversationId,
+            );
+          } else
+            await writeWorkspaceNotice(
+              project,
+              previousNotice ??
+                "The workspace and conversation were preserved.",
+              writes.version(project.id),
+            );
+          return result;
+        } catch (cause) {
+          incomplete = cause instanceof CheckpointIncompleteError;
+          if (!announced && (incomplete || changed.size > 0))
+            await announce(
+              project,
+              afterUnlock,
+              [...changed],
+              incomplete,
+              checkpointId,
+              kind === "restore",
+              conversationId,
+            );
+          else if (!announced)
+            await writeWorkspaceNotice(
+              project,
+              previousNotice ??
+                "The workspace operation was refused or rolled back.",
+              writes.version(project.id),
+            );
+          throw cause;
+        } finally {
+          if (changed.size > 0 || incomplete) {
+            agents.invalidateProjectSessions(project.id);
+            await projects.refreshPreviewReadiness(project.id);
+            await projects.touch(project.id);
+          }
+        }
+      });
+    } finally {
+      // Editors react immediately to these events; their reads must start only
+      // after the workspace lock and metadata cleanup have finished.
+      for (const notify of notifications) notify();
+    }
+  }
+
+  app.get<{ Params: CheckpointParams }>(
+    `${checkpointBase}/changes`,
+    async (request, reply) => {
+      try {
+        await agents.turnsClosed(request.params.projectId);
+        const { project, range } = await target(
+          request.params.projectId,
+          request.params.conversationId,
+          request.params.checkpointId,
+        );
+        const changes = await store.diff(project, range.before, range.after);
+        if (agents.isProjectBusy(project.id) || options.busy(project.id))
+          return { changes };
+        const now = await options.snapshot(project);
+        const differing = async (commit: string) =>
+          new Set(
+            (await store.diff(project, commit, now)).map(
+              (change) => change.path,
+            ),
+          );
+        const [sinceEnd, sinceStart] = await Promise.all([
+          differing(range.after),
+          differing(range.before),
+        ]);
+        return {
+          changes: changes.map((change) => ({
+            ...change,
+            state: !sinceEnd.has(change.path)
+              ? "applied"
+              : !sinceStart.has(change.path)
+                ? "undone"
+                : "changed",
+          })),
+        };
+      } catch (cause) {
+        return failure(cause, reply);
+      }
+    },
+  );
+
+  app.get<{ Params: CheckpointParams; Querystring: { path?: string } }>(
+    `${checkpointBase}/file`,
+    async (request, reply) => {
+      if (!request.query.path)
+        return reply.code(400).send({ error: "File path is required" });
+      try {
+        const { project, range } = await target(
+          request.params.projectId,
+          request.params.conversationId,
+          request.params.checkpointId,
+        );
+        const filePath = request.query.path;
+        if (
+          !(await store.diff(project, range.before, range.after)).some(
+            (change) => change.path === filePath,
+          )
+        )
+          return reply.code(404).send({ error: "File not found" });
+        const side = async (commit: string): Promise<CheckpointFile | null> => {
+          if (workspaceMediaInfo(filePath))
+            return await store
+              .read(project, commit, filePath, 0)
+              .then((content) => (content ? { binary: true } : null))
+              .catch((cause) => {
+                if (cause instanceof CheckpointFileTooLargeError)
+                  return { binary: true };
+                throw cause;
+              });
+          try {
+            const content = await store.read(
+              project,
+              commit,
+              filePath,
+              256 * 1024,
+            );
+            if (!content) return null;
+            if (!isUtf8(Buffer.from(content)) || content.includes(0))
+              return { binary: true };
+            return {
+              binary: false,
+              content: Buffer.from(content).toString("utf8"),
+            };
+          } catch (cause) {
+            if (cause instanceof CheckpointFileTooLargeError) {
+              let content = cause.preview;
+              // A UTF-8 code point may straddle the display boundary.
+              for (let cut = 0; cut <= 3 && !isUtf8(content); cut++)
+                content = cause.preview.subarray(
+                  0,
+                  cause.preview.length - cut - 1,
+                );
+              return isUtf8(content) && !content.includes(0)
+                ? {
+                    binary: false,
+                    content: content.toString("utf8"),
+                    truncated: true,
+                  }
+                : { binary: true, truncated: true };
+            }
+            throw cause;
+          }
+        };
+        const [before, after] = await Promise.all([
+          side(range.before),
+          side(range.after),
+        ]);
+        return { path: filePath, before, after } satisfies CheckpointFileView;
+      } catch (cause) {
+        return failure(cause, reply);
+      }
+    },
+  );
+
+  app.post<{ Params: CheckpointParams; Body: CheckpointUndoRequest }>(
+    `${checkpointBase}/undo`,
     {
       schema: {
         body: {
           type: "object",
           additionalProperties: false,
-          properties: { conflicts: { enum: ["keep", "overwrite"] } },
+          properties: {
+            conflicts: { enum: ["keep", "overwrite"] },
+            expected: { type: "array", items: { type: "string" } },
+          },
         },
       },
     },
     async (request, reply) => {
+      const { conflicts, expected } = request.body ?? {};
+      if (conflicts === "overwrite" && !expected)
+        return reply
+          .code(400)
+          .send({ error: "The files to overwrite are required" });
       try {
-        return await writes.exclusive(request.params.projectId, async () => {
-          assertIdle(request.params.projectId);
-          const { project, conversation, checkpoint, range } = await target(
-            request.params.projectId,
-            request.params.conversationId,
-            request.params.turnId,
-          );
-          if (checkpoint.undone)
-            throw new ProjectWriteError(
-              "This turn has already been undone.",
-              "workspace_busy",
+        return await protect(
+          request.params.projectId,
+          async (project, track, afterUnlock) => {
+            const { conversation, range } = await target(
+              project.id,
+              request.params.conversationId,
+              request.params.checkpointId,
             );
-          await previews.stop(project);
-          const previousNotice = await readWorkspaceNotice(project);
-          await writeWorkspaceNotice(
-            project,
-            `A file undo was requested for checkpoint ${checkpoint.id}. The workspace may have changed while the conversation was preserved. Inspect current files before continuing.`,
-          );
-          let result;
-          try {
-            result = await store.undo(project, range, request.body ?? {});
-          } catch (cause) {
-            if (cause instanceof CheckpointIncompleteError)
-              await announce(project, [], true);
-            else
-              await writeWorkspaceNotice(
-                project,
-                previousNotice ??
-                  "A file undo was refused or rolled back. The workspace and conversation were preserved.",
-                writes.version(project.id),
-              );
-            throw cause;
-          }
-          let version: string;
-          try {
-            conversations
-              .open(project, conversation)
-              .appendCustomEntry(TURN_CHECKPOINT_ENTRY, {
-                version: 1,
-                ...checkpoint,
-                undone: result,
+            const undo = async () => {
+              const result = await store.undo(project, range, {
+                conflicts:
+                  conflicts === "overwrite"
+                    ? { overwrite: expected! }
+                    : conflicts,
               });
-          } finally {
-            // Reopen loaded trees after metadata was externally appended.
-            agents.invalidateProjectSessions(project.id);
-            version = await announce(project, result.changed);
-          }
-          return { ...result, version };
-        });
+              track(result.changed);
+              return {
+                ...result,
+                conflicts: result.conflicts.filter(
+                  (file) => !result.changed.includes(file),
+                ),
+              };
+            };
+            const result = await agents.undoCheckpoint(
+              project,
+              conversation,
+              request.params.checkpointId,
+              undo,
+            );
+            if (result.changed.length || !result.conflicts.length)
+              afterUnlock(() =>
+                events.publish(
+                  project.id,
+                  "workspace.undone",
+                  {
+                    checkpointId: request.params.checkpointId,
+                    kept: result.conflicts.length,
+                  },
+                  { conversationId: conversation.summary.id },
+                ),
+              );
+            return { changed: result.changed, conflicts: result.conflicts };
+          },
+          "undo",
+        );
+      } catch (cause) {
+        if (cause instanceof CheckpointConflictError) {
+          const blocked = cause.blocked.length > 0;
+          return reply.code(409).send({
+            error: cause.message,
+            conflicts:
+              conflicts === "overwrite" && blocked
+                ? cause.blocked
+                : cause.conflicts,
+            ...(blocked ? { blocked: true } : {}),
+          });
+        }
+        return failure(cause, reply);
+      }
+    },
+  );
+
+  app.post<{ Params: CheckpointParams }>(
+    `${checkpointBase}/restore`,
+    async (request, reply) => {
+      try {
+        await protect(
+          request.params.projectId,
+          async (project, track) => {
+            const conversation = await conversations.get(
+              project,
+              request.params.conversationId,
+            );
+            if (!conversation)
+              throw Object.assign(new Error("Conversation not found"), {
+                statusCode: 404,
+              });
+            await agents.restoreCheckpoint(
+              project,
+              conversation,
+              request.params.checkpointId,
+              async (commit, rewind) => {
+                const result = await store.restore(project, commit, rewind);
+                track(result.changed);
+                return result.previous;
+              },
+            );
+          },
+          "restore",
+          request.params.checkpointId,
+          request.params.conversationId,
+        );
+        return reply.code(204).send();
       } catch (cause) {
         return failure(cause, reply);
       }
@@ -268,42 +549,59 @@ export function registerCheckpointRoutes(
   );
 
   app.get<{ Params: { projectId: string } }>(
-    "/projects/:projectId/checkpoint-recovery",
+    "/projects/:projectId/checkpoints/unfinished",
     async (request, reply) => {
       const project = projects.get(request.params.projectId);
       if (!project) return reply.code(404).send({ error: "Project not found" });
       try {
-        return { pending: Boolean(await store.unfinished(project)) };
+        return { unfinished: Boolean(await store.unfinished(project)) };
+      } catch (cause) {
+        return failure(cause, reply);
+      }
+    },
+  );
+  app.get<{ Params: { projectId: string } }>(
+    "/projects/:projectId/checkpoints/unfinished/changes",
+    async (request, reply) => {
+      try {
+        const project = projects.get(request.params.projectId);
+        if (!project)
+          return reply.code(404).send({ error: "Project not found" });
+        const previous = await store.unfinished(project);
+        if (!previous)
+          return reply
+            .code(404)
+            .send({ error: "No restore or undo was left unfinished" });
+        // Inspection is allowed while recovery is pending; creative writes stay blocked.
+        const now = await writes.exclusive(project.id, () =>
+          store.snapshot(project),
+        );
+        return { changes: await store.diff(project, now, previous) };
       } catch (cause) {
         return failure(cause, reply);
       }
     },
   );
   app.post<{ Params: { projectId: string } }>(
-    "/projects/:projectId/checkpoint-recovery",
+    "/projects/:projectId/checkpoints/unfinished/restore",
     async (request, reply) => {
       try {
-        return await writes.exclusive(request.params.projectId, async () => {
-          assertIdle(request.params.projectId);
-          const project = projects.get(request.params.projectId);
-          if (!project)
-            return reply.code(404).send({ error: "Project not found" });
-          const pending = await store.unfinished(project);
-          if (!pending)
-            return reply
-              .code(409)
-              .send({ error: "There is no interrupted restore to recover" });
-          await previews.stop(project);
-          await writeWorkspaceNotice(
-            project,
-            "Recovery of an interrupted file restore was requested. The workspace may have changed while the conversation was preserved. Inspect current files before continuing.",
-          );
-          const result = await store.restore(project, pending);
-          return {
-            ...result,
-            version: await announce(project, result.changed, true),
-          };
-        });
+        await protect(
+          request.params.projectId,
+          async (project, track) => {
+            const previous = await store.unfinished(project);
+            if (!previous)
+              throw Object.assign(
+                new Error("No restore or undo was left unfinished"),
+                { statusCode: 404 },
+              );
+            await agents.restoreUnfinished(project, async () => {
+              track((await store.restore(project, previous)).changed);
+            });
+          },
+          "recovery",
+        );
+        return reply.code(204).send();
       } catch (cause) {
         return failure(cause, reply);
       }
@@ -320,12 +618,13 @@ function failure(cause: unknown, reply: FastifyReply) {
     });
   if (cause instanceof CheckpointIncompleteError)
     return reply.code(409).send({
-      error:
-        "File restore was interrupted. Recover the workspace before continuing.",
-      code: "workspace_recovery",
+      error: cause.message,
+      code: "CHECKPOINT_INCOMPLETE",
     });
+  if (cause instanceof CheckpointNotFoundError)
+    return reply.code(404).send({ error: cause.message });
   const error = cause as { statusCode?: number; code?: string };
-  return reply.code(error.statusCode ?? 500).send({
+  return reply.code(error.statusCode ?? 409).send({
     error: cause instanceof Error ? cause.message : String(cause),
     ...(error.code ? { code: error.code } : {}),
   });

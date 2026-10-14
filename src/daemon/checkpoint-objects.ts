@@ -49,8 +49,17 @@ export class DamagedObjectError extends Error {
   }
 }
 
+/** What a commit records of a workspace. */
+export interface Commit {
+  tree: string;
+  /** The paths that were there and could not be read, in path order. The tree holds nothing at them or below them. */
+  unreadable: string[];
+}
+
 export const TREE_MODE = "40000";
 const HEAD_REF = "refs/heads/checkpoints";
+const MESSAGE = "checkpoint\n";
+const UNREADABLE_LINE = /^checkpoint\n\nunreadable: ([^\n]*)\n$/;
 /** Larger files are streamed instead of being held in memory, and are read twice: once for their id and once to store them. */
 export const BUFFERED_BYTES = 4 * 1024 * 1024;
 // Deflate shrinks content about a thousand times at most, so an object this small is safe to inflate in memory.
@@ -122,6 +131,10 @@ export async function fromSource<T>(operation: Promise<T>): Promise<T> {
 
 export async function initialize(gitdir: string): Promise<void> {
   if (await exists(path.join(gitdir, "HEAD"))) return;
+  // The folder the store is in is not made along with it: where that folder is gone, the project was removed.
+  await mkdir(gitdir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "EEXIST") throw error;
+  });
   await mkdir(path.join(gitdir, "objects"), { recursive: true });
   await mkdir(path.join(gitdir, "refs", "heads"), { recursive: true });
   await writeAtomically(
@@ -262,7 +275,7 @@ export async function writeFileCopyBlob(
 ): Promise<string> {
   const copy = temporaryPath(gitdir);
   try {
-    await copyFile(file, copy);
+    await fromSource(copyFile(file, copy));
     return await writeFileBlob(gitdir, copy, (await lstat(copy)).size, objects);
   } finally {
     await rm(copy, { force: true });
@@ -294,7 +307,7 @@ export async function readObject(
 }
 
 export class CheckpointFileTooLargeError extends Error {
-  constructor() {
+  constructor(readonly preview: Buffer = Buffer.alloc(0)) {
     super("Checkpoint file is too large to display");
   }
 }
@@ -314,7 +327,12 @@ export async function readBlobLimited(
     write(chunk: Buffer, _encoding, done) {
       length += chunk.length;
       if (length > limit) {
-        tooLarge = new CheckpointFileTooLargeError();
+        const remaining = limit - (length - chunk.length);
+        if (remaining > 0)
+          chunks.push(Buffer.from(chunk.subarray(0, remaining)));
+        tooLarge = new CheckpointFileTooLargeError(
+          Buffer.concat(chunks, limit),
+        );
         done(tooLarge);
       } else {
         chunks.push(Buffer.from(chunk));
@@ -494,15 +512,24 @@ export async function readTree(
   return entries;
 }
 
+/** Writes a commit. The paths that could not be read go into its message. */
 export async function writeCommit(
   gitdir: string,
   tree: string,
   parent: string | undefined,
+  unreadable: string[],
   objects?: ObjectVerifier,
 ): Promise<string> {
   const signature = `OhMyGame <checkpoints@ohmygame.local> ${Math.floor(Date.now() / 1000)} +0000`;
-  const text = `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author ${signature}\ncommitter ${signature}\n\ncheckpoint\n`;
+  const text = `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author ${signature}\ncommitter ${signature}\n\n${messageFor(unreadable)}`;
   return await writeObject(gitdir, "commit", Buffer.from(text), objects);
+}
+
+/** The message of a commit. The paths are in it as JSON, so that a name with a line break stays on one line. */
+function messageFor(unreadable: string[]): string {
+  return unreadable.length
+    ? `${MESSAGE}\nunreadable: ${JSON.stringify(unreadable)}\n`
+    : MESSAGE;
 }
 
 export async function readCommitTree(
@@ -514,6 +541,46 @@ export async function readCommitTree(
   );
   if (!match) throw new DamagedObjectError(commit);
   return match[1]!;
+}
+
+/** Reads a commit's tree and the paths that could not be read when it was written. */
+export async function readCommit(
+  gitdir: string,
+  commit: string,
+): Promise<Commit> {
+  const text = (await readObject(gitdir, commit, "commit")).toString("utf8");
+  const message = text.slice(text.indexOf("\n\n") + 2);
+  const unreadable =
+    message === MESSAGE
+      ? []
+      : pathList(UNREADABLE_LINE.exec(message)?.[1] ?? "");
+  // A message that cannot be made out must not read as one without a list: every path would then count as one that was
+  // read. Nor is a list taken that is not written as `writeCommit` writes it, where a path could stand for no file at all.
+  if (!unreadable || messageFor(unreadable) !== message)
+    throw new Error(`Checkpoint ${commit} does not say what could not be read`);
+  return { tree: text.slice(5, 45), unreadable };
+}
+
+/** The workspace paths that a text lists as JSON, or undefined when it is anything but such paths in path order. */
+function pathList(json: string): string[] | undefined {
+  try {
+    const paths: unknown = JSON.parse(json);
+    const follows = (
+      entry: unknown,
+      index: number,
+      entries: unknown[],
+    ): boolean =>
+      typeof entry === "string" &&
+      (index === 0 || (entries[index - 1] as string) < entry) &&
+      entry
+        .split("/")
+        .every((name) => name !== "" && name !== "." && name !== "..");
+    return Array.isArray(paths) && paths.every(follows)
+      ? (paths as string[])
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Writes a small file of the store, such as its branch, so that it is either the old or the new one. */

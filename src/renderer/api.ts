@@ -1,6 +1,5 @@
 import { runtimeConnection, subscribeRuntimeConnection } from "./runtime-connection.js";
 import { assertWorkspaceVersion, observeWorkspaceVersion, workspaceVersion, type WorkspaceRequestInit } from "./workspace-version.js";
-import type { TurnFileChange, TurnFileDiff, TurnUndoResult } from "../shared/checkpoints.js";
 import type { DesktopRuntimeService } from "../shared/desktop-runtime.js";
 import {
   RUNTIME_EVENT_TYPES,
@@ -9,6 +8,10 @@ import {
   type AgentModelCatalog,
   type AgentModelRef,
   type AgentReasoningLevel,
+  type CheckpointChangeItem,
+  type CheckpointFileView,
+  type CheckpointUndoRequest,
+  type CheckpointUndoResponse,
   type ConversationAgentSettings,
   type ConversationCapabilities,
   type CreateLibraryImageRequest,
@@ -23,6 +26,12 @@ import {
   type ModelAuthEvent,
   type ModelAuthMethod,
   type ModelProviderEndpointSettings,
+  type OpenAIImageConnectionSettings,
+  type SaveOpenAIImageConnectionRequest,
+  type DiscoverOpenAIImageModelsRequest,
+  type DiscoveredOpenAIImageModels,
+  type ResponsesTransportSettings,
+  type ResponsesTransportMode,
   type ProviderModelSettings,
   type Model3DDefinition,
   type CustomProviderModel,
@@ -75,8 +84,18 @@ import type { DesktopClipboardFile } from "../shared/file-transfer.js";
 import type { WebGamePlayerBridge } from "../shared/web-game-player.js";
 import type { NetworkConnectionTest, NetworkSettings, NetworkSettingsState } from "../shared/network-settings.js";
 import { composerDrafts } from "./composer-drafts.js";
+import type { OnboardingState, UpdateOnboardingRequest } from "../shared/onboarding.js";
+import { t } from "./i18n.js";
 
 const API_BASE = "/api";
+
+export function getOnboardingState(): Promise<OnboardingState> {
+  return request("/settings/onboarding");
+}
+
+export function updateOnboardingState(state: UpdateOnboardingRequest): Promise<OnboardingState> {
+  return request("/settings/onboarding", { method: "PUT", body: JSON.stringify(state) });
+}
 
 export function getNetworkSettings(): Promise<NetworkSettingsState> {
   return request("/settings/network");
@@ -111,7 +130,6 @@ declare global {
       onPrepareClose?: (listener: () => Promise<void>) => () => void;
       onCancelClose?: (listener: (error: string) => void) => () => void;
       windowMenu?: {
-        icon: () => Promise<string>;
         popup: (label: string, x: number, y: number) => Promise<void>;
       };
       openProjectFile: (projectId: string, filePath: string, mode?: ProjectFileOpenMode) => Promise<void>;
@@ -245,6 +263,26 @@ export async function setProviderEnabled(providerId: string, enabled: boolean): 
   return result;
 }
 
+export async function getOpenAIImageSettings(): Promise<OpenAIImageConnectionSettings> {
+  return request("/settings/models/providers/openai/images");
+}
+
+export async function saveOpenAIImageSettings(settings: SaveOpenAIImageConnectionRequest): Promise<OpenAIImageConnectionSettings> {
+  const saved = await request<OpenAIImageConnectionSettings>("/settings/models/providers/openai/images", { method: "PUT", body: JSON.stringify(settings) });
+  notifyAgentModelsChanged();
+  return saved;
+}
+
+export async function discoverOpenAIImageModels(settings: DiscoverOpenAIImageModelsRequest, signal?: AbortSignal): Promise<DiscoveredOpenAIImageModels> {
+  return request("/settings/models/providers/openai/images/discover", { method: "POST", body: JSON.stringify(settings), signal });
+}
+
+export async function removeOpenAIImageSettings(): Promise<OpenAIImageConnectionSettings> {
+  const saved = await request<OpenAIImageConnectionSettings>("/settings/models/providers/openai/images", { method: "DELETE" });
+  notifyAgentModelsChanged();
+  return saved;
+}
+
 export async function getCustomProvider(providerId: string): Promise<CustomProviderDetails> {
   return request(`/settings/models/providers/${encodeURIComponent(providerId)}/custom`);
 }
@@ -300,6 +338,13 @@ export async function removeCustomProviderModel(providerId: string, modelId: str
 
 export async function getOpenAIEndpointSettings(): Promise<ModelProviderEndpointSettings> {
   return request("/settings/models/providers/openai/endpoint");
+}
+
+export async function getResponsesTransport(provider: string): Promise<ResponsesTransportSettings> {
+  return request(`/settings/models/providers/${encodeURIComponent(provider)}/transport`);
+}
+export async function updateResponsesTransport(provider: string, mode: ResponsesTransportMode): Promise<ResponsesTransportSettings> {
+  return request(`/settings/models/providers/${encodeURIComponent(provider)}/transport`, { method: "PUT", body: JSON.stringify({ mode }) });
 }
 
 export async function updateOpenAIEndpointSettings(baseUrl: string): Promise<ModelProviderEndpointSettings> {
@@ -489,7 +534,7 @@ export async function waitForRuntime(timeoutMs = 10_000): Promise<void> {
       await delay(200);
     }
   }
-  throw new Error("Could not reach the local runtime");
+  throw new Error(t("api.runtimeUnreachable"));
 }
 
 export async function getProject(projectId: string): Promise<ProjectState> {
@@ -586,8 +631,8 @@ export async function setProjectCover(projectId: string, cover: Blob, source: Pr
   if (!response.ok) throw await responseError(response);
 }
 
-export async function restoreAutomaticProjectCover(projectId: string): Promise<void> {
-  await request(`/projects/${projectId}/cover`, { method: "DELETE" });
+export async function setProjectCoverMode(projectId: string, mode: ProjectCoverMode): Promise<void> {
+  await request(`/projects/${projectId}/cover/state`, { method: "PUT", body: JSON.stringify({ mode }) });
 }
 
 export async function listWorkspaceFiles(projectId: string): Promise<WorkspaceFile[]> {
@@ -828,6 +873,57 @@ export async function reviseLastPrompt(
   });
 }
 
+/** Puts the workspace and the conversation back to just before the message the checkpoint was taken for. */
+export async function restoreCheckpoint(projectId: string, conversationId: string, checkpointId: string): Promise<void> {
+  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/restore`, { method: "POST" });
+}
+
+/** Lists the files the turn of the checkpoint's message changed. */
+export async function getCheckpointChanges(projectId: string, conversationId: string, checkpointId: string): Promise<CheckpointChangeItem[]> {
+  const { changes } = await request<{ changes: CheckpointChangeItem[] }>(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/changes`);
+  return changes;
+}
+
+/** Reads one of those files as it was before the turn and as the turn left it. */
+export async function getCheckpointFile(projectId: string, conversationId: string, checkpointId: string, filePath: string): Promise<CheckpointFileView> {
+  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/file?path=${encodeURIComponent(filePath)}`);
+}
+
+/**
+ * Takes back the file changes of one turn and keeps the conversation. Without
+ * `conflicts` it rejects with status 409 and the paths in `ApiError.conflicts`
+ * when files were changed again after the turn. To overwrite them, `expected`
+ * names the paths the user was shown; it rejects the same way when other files
+ * were changed by now.
+ */
+export async function undoCheckpoint(projectId: string, conversationId: string, checkpointId: string, conflicts?: CheckpointUndoRequest["conflicts"], expected?: string[]): Promise<CheckpointUndoResponse> {
+  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/undo`, {
+    method: "POST",
+    body: JSON.stringify({ conflicts, expected } satisfies CheckpointUndoRequest),
+  });
+}
+
+/** Whether a restore or an undo was cut off and may have left the project's files partly changed. */
+export async function getUnfinishedRestore(projectId: string): Promise<boolean> {
+  const { unfinished } = await request<{ unfinished: boolean }>(`/projects/${projectId}/checkpoints/unfinished`);
+  return unfinished;
+}
+
+/**
+ * Lists what putting the files back after a restore or an undo that was cut
+ * off would do: "added" brings a file back, "removed" takes it away. The
+ * items say nothing about how a file stands.
+ */
+export async function getUnfinishedChanges(projectId: string): Promise<CheckpointChangeItem[]> {
+  const { changes } = await request<{ changes: CheckpointChangeItem[] }>(`/projects/${projectId}/checkpoints/unfinished/changes`);
+  return changes;
+}
+
+/** Puts the files back as they were before the restore or undo that was cut off. */
+export async function restoreUnfinished(projectId: string): Promise<void> {
+  return request(`/projects/${projectId}/checkpoints/unfinished/restore`, { method: "POST" });
+}
+
 export async function removePendingPrompt(projectId: string, conversationId: string, turnId: string): Promise<void> {
   await request(`/projects/${projectId}/conversations/${conversationId}/queue/${turnId}`, { method: "DELETE" });
 }
@@ -860,7 +956,10 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    /** The workspace paths the request was refused for. */
     readonly conflicts?: string[],
+    /** Those paths cannot be put back, whatever the request says to do with them. */
+    readonly blocked?: boolean,
   ) {
     super(message);
   }
@@ -887,16 +986,10 @@ export async function request<T>(path: string, init: WorkspaceRequestInit = {}):
 }
 
 async function responseError(response: Response): Promise<ApiError> {
-  const body = await response.json().catch(() => ({})) as { error?: string; message?: string; code?: string; conflicts?: string[] };
-  return new ApiError(body.message ?? body.error ?? `Request failed with ${response.status}`, response.status, body.code, body.conflicts);
+  const body = await response.json().catch(() => ({})) as { error?: string; message?: string; code?: string; conflicts?: unknown; blocked?: unknown };
+  const conflicts = Array.isArray(body.conflicts) && body.conflicts.every((path) => typeof path === "string") ? body.conflicts as string[] : undefined;
+  return new ApiError(body.message ?? body.error ?? t("api.requestFailed", { status: response.status }), response.status, body.code, conflicts, body.blocked === true || undefined);
 }
-
-const turnCheckpointUrl = (projectId: string, conversationId: string, turnId: string) => `/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}`;
-export const getTurnChanges = (projectId: string, conversationId: string, turnId: string): Promise<{ changes: TurnFileChange[] }> => request(`${turnCheckpointUrl(projectId, conversationId, turnId)}/changes`);
-export const getTurnFileDiff = (projectId: string, conversationId: string, turnId: string, filePath: string): Promise<TurnFileDiff> => request(`${turnCheckpointUrl(projectId, conversationId, turnId)}/changes?path=${encodeURIComponent(filePath)}`);
-export const getCheckpointRecovery = (projectId: string): Promise<{ pending: boolean }> => request(`/projects/${encodeURIComponent(projectId)}/checkpoint-recovery`);
-export const recoverCheckpoint = (projectId: string): Promise<TurnUndoResult> => request(`/projects/${encodeURIComponent(projectId)}/checkpoint-recovery`, { method: "POST" });
-export const undoTurnFiles = (projectId: string, conversationId: string, turnId: string, conflicts?: "keep" | "overwrite"): Promise<TurnUndoResult> => request(`${turnCheckpointUrl(projectId, conversationId, turnId)}/undo`, { method: "POST", body: JSON.stringify({ conflicts }) });
 
 async function streamProjectEvents(
   projectId: string,
@@ -917,7 +1010,7 @@ async function streamProjectEvents(
     const connectionSignal = AbortSignal.any([signal, connection.signal]);
     try {
       const current = runtimeConnection();
-      if (current.status !== "ready") throw new Error("Background service unavailable");
+      if (current.status !== "ready") throw new Error(t("api.serviceUnavailable"));
       if (current.generation !== generation) {
         generation = current.generation;
         cursor = handlers.onReset ? await handlers.onReset() : 0;
@@ -1098,7 +1191,7 @@ function desktopRuntime(): DesktopRuntime | undefined {
   const desktop = window.ohMyGameDesktop;
   if (!desktop) return;
   const state = runtimeConnection();
-  if (state.status !== "ready") throw new Error("The background service is unavailable. Wait for recovery or restart it.");
+  if (state.status !== "ready") throw new Error(t("api.serviceUnavailableLong"));
   return state.runtime ? { daemonUrl: state.runtime.url, token: state.runtime.token } : desktop.runtime;
 }
 
@@ -1153,6 +1246,16 @@ export async function listPluginSetups(): Promise<import("../shared/plugin-setup
 }
 export async function readPluginDraft(id: string): Promise<import("../shared/plugin-setup.js").PluginDraft> {
   return request(`/plugins/setup-sessions/${encodeURIComponent(id)}/draft`);
+}
+export function updatePluginDraftIcon(id: string, input: import("../shared/plugin-setup.js").PluginIconUpdate): Promise<import("../shared/plugin-setup.js").PluginDraft> {
+  return request(`/plugins/setup-sessions/${encodeURIComponent(id)}/icon`, { method: "PUT", body: JSON.stringify(input) });
+}
+export async function readPluginIconImage(pluginId: string, setupId?: string, signal?: AbortSignal, previewPath?: string): Promise<Blob> {
+  const route = setupId ? `/plugins/setup-sessions/${encodeURIComponent(setupId)}/icon` : `/plugins/${encodeURIComponent(pluginId)}/icon`;
+  const suffix = setupId && previewPath ? `?${new URLSearchParams({ path: previewPath })}` : "";
+  const response = await fetch(apiUrl(`${route}${suffix}`), { headers: runtimeHeaders(), signal });
+  if (!response.ok) throw await responseError(response);
+  return response.blob();
 }
 export async function readPluginDraftFile(id: string, path: string): Promise<{ path: string; content: string }> {
   return request(`/plugins/setup-sessions/${encodeURIComponent(id)}/file?${new URLSearchParams({ path })}`);

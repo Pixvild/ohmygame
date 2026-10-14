@@ -60,6 +60,9 @@ export type MediaModelUsage = Exclude<ProviderCapability, "language">;
 export type MediaModelDefaults = Partial<Record<MediaModelUsage, ModelRef>>;
 
 export interface ProviderSummary extends ModelProviderSummary {
+  /** OpenAI can connect chat and images independently. */
+  languageConfigured?: boolean;
+  imageConfigured?: boolean;
   managed?: "free_cloud";
   cloud?: import("./cloud-models.js").CloudConnectionState;
   status: ProviderStatus;
@@ -173,6 +176,37 @@ export interface DiscoveredProviderModels {
 export interface ModelProviderEndpointSettings {
   baseUrl: string;
 }
+
+export type OpenAIImageConnectionMode = "connection" | "separate" | "disabled";
+export interface OpenAIImageModelConfiguration {
+  id: string;
+  name: string;
+  template: "gpt-image-1" | "gpt-image-2";
+  enabled: boolean;
+}
+export interface OpenAIImageConnectionSettings {
+  mode: OpenAIImageConnectionMode;
+  baseUrl: string;
+  configured: boolean;
+  connectionAvailable: boolean;
+  connectionBaseUrl?: string;
+  models: OpenAIImageModelConfiguration[];
+}
+export interface SaveOpenAIImageConnectionRequest {
+  mode: OpenAIImageConnectionMode;
+  baseUrl: string;
+  apiKey?: string;
+  models: OpenAIImageModelConfiguration[];
+}
+export type DiscoverOpenAIImageModelsRequest = Pick<SaveOpenAIImageConnectionRequest, "mode" | "baseUrl" | "apiKey">;
+export interface DiscoveredOpenAIImageModels {
+  models: OpenAIImageModelConfiguration[];
+  warnings?: string[];
+}
+
+export const RESPONSES_TRANSPORT_MODES = ["auto", "sse", "websocket"] as const;
+export type ResponsesTransportMode = typeof RESPONSES_TRANSPORT_MODES[number];
+export interface ResponsesTransportSettings { mode: ResponsesTransportMode }
 
 export const CUSTOM_MODEL_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai", "google-vertex"] as const;
 export const CUSTOM_IMAGE_MODEL_APIS = ["openai-completions", "openai-responses"] as const;
@@ -306,6 +340,7 @@ export interface PublicationState {
 export type ProjectCoverMode = "auto" | "custom";
 
 export interface ProjectCoverState {
+  /** "custom" also freezes an automatic cover, or disables capture before a cover exists. */
   mode: ProjectCoverMode;
 }
 
@@ -532,6 +567,7 @@ export interface AgentErrorDiagnostics {
   model?: string;
   endpoint?: string;
   statusCode?: number;
+  transport?: "sse" | "websocket";
   requestId?: string;
   errorCode?: string;
   causes?: AgentErrorCause[];
@@ -633,7 +669,7 @@ export interface PlanState {
 }
 
 export type ThreadItem = (
-  | { id: string; turnId: string; type: "userMessage"; text: string; mentions?: PluginMention[]; images?: PromptImage[]; attachments?: ConversationAttachment[]; contexts?: PromptContextLabel[]; checkpoint?: import("./checkpoints.js").TurnCheckpoint }
+  | { id: string; turnId: string; type: "userMessage"; text: string; mentions?: PluginMention[]; images?: PromptImage[]; attachments?: ConversationAttachment[]; contexts?: PromptContextLabel[]; /** The workspace as it was before this message, when it can be restored. */ checkpointId?: string; /** What the turn of this message changed in the workspace, once the turn has ended. */ changes?: TurnChanges }
   | { id: string; turnId: string; type: "imageRead"; count: number; status: "completed" }
   | { id: string; turnId: string; type: "modelChange"; model: AgentModelRef; name?: string }
   | {
@@ -896,6 +932,59 @@ export interface CreateLibraryImageRequest {
   image: PromptImage & { mediaType: Extract<LibraryUploadMediaType, `image/${string}`> };
 }
 
+/** The file changes of one Agent turn. */
+export interface TurnChanges {
+  /** How many files the turn added, modified or removed. */
+  files: number;
+  /** The changes were taken back with Undo. */
+  undone?: boolean;
+  /** How many of the files that undo left as they are, because they were changed again after the turn. */
+  kept?: number;
+}
+
+export interface CheckpointChangeItem {
+  /** Workspace path with forward slashes. */
+  path: string;
+  kind: "added" | "modified" | "removed";
+  /**
+   * How the file stands now: as the turn left it, as it was before the turn,
+   * or changed again afterwards. Left out while the Agent is working.
+   */
+  state?: "applied" | "undone" | "changed";
+}
+
+/** A file as one checkpoint holds it. */
+export interface CheckpointFile {
+  binary: boolean;
+  content?: string;
+  truncated?: boolean;
+}
+
+/** A changed file before and after a turn. A side is null when the file was not there. */
+export interface CheckpointFileView {
+  path: string;
+  before: CheckpointFile | null;
+  after: CheckpointFile | null;
+}
+
+export interface CheckpointUndoRequest {
+  /** What to do with files that were changed again after the turn. Without it an undo with such files is refused. */
+  conflicts?: "keep" | "overwrite";
+  /**
+   * The files the player was shown before choosing to overwrite. Required
+   * with "overwrite": when other files are in the way by now, the undo is
+   * refused again with the new list instead of overwriting what was not shown.
+   */
+  expected?: string[];
+}
+
+export interface CheckpointUndoResponse {
+  /** Workspace paths that were put back. */
+  changed: string[];
+  /** Workspace paths that were left as they are. */
+  conflicts: string[];
+}
+
 export interface WorkspaceFileContent {
   path: string;
   size: number;
@@ -1050,13 +1139,16 @@ export type ToolArtifact =
   | { type: "video"; path: string; mediaType: "video/mp4" | "video/webm" };
 
 export interface RuntimeEventData {
-  "workspace.restored": { version: string; changed: string[]; recovery?: boolean };
   "conversation.renamed": { conversation: ConversationSummary };
   "conversation.model.changed": { item: Extract<ThreadItem, { type: "modelChange" }> };
   "project.renamed": { project: ProjectState };
   "project.updated": { project: ProjectState };
   "preview.updated": { preview: PreviewRuntimeState };
   "agent.started": { prompt: string; mentions?: PluginMention[]; images?: PromptImage[]; attachments?: ConversationAttachment[]; contexts?: PromptContextLabel[]; revision?: "last-turn" };
+  "checkpoint.created": { checkpointId: string };
+  "checkpoint.completed": { checkpointId: string; files: number };
+  "workspace.restored": { version: string; changed: string[]; recovery?: boolean; checkpointId?: string };
+  "workspace.undone": { checkpointId: string; kept: number };
   "plan.mode.changed": PlanSessionState;
   "item.started": { item: ThreadItem };
   "item.updated": { item: ThreadItem };
@@ -1077,13 +1169,16 @@ export interface RuntimeEventData {
 export type RuntimeEventType = keyof RuntimeEventData;
 
 export const RUNTIME_EVENT_TYPES = [
-  "workspace.restored",
   "conversation.renamed",
   "conversation.model.changed",
   "project.renamed",
   "project.updated",
   "preview.updated",
   "agent.started",
+  "checkpoint.created",
+  "checkpoint.completed",
+  "workspace.restored",
+  "workspace.undone",
   "item.started",
   "item.updated",
   "item.completed",
