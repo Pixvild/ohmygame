@@ -79,7 +79,7 @@ back to the chat key or another provider.
 
 The **Remove image connection** icon in edit mode clears the image key and models
 and selects **Disabled**, leaving chat connected. To share chat's key afterwards,
-select that mode explicitly. **Delete provider** clears both OpenAI connections and their
+select that mode explicitly. Deleting the provider clears both OpenAI connections and their
 settings. Existing project/node choices remain saved and require an available
 image connection to generate again.
 
@@ -189,8 +189,9 @@ Pi's `models.json`. Project overrides are stored in each project's `project.json
 Credentials remain in the existing credential store and are not copied into model
 definitions or returned in settings responses.
 
-Connected provider details have a **Delete provider** button with inline
-confirmation. For custom providers, it removes the provider definition, credential
+Connected provider details end with a **Remove provider** section; **Remove…**
+opens an inline confirmation with **Delete provider**. Meshy, Tripo and Hyper3D
+keep a **Remove API key** button beside their key field instead. For custom providers, it removes the provider definition, credential
 and model settings. For built-in providers, including Meshy, Tripo and Hyper3D, it clears
 the saved credential, endpoint overrides, custom models and visibility/enable
 settings; the service remains available to connect again. Global media defaults
@@ -199,6 +200,15 @@ choices stay saved and need an available connection to generate again.
 
 Deleting an official browser sign-in clears the local login only. It does not
 cancel or change the service's subscription.
+
+Provider details start with a **Providers & Models** breadcrumb and a status
+line such as **Connected · ChatGPT**. Built-in language providers show a
+**Connection** row for the current sign-in (**Reconnect**) or API key (edit
+icon); when the provider offers both methods, the section heading has a button
+to switch. The model list shows the global default language model
+first with a **Default** badge; hidden models stay under **Hidden models (n)**.
+Base URL and Responses connection settings sit in the collapsed **Advanced**
+section, and the page ends with **Remove provider**.
 
 ## Global and project defaults
 

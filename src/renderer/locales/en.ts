@@ -187,6 +187,18 @@ const en = {
     noImageModels: "No image models are available.",
     noVideoModels: "No video models are available.",
     loadingModels: "Loading models",
+    breadcrumb: "Provider navigation",
+    remove: {
+      title: "Remove provider",
+      hint: "Deletes the saved connection and model settings for {{name}}.",
+      action: "Remove…",
+    },
+    connection: {
+      title: "Connection",
+      signedInWith: "Signed in with {{name}}",
+      signedIn: "Signed in with browser",
+      reconnect: "Reconnect",
+    },
     delete: {
       button: "Delete provider",
       confirmation: "Delete provider confirmation",
@@ -219,7 +231,6 @@ const en = {
     browserSignIn: "Browser sign-in",
     useBrowserSignIn: "Use browser sign-in",
     useApiKey: "Use API key",
-    apiKeySettings: "API key settings",
     apiKeyConfigured: "API key is configured",
     editApiKey: "Edit API key",
     baseUrlSettings: "Base URL settings",
@@ -245,6 +256,7 @@ const en = {
     },
     status: {
       connected: "Connected",
+      connectedWith: "Connected · {{method}}",
       checking: "Checking…",
       failed: "Connection failed",
       notConfigured: "Not configured",
@@ -317,6 +329,8 @@ const en = {
       label: "Filter models",
     },
     title: "Models",
+    default: "Default",
+    hiddenCount: "Hidden models ({{count}})",
     reloadTitle: "Reload the bundled official presets and account catalog",
     reloadLabel: "Reload model catalog",
     add: "Add model",
@@ -695,6 +709,7 @@ const en = {
     title: "Responses connection",
     preferWebSocket: "Prefer WebSocket",
     hint: "Automatic prefers WebSocket for official OpenAI and HTTP / SSE for relays. Temporary connection failures fall back to HTTP / SSE for five minutes. Interrupted replies retry with Reconnecting when automatic retry is enabled.",
+    shortHint: "Automatic picks WebSocket or HTTP / SSE and falls back when a connection fails.",
   },
   model3dForm: {
     edit: "Edit 3D model",
