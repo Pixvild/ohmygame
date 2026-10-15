@@ -1,4 +1,9 @@
 import { inspectPreviewConfiguration } from "./preview-configuration.js";
+import { CheckpointStore } from "./checkpoints.js";
+import { ProjectWrites } from "./project-writes.js";
+import { registerCheckpointRoutes } from "./checkpoint-routes.js";
+import { readWorkspaceVersion } from "./workspace-notice.js";
+import { withCanvasLock } from "./canvas-workspace.js";
 import { validatePreviewSettings } from "../shared/preview-settings.js";
 import { previewPageUrl } from "../shared/preview-page.js";
 import { PluginSetupManager, registerPluginSetupRoutes } from "./plugin-setup.js";
@@ -14,7 +19,7 @@ import { OnboardingStore } from "./onboarding.js";
 import type { UpdateOnboardingRequest } from "../shared/onboarding.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SettingsManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { AGENT_REASONING_LEVELS, IMAGE_ASPECT_RATIOS, IMAGE_MAX_REFERENCE_IMAGES, IMAGE_OUTPUT_COUNTS, IMAGE_RESOLUTIONS, IMAGE_SIZES, PROJECT_TYPE_IDS, TOOL_IDS, VIDEO_ASPECT_RATIOS, VIDEO_RESOLUTIONS, type AgentModelRef, type AgentReasoningLevel, type AnswerQuestionnaireRequest, type AssetCanvasTextGenerationRequest, type ConversationAgentSettings, type ConversationCapabilities, type ConversationDetail, type CreateConversationRequest, type CreateLibraryImageRequest, type CreateProjectRequest, type LibraryUploadMediaType, type MediaModelDefaults, type ModelAuthMethod, type ProjectRunSettings, type ProjectState, type ProjectType, type PromptImage, type PromptRequest, type PublishProjectRequest, type RenameConversationRequest, type ReviseLastPromptRequest, type RunToolRequest, type RunVideoToolRequest, type RuntimeEvent, type SetConversationModelRequest, type SetConversationReasoningRequest, type UpdateAgentDefaultsRequest } from "../shared/contracts.js";
 import { findAgentModel, preferredAgentModel } from "../shared/agent-models.js";
@@ -26,6 +31,7 @@ import { PUBLISH_GAME_TITLE_MAX_LENGTH } from "../shared/publish-v1.js";
 import { clampReasoningLevel, parseReasoningLevel, supportedReasoningLevels } from "../shared/reasoning.js";
 import { matchesBearerToken } from "./access.js";
 import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
+import { CHECKPOINT_UNDONE_ENTRY, TURN_END_ENTRY } from "./checkpoint-extension.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
 import { ConversationImageStore } from "./conversation-images.js";
@@ -89,6 +95,7 @@ import { PluginSkillContentError, readPluginSkillContent, resolvePluginSkillFile
 import { LegacyMcpConfiguration } from "./legacy-mcp.js";
 import { hasPluginMentionToken, type InstallPluginRequest, type PluginSettings, type PluginSummary, type PluginDetail } from "../shared/plugins.js";
 import { getWorkspaceMedia, listWorkspaceFiles, locateWorkspaceEntry, readWorkspaceFile, validateWorkspaceFile, workspaceMediaInfo, WorkspaceError } from "./workspace.js";
+import { listWorkspaceGitChanges, readWorkspaceGitFile } from "./workspace-git.js";
 import { AssetLibrary, AssetLibraryError } from "./asset-library.js";
 import { AgentAttachmentError, AgentAttachmentStore, MAX_AGENT_ATTACHMENT_BYTES, MAX_AGENT_ATTACHMENTS_PER_TURN } from "./agent-attachments.js";
 import type { GameRuntimeAdapter } from "../shared/playtest.js";
@@ -539,6 +546,8 @@ export function createApp(options: AppOptions = {}) {
     fetch: options.publishFetch,
   });
   const previews = new PreviewManager(events);
+  const checkpoints = new CheckpointStore();
+  const projectWrites = new ProjectWrites();
   const webSearchSettings = new WebSearchSettingsStore(dataDirectory);
   const onboarding = new OnboardingStore(dataDirectory);
   const networkSettings = options.networkSettings ?? new NetworkSettingsService(dataDirectory);
@@ -690,6 +699,12 @@ export function createApp(options: AppOptions = {}) {
   ], pluginSettings, (plugin) => preinstalledPlugins.decorate(plugin));
   const withPluginCapabilities = async (plugin: Awaited<ReturnType<typeof plugins.read>>) => plugin ? pluginCapabilities.decorate(plugin) : plugin;
   let agents: AgentManager;
+  const snapshotWorkspace = (project: ProjectState) => projectWrites.snapshot(project.id, async () => {
+    if (!projects.get(project.id)) throw new Error("Project not found");
+    if (await checkpoints.unfinished(project)) throw new Error("Recover the interrupted file restore before continuing.");
+    await canvasStore.waitForProject(project.id);
+    return previews.withWorkspaceStopped(project, () => withCanvasLock(project.workspacePath, () => checkpoints.snapshot(project)));
+  });
   agents = new AgentManager(events, {
     errorDiagnostics: () => {
       const route = networkSettings.get().active;
@@ -750,6 +765,7 @@ export function createApp(options: AppOptions = {}) {
         () => resolvePluginSkills([bundledPlugins, localPlugins], pluginSettings, project.type),
         Object.keys(effectiveMcp.mcpServers).length ? { factory: await pluginCapabilities.host.extension(effectiveMcp), host: pluginCapabilities.host } : undefined,
         (provider) => providerModelSettings.responsesTransport(provider),
+        () => snapshotWorkspace(project),
       );
     }),
     activeToolNames: (project, mode, session) => {
@@ -758,6 +774,10 @@ export function createApp(options: AppOptions = {}) {
     },
     onRunFinished: async (project, conversationId) => {
       await agentPlaytests.get(`${project.id}:${conversationId}`)?.cleanup();
+    },
+    checkpoints: {
+      snapshot: snapshotWorkspace,
+      changed: (project, from, to) => checkpoints.summarize(project, from, to),
     },
     onRunCompleted: (project) => {
       void previews.automatic(project, true).catch(() => {});
@@ -770,6 +790,7 @@ export function createApp(options: AppOptions = {}) {
     logger: options.logger ?? false,
     ajv: { customOptions: { coerceTypes: false } },
   });
+  projectWrites.install(app);
   const canvasStore = registerCanvasRoutes(app, { projects, library, tools });
   registerPluginCapabilityRoutes(app, { capabilities: pluginCapabilities, plugins, invalidate: invalidatePluginSessions });
   const pluginSetup = new PluginSetupManager(dataDirectory, piAgentDirectory, pluginCapabilities, plugins, localPlugins, invalidatePluginSessions, async ref => {
@@ -802,6 +823,7 @@ export function createApp(options: AppOptions = {}) {
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
     }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), providerModelSettings.load()]);
+    await Promise.all(projects.list().map(async (project) => { projectWrites.initialize(project.id, await readWorkspaceVersion(project)); }));
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     const examplesWarning = await examples.load();
     if (examplesWarning) app.log.warn(examplesWarning);
@@ -814,7 +836,8 @@ export function createApp(options: AppOptions = {}) {
     const origin = request.headers.origin;
     if (origin && allowedOrigins.has(origin)) {
       reply.header("access-control-allow-origin", origin);
-      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-publish-access-token");
+      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-workspace-version, x-publish-access-token");
+      reply.header("access-control-expose-headers", "x-workspace-version");
       reply.header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       reply.header("vary", "Origin");
     }
@@ -826,6 +849,12 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.get("/health", async () => ({ status: "ok" }));
+
+  registerCheckpointRoutes(app, {
+    store: checkpoints,
+    snapshot: snapshotWorkspace, writes: projectWrites, projects, conversations, agents, previews, events,
+    busy: (id) => publishing.has(id) || canvasStore.isProjectBusy(id) || tools.jobs().some((job) => job.context?.projectId === id && job.status === "running"),
+  });
 
   // The page Scenes run in. The desktop app loads its own pages from file://,
   // where a sandboxed frame may not load its script, so the frame comes from
@@ -1466,7 +1495,10 @@ export function createApp(options: AppOptions = {}) {
   app.delete<{ Params: { projectId: string } }>("/projects/:projectId", async (request, reply) => {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
+    // A project reads as idle from the end of a run, a little before its turn is closed; what is asked of it then waits.
+    await agents.turnsClosed(project.id);
     if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before deleting this project" });
+    return projectWrites.exclusive(project.id, async () => {
     await previews.forget(project);
     agents.forgetProject(project.id);
     conversations.forget(project);
@@ -1477,8 +1509,12 @@ export function createApp(options: AppOptions = {}) {
     }
     await conversationImages.removeProject(project.id);
     await canvasStore.cancelProject(project.id);
+    await canvasStore.waitForProject(project.id);
+    // A snapshot that is still being taken writes into the folder that is about to be removed.
+    await checkpoints.settled(project);
     await projects.delete(project.id);
     return reply.code(204).send();
+    });
   });
 
   registerCommunityRoutes(app, publisher, projects);
@@ -1689,6 +1725,26 @@ export function createApp(options: AppOptions = {}) {
     await projects.setCoverMode(request.params.projectId, "auto");
     return reply.code(204).send();
   });
+
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/git/changes", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    return listWorkspaceGitChanges(project.workspacePath);
+  });
+
+  app.get<{ Params: { projectId: string }; Querystring: { path: string } }>(
+    "/projects/:projectId/git/file",
+    { schema: { querystring: assetPathQuerySchema } },
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      try { return await readWorkspaceGitFile(project.workspacePath, request.query.path); }
+      catch (cause) {
+        if (cause instanceof WorkspaceError) return reply.code(cause.code === "ENOENT" ? 404 : 400).send({ error: cause.message });
+        throw cause;
+      }
+    },
+  );
 
   app.get<{ Params: { projectId: string } }>("/projects/:projectId/files", async (request, reply) => {
     const project = projects.get(request.params.projectId);
@@ -2454,13 +2510,29 @@ export function createApp(options: AppOptions = {}) {
           ),
         } : {}),
       };
-      const branch = (await conversations.view(project, conversation)).getBranch();
+      // Cache reads revalidate after earlier readers settle. Retry only when a
+      // run or a delayed turn end changed during this read, so the response's
+      // event cursor cannot skip checkpoint metadata missing from its branch.
+      let branch: SessionEntry[];
+      let run = agents.activeStart(project.id, conversation.summary.id);
+      let ends = agents.turnEndsRecorded(project.id, conversation.summary.id);
+      for (;;) {
+        branch = (await conversations.view(project, conversation)).getBranch();
+        const now = agents.activeStart(project.id, conversation.summary.id);
+        const endsNow = agents.turnEndsRecorded(project.id, conversation.summary.id);
+        if ((!run || run.id === now?.id) && ends === endsNow) break;
+        run = now;
+        ends = endsNow;
+      }
       // Capture live state and its cursor together after all asynchronous reads.
       const currentRun = agents.activeStart(project.id, conversation.summary.id);
       const activeItems = agents.activeItems(project.id, conversation.summary.id);
       const activePlanState = agents.planState(conversation);
+      // The end of an earlier turn is kept whatever its time: it is written when a run is over, in the very
+      // millisecond in which a message that waited for that starts the next run.
+      const before = (entry: SessionEntry) => !currentRun || entry.timestamp < currentRun.timestamp || (entry.type === "custom" && (entry.customType === TURN_END_ENTRY || entry.customType === CHECKPOINT_UNDONE_ENTRY));
       const loadedItems = [
-        ...conversationItems(currentRun ? branch.filter((entry) => entry.timestamp < currentRun.timestamp) : branch, !currentRun),
+        ...conversationItems(branch.filter(before), !currentRun),
         // A reset must be a complete snapshot. Replaying from the active turn's
         // start is unsafe once a chat produces more events than the replay buffer.
         ...(currentRun ? activeItems : []),

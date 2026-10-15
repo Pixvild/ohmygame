@@ -37,6 +37,15 @@ Projects URL preserves its type filter, search (`q`), and name sorting
 
 ## Architecture and feature guides
 
+[Git changes in Code](workspace-git.md) covers the read-only project changes
+view, its comparison baseline and refresh behavior.
+
+[Turn file changes and Undo](checkpoints.md) covers message checkpoints, file
+conflicts, workspace versions, and recovery. Start with `src/daemon/checkpoints.ts`,
+`src/daemon/agent.ts`, and `src/renderer/turn-changes.tsx`; the focused suites
+are `test/checkpoints.test.ts`, `test/turn-checkpoints.test.ts`, and
+`test/checkpoint-routes.test.ts`.
+
 | Document                                         | Purpose                                                                                                                        |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | [runtime.md](runtime.md)                         | Process boundaries, toolchains, proxies, trust boundary, game use, persistence, and publishing.                                |
