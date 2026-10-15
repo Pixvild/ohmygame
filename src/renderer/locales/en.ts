@@ -2429,6 +2429,23 @@ const en = {
     wouldOpen: "Would open {{title}}",
     noScenes: "This project has no Scenes yet.",
   },
+  videoTrim: {
+    play: "Play",
+    pause: "Pause",
+    position: "Video position",
+    start: "Start of the part to keep",
+    end: "End of the part to keep",
+    hint: "Drag the handles to keep part of the video",
+    kept: "Keep {{start}}–{{end}} · {{length}} s",
+    reset: "Reset",
+    save: "Save as new video",
+    saveTitle: "Save the kept part as a new video; the original stays as it is",
+    saving: "Saving the trimmed video",
+    savingPercent: "Trimming… {{percent}}%",
+    failed: "Could not trim the video: {{error}}",
+    fileName: "{{name}} (trimmed)",
+    saved: "Saved {{name}}",
+  },
   assets: {
     origin: {
       generated: "Generated",
@@ -2468,6 +2485,7 @@ const en = {
     fileMissing: "File missing: {{path}}",
     fileUnavailable: "File unavailable: {{path}}",
     closePreview: "Close asset preview",
+    trimmedFrom: "Trimmed from",
   },
   storyEditor: {
     projectChanged:
