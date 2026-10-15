@@ -47,6 +47,7 @@ import { ArtifactBuilder, PublishError } from "./publish/archive.js";
 import { PlayableDraftServer } from "./playable-draft-server.js";
 import { promptContextBlock } from "./prompt-context.js";
 import { RemotePublisher, RemotePublishError } from "./publish/client.js";
+import { registerCommunityRoutes } from "./publish/community-routes.js";
 import { LocalPublisher } from "./publish/local.js";
 import { LOCAL_DEBUG_ACCESS_TOKEN } from "../shared/local-debug.js";
 import { PreviewManager, PreviewCancelledError } from "./preview.js";
@@ -82,6 +83,8 @@ import type { VideoGenerator } from "./video-generation.js";
 import { ProviderVideos } from "./provider-videos.js";
 import { isSeedanceProviderId, SEEDANCE_PROVIDER_IDS, SEEDANCE_PROVIDERS } from "./seedance-models.js";
 import { SeedanceSettingsStore } from "./seedance-settings.js";
+import { isMinimaxProviderId, MINIMAX_PROVIDER_IDS, MINIMAX_PROVIDERS } from "./minimax-models.js";
+import { MinimaxSettingsStore } from "./minimax-settings.js";
 import { BundledPluginAdapter, LocalPluginAdapter, PluginCatalogService, pluginSummary } from "./plugin-catalog.js";
 import { BundledPluginStore } from "./bundled-plugins.js";
 import { LocalPluginError, LocalPluginStore } from "./local-plugins.js";
@@ -553,6 +556,7 @@ export function createApp(options: AppOptions = {}) {
   const hyper3dSettings = new MediaProviderKeyStore(dataDirectory, "hyper3d", "Hyper3D");
   const native3DProviders = [["meshy", "Meshy", meshySettings], ["tripo", "Tripo", tripoSettings], ["hyper3d", "Hyper3D", hyper3dSettings]] as const;
   const seedanceSettings = new SeedanceSettingsStore(dataDirectory);
+  const minimaxSettings = new MinimaxSettingsStore(dataDirectory);
   const providerModelSettings = new ProviderModelSettingsStore(dataDirectory, piAgentDirectory);
   const webSearch = new WebSearchService(webSearchSettings, options.webSearchFetch);
   const openAIEndpoint = new ModelEndpointSettingsStore(
@@ -626,6 +630,7 @@ export function createApp(options: AppOptions = {}) {
   });
   const providerVideos = new ProviderVideos(getModelRuntime, options.videoFetch, (providerId) => seedanceSettings.key(providerId), providerEnabled, {
     customProviders: () => providerModelSettings.customProviderCatalog(), defaultModel: () => providerModelSettings.defaultVideoModel(),
+    minimaxApiKey: (providerId) => minimaxSettings.key(providerId),
   });
   const providerModels3D = new ProviderModels3D({
     runtime: getModelRuntime,
@@ -817,7 +822,7 @@ export function createApp(options: AppOptions = {}) {
     await onboarding.load().catch((err) => app.log.warn({ err }, "Could not load onboarding state"));
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
-  }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), providerModelSettings.load()]);
+    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), providerModelSettings.load()]);
     await Promise.all(projects.list().map(async (project) => { projectWrites.initialize(project.id, await readWorkspaceVersion(project)); }));
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     const examplesWarning = await examples.load();
@@ -831,7 +836,7 @@ export function createApp(options: AppOptions = {}) {
     const origin = request.headers.origin;
     if (origin && allowedOrigins.has(origin)) {
       reply.header("access-control-allow-origin", origin);
-      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-workspace-version");
+      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-workspace-version, x-publish-access-token");
       reply.header("access-control-expose-headers", "x-workspace-version");
       reply.header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       reply.header("vary", "Origin");
@@ -1512,39 +1517,7 @@ export function createApp(options: AppOptions = {}) {
     });
   });
 
-  app.get("/community/games", async (_request, reply) => {
-    try {
-      return await publisher.community();
-    } catch (cause) {
-      const error = cause instanceof Error ? cause.message : String(cause);
-      return reply.code(cause instanceof RemotePublishError ? cause.statusCode : 502).send({ error });
-    }
-  });
-
-  app.get<{ Params: { gameId: string } }>("/community/games/:gameId", async (request, reply) => {
-    try {
-      return await publisher.communityGame(request.params.gameId);
-    } catch (cause) {
-      const error = cause instanceof Error ? cause.message : String(cause);
-      return reply.code(cause instanceof RemotePublishError ? cause.statusCode : 502).send({ error });
-    }
-  });
-
-  app.get<{ Params: { gameId: string; deploymentId: string } }>(
-    "/community/games/:gameId/deployments/:deploymentId/cover",
-    async (request, reply) => {
-      try {
-        const cover = await publisher.communityGameCover(request.params.gameId, request.params.deploymentId);
-        reply.header("content-type", "image/webp");
-        reply.header("cache-control", "private, max-age=31536000, immutable");
-        reply.header("x-content-type-options", "nosniff");
-        return reply.send(cover);
-      } catch (cause) {
-        const error = cause instanceof Error ? cause.message : String(cause);
-        return reply.code(cause instanceof RemotePublishError ? cause.statusCode : 502).send({ error });
-      }
-    },
-  );
+  registerCommunityRoutes(app, publisher, projects);
 
   app.get("/library/assets", async (request) => {
     const associations = await projects.libraryAssetAssociations((project, cause) => request.log.warn({ projectId: project.id, err: cause }, "Could not read Library asset usage"));
@@ -2029,6 +2002,20 @@ export function createApp(options: AppOptions = {}) {
         credentialType: "api_key" as const,
         capabilities: providerId === "volcengine-ark" ? ["image", "video"] as const : ["video"] as const,
       };
+    }), ...MINIMAX_PROVIDER_IDS.map((providerId) => {
+      const definition = MINIMAX_PROVIDERS[providerId];
+      const configured = minimaxSettings.get(providerId).configured;
+      return {
+        id: definition.id,
+        name: definition.name,
+        configured,
+        enabled: providerEnabled(providerId),
+        custom: false,
+        status: configured ? "connected" as const : "not_configured" as const,
+        methods: [{ type: "api_key" as const, label: `${definition.name} API key` }],
+        credentialType: "api_key" as const,
+        capabilities: ["video"] as const,
+      };
     })];
     return [...providers, ...directProviders, ...await cloudModels.providers(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
   };
@@ -2146,7 +2133,8 @@ export function createApp(options: AppOptions = {}) {
     const runtime = await getModelRuntime();
     const native = native3DProviders.find(([id]) => id === providerId);
     const seedance = isSeedanceProviderId(providerId);
-    if (!native && !seedance && !runtime.getProvider(providerId)) throw new ModelAuthError("Model provider not found", 404);
+    const minimax = isMinimaxProviderId(providerId);
+    if (!native && !seedance && !minimax && !runtime.getProvider(providerId)) throw new ModelAuthError("Model provider not found", 404);
     const previousEndpoint = providerId === "openai" ? openAIEndpoint.override() : undefined;
     try {
       await providerModelSettings.removeProviderSettings(providerId, async () => {
@@ -2154,6 +2142,7 @@ export function createApp(options: AppOptions = {}) {
         if (previousEndpoint) await openAIEndpoint.update(openAIEndpoint.defaultBaseUrl);
         if (native) await native[2].clear();
         else if (seedance) await seedanceSettings.clear(providerId);
+        else if (minimax) await minimaxSettings.clear(providerId);
         else await runtime.logout(providerId);
         await syncOpenAIEndpoint(runtime);
         if (providerId === "openai") await openAIImages.clear(false);
@@ -2201,6 +2190,21 @@ export function createApp(options: AppOptions = {}) {
   app.delete<{ Params: { providerId: string } }>("/settings/models/providers/:providerId/seedance-key", async (request, reply) => {
     if (!isSeedanceProviderId(request.params.providerId)) return reply.code(404).send({ error: "Seedance provider not found" });
     await seedanceSettings.clear(request.params.providerId);
+    return reply.code(204).send();
+  });
+
+  app.put<{ Params: { providerId: string }; Body: { apiKey: string } }>(
+    "/settings/models/providers/:providerId/minimax-key",
+    { schema: apiKeySettingsSchema },
+    async (request, reply) => {
+      if (!isMinimaxProviderId(request.params.providerId)) return reply.code(404).send({ error: "MiniMax provider not found" });
+      try { return await minimaxSettings.update(request.params.providerId, request.body.apiKey); }
+      catch (cause) { return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+    },
+  );
+  app.delete<{ Params: { providerId: string } }>("/settings/models/providers/:providerId/minimax-key", async (request, reply) => {
+    if (!isMinimaxProviderId(request.params.providerId)) return reply.code(404).send({ error: "MiniMax provider not found" });
+    await minimaxSettings.clear(request.params.providerId);
     return reply.code(204).send();
   });
 
@@ -2506,16 +2510,13 @@ export function createApp(options: AppOptions = {}) {
           ),
         } : {}),
       };
-      // A turn that is closed while the file is read writes its end after the read began. The answer would then
-      // be past the event that says what the turn changed without holding it, so the file is read again when the
-      // conversation's run is no longer the one it was. Each time it is read twice: a read can be answered with
-      // one that began earlier, and only the second is sure to have begun after the run was looked at.
-      // The end of a turn whose snapshot took long is written with no run starting or ending, so that is looked at too.
+      // Cache reads revalidate after earlier readers settle. Retry only when a
+      // run or a delayed turn end changed during this read, so the response's
+      // event cursor cannot skip checkpoint metadata missing from its branch.
       let branch: SessionEntry[];
       let run = agents.activeStart(project.id, conversation.summary.id);
       let ends = agents.turnEndsRecorded(project.id, conversation.summary.id);
       for (;;) {
-        await conversations.view(project, conversation);
         branch = (await conversations.view(project, conversation)).getBranch();
         const now = agents.activeStart(project.id, conversation.summary.id);
         const endsNow = agents.turnEndsRecorded(project.id, conversation.summary.id);

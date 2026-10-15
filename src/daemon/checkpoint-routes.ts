@@ -422,13 +422,16 @@ export function registerCheckpointRoutes(
           return await protect(
             request.params.projectId,
             async (project, track, afterUnlock) => {
-              const { conversation, range } = await target(
-                project.id,
+              const conversation = await conversations.get(
+                project,
                 request.params.conversationId,
-                request.params.checkpointId,
               );
+              if (!conversation)
+                throw Object.assign(new Error("Conversation not found"), {
+                  statusCode: 404,
+                });
               const changeFiles = async (
-                _range: { before: string; after: string },
+                range: { before: string; after: string },
                 state?: StoredCheckpointUndone,
               ) => {
                 let pending = new Map(Object.entries(state?.reapply ?? {}));

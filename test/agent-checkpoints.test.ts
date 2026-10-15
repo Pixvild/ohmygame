@@ -2248,50 +2248,6 @@ describe("The end of a turn", () => {
     ).not.toBe("never told");
   });
 
-  it("tells what a turn changed to a conversation whose read was answered with one that began before the turn was closed", async () => {
-    const { detail, send, published } = await studio(turn());
-    const closing = hold("snapshot", 2);
-    await send("Write the notes");
-    await closing.reached;
-
-    // Reads of one session file that overlap share one answer. Here the turn is closed while a request is on its
-    // way, and the read it then does for the conversation is given the file as an earlier read found it.
-    const view = ConversationManager.prototype.view;
-    const run = vi.spyOn(AgentManager.prototype, "activeStart");
-    let views = 0;
-    let before: unknown;
-    let shared = false;
-    vi.spyOn(ConversationManager.prototype, "view").mockImplementation(
-      async function (this: ConversationManager, ...args) {
-        const manager = await view.apply(this, args);
-        if (++views === 1) {
-          const branch = manager.getBranch();
-          before = { getBranch: () => branch };
-          closing.release();
-          await published("checkpoint.completed");
-        } else if (run.mock.calls.length > 0 && !shared) {
-          shared = true;
-          return before as never;
-        }
-        return manager;
-      },
-    );
-
-    const loaded = await detail();
-    const [event] = await published("checkpoint.completed");
-    const [message] = loaded.turns
-      .flatMap((item) => item.items)
-      .filter(
-        (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
-          item.type === "userMessage",
-      );
-    expect(shared).toBe(true);
-    expect(
-      message!.changes ??
-        (loaded.cursor < event!.id ? "told by the event" : "never told"),
-    ).not.toBe("never told");
-  });
-
   it("lets the last message be edited while its turn is being closed, and does not call the project at work", async () => {
     const { app, base, userMessages, send, ended, file } = await studio([
       ...turn(),
@@ -2455,7 +2411,7 @@ describe("The end of a turn", () => {
         (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
           item.type === "userMessage",
       );
-    expect(view.mock.calls.length).toBe(perRequest + 2);
+    expect(view.mock.calls.length).toBe(perRequest + 1);
     expect(message!.changes).toMatchObject({ files: 1 });
   });
 

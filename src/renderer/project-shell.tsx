@@ -94,6 +94,7 @@ interface ProjectShellProps {
   onInitialDraftHandled?: () => void;
   onOpenConversation: (conversationId: string, replace?: boolean) => void;
   onHome: () => void;
+  homeLabel?: string;
 }
 
 const CanvasWorkspace = lazy(() => import("./canvas-workspace.js").then((module) => ({ default: module.CanvasWorkspace })));
@@ -115,6 +116,7 @@ export function ProjectShell({
   onInitialDraftHandled,
   onOpenConversation,
   onHome,
+  homeLabel = t("navigation.backTo", { page: t("sidebar.projects") }),
 }: ProjectShellProps) {
   const auth = useAuth();
   const runtime = useRuntimeConnection();
@@ -382,7 +384,7 @@ export function ProjectShell({
   }, [auth.state.status, state.phase, state.project?.id, state.project?.type, state.agent.status, sendingInitialPrompt, publishing]);
 
   if (state.phase === "fatal") {
-    return <FatalState message={state.notice ?? t("projectShell.runtimeUnreachable")} onHome={onHome} />;
+    return <FatalState message={state.notice ?? t("projectShell.runtimeUnreachable")} onHome={onHome} homeLabel={homeLabel} />;
   }
 
   const project = state.project;
@@ -737,7 +739,7 @@ export function ProjectShell({
 
   return (
     <WorkspaceShell chatLayout={chatLayout} agentCollapsed={agentIsCollapsed} viewerCollapsed={viewerCollapsed}
-      onHome={requestHome} onExpandAgent={() => setAgentCollapsed(false)}
+      onHome={requestHome} homeLabel={homeLabel} homeIcon={ArrowLeft} onExpandAgent={() => setAgentCollapsed(false)}
       agent={<WorkspaceAgentPane bodyRef={timeline} onScroll={(event) => {
         const element = event.currentTarget;
         followTimeline.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
@@ -882,7 +884,7 @@ export function ProjectShell({
           /> : null}
       </WorkspaceAgentPane>}
     >
-      <ErrorBoundary key={`${projectId}:${workspaceEpoch}`} label={t("errorBoundary.label.workspace")} resetKey={project?.id} onHome={onHome}>
+      <ErrorBoundary key={`${projectId}:${workspaceEpoch}`} label={t("errorBoundary.label.workspace")} resetKey={project?.id} onHome={onHome} homeLabel={homeLabel}>
       {!project ? <section className="viewer-pane" /> : project.type !== "interactive-story" && project.type !== "asset-canvas" ? (
         <CodingWorkspace
           project={project}
@@ -909,6 +911,7 @@ export function ProjectShell({
           chatOnRight={chatLayout === "right"}
           chatCollapsed={agentIsCollapsed}
           onHome={requestHome}
+          homeLabel={homeLabel}
           onToggleChat={isGodotProject ? undefined : () => setAgentCollapsed((collapsed) => !collapsed)}
         />
       ) : project.type === "asset-canvas" ? <Suspense fallback={<div className="design-loading"><LoaderCircle className="spin" size={18} /></div>}><CanvasWorkspace
@@ -923,6 +926,7 @@ export function ProjectShell({
         chatOnRight={chatLayout === "right"}
         chatCollapsed={agentIsCollapsed}
         onHome={requestHome}
+        homeLabel={homeLabel}
         onToggleChat={() => setAgentCollapsed((collapsed) => !collapsed)}
       /></Suspense> : <PlayableEditorWorkspace
         project={project}
@@ -942,6 +946,7 @@ export function ProjectShell({
         chatOnRight={chatLayout === "right"}
         chatCollapsed={agentIsCollapsed}
         onHome={requestHome}
+        homeLabel={homeLabel}
         onToggleChat={() => setAgentCollapsed((collapsed) => !collapsed)}
         onChatContextChange={setPlayableChat}
         onAskAgent={requestPrompt}
@@ -1019,14 +1024,14 @@ function UnfinishedRestoreBanner({ projectId, disabled, workspaceRevision, onClo
   );
 }
 
-function FatalState({ message, onHome }: { message: string; onHome: () => void }) {
+function FatalState({ message, onHome, homeLabel }: { message: string; onHome: () => void; homeLabel: string }) {
   return (
     <main className="fatal-state">
       <X size={24} />
       <h1>{t("projectShell.unavailable")}</h1>
       <p>{message}</p>
       <div className="fatal-actions">
-        <button type="button" onClick={onHome}><ArrowLeft size={15} />{t("sidebar.home")}</button>
+        <button type="button" onClick={onHome}><ArrowLeft size={15} />{homeLabel}</button>
         <button type="button" onClick={() => window.location.reload()}><RefreshCw size={15} />{t("common.reload")}</button>
       </div>
     </main>

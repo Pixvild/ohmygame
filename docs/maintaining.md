@@ -88,8 +88,11 @@ remaining work and an actionable next step before closing it.
 
 ## Release preparation
 
-1. Prepare version and release documentation changes through a focused
-   `chore/<short-name>` branch and PR into `dev`.
+1. Prepare the version in `package.json` and its user-visible release notes in
+   [CHANGELOG.md](../CHANGELOG.md) through a focused `chore/<short-name>` branch
+   and PR into `dev`. Collect changes from merged PRs since the previous release;
+   ordinary PRs do not update the changelog. Follow the
+   [changelog format and checks](desktop-releases.md#release-notes).
 2. Verify the release candidate's public checks and relevant platform, model,
    OAuth, and cloud integration behavior. Record environment-dependent checks
    that remain outstanding.
@@ -101,7 +104,8 @@ remaining work and an actionable next step before closing it.
    repository deletes head branches after merge, and deleting `dev` closes fork
    PRs that target it and retargets the rest to `main`.
 4. Create the matching version tag on the reviewed `main` commit. Pushing a
-   `v*` tag starts the desktop release workflow. See
+   `v*` tag starts the desktop release workflow, which validates the version and
+   changelog before either platform builds. See
    [desktop-releases.md](desktop-releases.md) for credentials, packaging,
    publication, and rollback.
 5. Synchronize `main` into `dev`, since the release merge commit exists only on

@@ -1,5 +1,6 @@
 import { previewPageUrl as isolatedPreviewUrl } from "../shared/preview-page.js";
 import {
+  ArrowLeft,
   Check,
   Copy,
   ChevronDown,
@@ -12,7 +13,6 @@ import {
   FolderOpen,
   FolderPlus,
   Globe2,
-  House,
   Image as ImageIcon,
   LaptopMinimalistic,
   Layers3,
@@ -56,6 +56,7 @@ import { useRuntimeConnection } from "./runtime-connection.js";
 import { DesktopGamePreview } from "./desktop-game-preview.js";
 import { t } from "./i18n.js";
 import { GitChangesList, useWorkspaceGitChanges, WorkspaceGitDiff } from "./workspace-git-changes.js";
+import { WorkspaceBackButton } from "./workspace-shell.js";
 
 type WorkspaceTab = "preview" | "code" | "assets";
 const CanvasWorkspace = lazy(() => import("./canvas-workspace.js").then((module) => ({ default: module.CanvasWorkspace })));
@@ -91,6 +92,7 @@ interface CodingWorkspaceProps {
   chatOnRight?: boolean;
   chatCollapsed?: boolean;
   onHome?: () => void;
+  homeLabel?: string;
   onToggleChat?: () => void;
 }
 
@@ -117,6 +119,7 @@ export function CodingWorkspace({
   chatOnRight = false,
   chatCollapsed = false,
   onHome,
+  homeLabel = t("navigation.backTo", { page: t("sidebar.projects") }),
   onToggleChat,
 }: CodingWorkspaceProps) {
   const supportsPreview = supportsWebPreview(project);
@@ -301,9 +304,7 @@ export function CodingWorkspace({
   ];
   const renderNavigation = () => <div className={`viewer-navigation${chatOnRight ? " is-chat-right" : ""}`}>
     {chatOnRight && onHome ? (
-      <button className="icon-button pane-header-action workspace-home-button" type="button" onClick={onHome} title={t("sidebar.home")} aria-label={t("sidebar.home")}>
-        <House size={14} />
-      </button>
+      <WorkspaceBackButton onClick={onHome} label={homeLabel} icon={ArrowLeft} />
     ) : null}
     <WorkspaceTabs tabs={tabs} active={shownTab} onChange={(tab) => {
       const navigate = () => {
