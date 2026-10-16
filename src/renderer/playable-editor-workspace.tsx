@@ -57,11 +57,16 @@ import {
   exportInteractiveStoryProject,
   getNodeCodebase,
   getPlayableValidation,
+  getStoryUpgrade,
   getWorkspaceFile,
   listPlayablePresets,
   listPlayableThumbnails,
   updateNodeCodebase,
+  undoStoryUpgrade,
+  upgradeStory,
 } from "./api.js";
+import { CanvasNotice } from "./canvas-notice.js";
+import type { StoryUpgradeStatus } from "../shared/story-web.js";
 import { PublishDialog, type PublishDetails } from "./publish-dialog.js";
 import { WorkspaceCodeView } from "./coding-workspace.js";
 import { playtestHash } from "./routes.js";
@@ -135,6 +140,8 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   const projectId = project.id;
   const [writeVersion] = useState(() => workspaceVersion(projectId));
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [upgrade, setUpgrade] = useState<StoryUpgradeStatus>();
+  const [missingAfterUpgrade, setMissingAfterUpgrade] = useState<string[]>([]);
   const [notice, setNotice] = useState<string>();
   const [graphMeta, setGraphMeta] = useState<GraphMeta>();
   const [nodes, setNodes] = useState<PlayableFlowNode[]>([]);
@@ -271,6 +278,28 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
       clearTimeout(retry);
     };
   }, [projectId, workspaceRevision]);
+
+  // A story from before web stories is offered the upgrade; a fresh upgrade can be taken back.
+  useEffect(() => {
+    let disposed = false;
+    void getStoryUpgrade(projectId).then((status) => { if (!disposed) setUpgrade(status); }).catch(() => {});
+    return () => { disposed = true; };
+  }, [projectId, workspaceRevision]);
+
+  async function runUpgrade(): Promise<void> {
+    // Unsaved edits go first; the upgrade then reloads every editor.
+    if (codebase) await save(codebase);
+    const result = await upgradeStory(projectId);
+    setMissingAfterUpgrade(result.missingAssets);
+    setUpgrade(await getStoryUpgrade(projectId));
+  }
+
+  async function undoUpgrade(): Promise<void> {
+    if (codebase) await save(codebase);
+    await undoStoryUpgrade(projectId);
+    setMissingAfterUpgrade([]);
+    setUpgrade(await getStoryUpgrade(projectId));
+  }
 
   useEffect(() => {
     if (phase !== "ready") return;
@@ -1078,6 +1107,22 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
         <div className="interactive-story-canvas">
           {phase === "loading" ? <div className="story-canvas-state">{t("storyEditor.loadingScenes")}</div> : null}
           {phase === "error" ? <div className="story-canvas-state story-canvas-state-error">{notice}</div> : null}
+          {phase === "ready" && upgrade && !upgrade.web ? <CanvasNotice
+            className="story-upgrade-notice"
+            message={t("storyEditor.upgradeOffer")}
+            detail={t("storyEditor.upgradeDetail")}
+            actionLabel={t("storyEditor.upgrade")}
+            onAction={runUpgrade}
+          /> : null}
+          {phase === "ready" && upgrade?.web && upgrade.upgradedAt ? <CanvasNotice
+            className="story-upgrade-notice"
+            tone={missingAfterUpgrade.length ? "warning" : "neutral"}
+            message={t("storyEditor.upgraded")}
+            {...(missingAfterUpgrade.length ? { detail: t("storyEditor.upgradedMissing", { assets: missingAfterUpgrade.join(", ") }) } : {})}
+            actionLabel={t("storyEditor.undoUpgrade")}
+            onAction={undoUpgrade}
+            onDismiss={() => setUpgrade({ web: true })}
+          /> : null}
           {phase === "ready" ? (
             <PlayableCanvasContext.Provider value={canvasPlayer}>
               <EditorCanvas<PlayableFlowNode>

@@ -2,6 +2,7 @@ import { inspectPreviewConfiguration } from "./preview-configuration.js";
 import { CheckpointStore } from "./checkpoints.js";
 import { ProjectWrites } from "./project-writes.js";
 import { registerCheckpointRoutes } from "./checkpoint-routes.js";
+import { registerStoryWebRoutes } from "./story-web-routes.js";
 import { readWorkspaceVersion } from "./workspace-notice.js";
 import { withCanvasLock } from "./canvas-workspace.js";
 import { validatePreviewSettings } from "../shared/preview-settings.js";
@@ -910,6 +911,10 @@ export function createApp(options: AppOptions = {}) {
   registerCheckpointRoutes(app, {
     store: checkpoints,
     snapshot: snapshotWorkspace, writes: projectWrites, projects, conversations, agents, previews, events,
+    busy: (id) => publishing.has(id) || canvasStore.isProjectBusy(id) || tools.jobs().some((job) => job.context?.projectId === id && job.status === "running"),
+  });
+  registerStoryWebRoutes(app, {
+    projects, agents, writes: projectWrites, checkpoints, snapshot: snapshotWorkspace, library, events,
     busy: (id) => publishing.has(id) || canvasStore.isProjectBusy(id) || tools.jobs().some((job) => job.context?.projectId === id && job.status === "running"),
   });
 

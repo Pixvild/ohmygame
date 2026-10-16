@@ -2064,6 +2064,32 @@ describe("Playable Nodes projects", () => {
     expect(runtime).toMatchObject({ available: true, definition: { graph: { nodes: [] } } });
   });
 
+  it("upgrades a sandboxed story to a web story and takes the upgrade back", async () => {
+    const app = await createPlayableApp("ohmygame-story-upgrade-");
+    const project = (await app.inject({ method: "POST", url: "/projects", payload: { name: "Old", type: "interactive-story" } })).json();
+    // A story from before web stories has no page and no runtime of its own.
+    await rm(path.join(project.workspacePath, "index.html"));
+    await rm(path.join(project.workspacePath, "story"), { recursive: true });
+    await app.inject({ method: "POST", url: `/projects/${project.id}/playable/nodes`, payload: { preset: "visual-novel", id: "chapter" } });
+    const status = () => app.inject({ method: "GET", url: `/projects/${project.id}/interactive-story/upgrade` }).then((response) => response.json());
+    expect(await status()).toEqual({ web: false });
+    expect((await app.inject({ method: "GET", url: `/projects/${project.id}/playable` })).json().web).toBeUndefined();
+
+    const upgraded = await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/upgrade` });
+    expect(upgraded.statusCode).toBe(200);
+    expect(upgraded.json()).toMatchObject({ copiedAssets: [], missingAssets: [] });
+    expect(upgraded.json().changed).toEqual(expect.arrayContaining(["index.html", "story/story-web/runtime.js"]));
+    expect(await status()).toMatchObject({ web: true, upgradedAt: expect.any(String) });
+    expect((await app.inject({ method: "GET", url: `/projects/${project.id}/playable` })).json().web).toBe(true);
+    expect((await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/upgrade` })).statusCode).toBe(409);
+
+    const undone = await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/upgrade/undo` });
+    expect(undone.statusCode).toBe(200);
+    expect(await status()).toEqual({ web: false });
+    await expect(readFile(path.join(project.workspacePath, "index.html"))).rejects.toThrow();
+    expect(await readFile(path.join(project.workspacePath, "nodes/chapter/node.js"), "utf8")).toContain('import script from "./script.txt";');
+  });
+
   it("lists Presets and adds a Node from one", async () => {
     const app = await createPlayableApp("ohmygame-playable-presets-");
     const project = (await app.inject({ method: "POST", url: "/projects", payload: { type: "interactive-story" } })).json();

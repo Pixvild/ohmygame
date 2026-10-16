@@ -1,3 +1,4 @@
+import type { StoryUpgradeResult, StoryUpgradeStatus } from "../shared/story-web.js";
 import type { CommunityGameStats, CommunityGamesQuery, CommunityProfile } from "../shared/publish-v1.js";
 import { runtimeConnection, subscribeRuntimeConnection } from "./runtime-connection.js";
 import { assertWorkspaceVersion, observeWorkspaceVersion, workspaceVersion, type WorkspaceRequestInit } from "./workspace-version.js";
@@ -635,6 +636,19 @@ export async function getProject(projectId: string): Promise<ProjectState> {
 
 export async function ensureProjectPreview(projectId: string): Promise<{ url: string; title: string }> {
   return request(`/projects/${encodeURIComponent(projectId)}/preview?reuse=1`, { method: "POST" });
+}
+
+/** Whether an Interactive Story plays as its own page, and whether its upgrade can be taken back. */
+export async function getStoryUpgrade(projectId: string): Promise<StoryUpgradeStatus> {
+  return request(`/projects/${projectId}/interactive-story/upgrade`);
+}
+
+export async function upgradeStory(projectId: string): Promise<StoryUpgradeResult> {
+  return request(`/projects/${projectId}/interactive-story/upgrade`, { method: "POST" });
+}
+
+export async function undoStoryUpgrade(projectId: string): Promise<{ changed: string[] }> {
+  return request(`/projects/${projectId}/interactive-story/upgrade/undo`, { method: "POST" });
 }
 
 export async function getNodeRuntime(projectId: string): Promise<NodeRuntimeResponse> {
