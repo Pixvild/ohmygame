@@ -67,6 +67,10 @@ The rules for every story:
   `"story": { "hidden": true }` so the Story Map leaves it out. Set
   `story.ending` only where the guess from Signals is wrong, and
   `story.label` when players should see another name than the title.
+- Files a Preset added under `shared/`, such as the Project Style and the
+  Visual Novel player in `shared/vn/`, are the project's source: change them
+  freely. OhMyGame writes them only when they are missing and never updates
+  them.
 - Keep IDs and source paths stable. Do not rely on `window` globals.
 - Run the checks below before finishing.
 
@@ -152,6 +156,19 @@ and other screens
 outside the story are `story.hidden`, and that the endings are right. Change
 how the map looks in that node's code; `context.story.map()` already gives
 the layout and what the player has seen.
+
+**Change the title screen.** The `main-menu` Preset has Start, Continue,
+Load, Story map, and Settings. Load and Settings are the node's own code,
+with no Signal: Load lists `context.session.slots()` and continues the one
+picked with `loadSlot(id)`, and Settings has a slider per preference, the
+music and sound volumes the Runtime reads. When the game reads another
+preference, such as a Visual Novel's `textSpeed` and `autoWait`, add a slider
+for it there.
+
+**Mix kinds of Scenes.** A visual novel chapter, a film shot, a QTE, and a
+phone are all nodes, connected by Signals in any order. Build each the way
+it needs; they share State, the save and its slots, music, and preferences
+without anything extra.
 
 **Build a visual novel chapter.** Create a node from the `visual-novel`
 Preset. Put the author's lines in its `script.txt` in the format described

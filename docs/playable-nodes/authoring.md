@@ -484,7 +484,7 @@ the Visual Novel's shows its first line of dialogue.
 | Template  | Starter content                                        | Starter Signals        |
 | --------- | ------------------------------------------------------ | ---------------------- |
 | Blank     | The background; a click or the video's end continues   | `next`                 |
-| Main menu | Title, tagline, a list of entries, over the background | `start`, `story-map`   |
+| Main menu | Title, tagline, entries, Load, and Settings over the background | `start`, `story-map`   |
 | Choice    | A subtitle line and answer bars that can read State    | `option-a`, `option-b` |
 | QTE       | A key to press before a ring runs out                  | `success`, `fail`      |
 | Hotspot   | A picture with pulsing spots, one Signal per spot      | `door`, `window`       |
@@ -501,7 +501,35 @@ small game, start from Blank plus a description.
 
 Templates live in OhMyGame, not in projects. Creating a Scene copies the
 Template's source into `nodes/<id>/`; later Template changes do not affect
-existing Scenes.
+existing Scenes. The shared files a Template brings, such as the Visual Novel
+player, are written only when the project lacks them, and OhMyGame never
+updates them afterwards: like the Scene's own files, they are the author's.
+
+### Main menu
+
+The Main menu is the game's title screen: **Start**, **Continue**, **Load**,
+**Story map**, and **Settings**. Start begins a new game; Continue returns to
+the saved game and shows disabled until there is one.
+
+- **Load** lists the slots that hold a game, with when each was saved and
+  its note, such as the line a Visual Novel was on. Picking one continues
+  that game. Load shows disabled until a slot holds a game, and a slot saved
+  by another version of the game shows but cannot be loaded.
+- **Settings** has a slider for each of the player's preferences: music and
+  sound volume, which the Runtime applies everywhere. A game that reads more,
+  such as a Visual Novel's text speed, can have a slider for it here too.
+
+Load and Settings open over the menu and close with **Back** or Esc. They are
+the Scene's own code, with no Exit, so the author asks the Agent to change or
+remove them like any other part of the Scene.
+
+### One story, many kinds of Scene
+
+A Visual Novel chapter, a film shot with a choice, a QTE, and a phone the
+player looks through are all Scenes. They connect by Exits in any order, and
+they share what the game remembers: Variables, the save and its slots, the
+music, and the player's settings. A story can open on a film Scene, continue
+into a Visual Novel chapter, and end on a QTE without anything to switch.
 
 ### Visual Novel Scenes
 
@@ -528,9 +556,10 @@ and a picture (an image Asset) for each look, are listed once in
 `shared/vn/characters.json`.
 
 The player is ordinary shared project source under `shared/vn/`, like the
-Project Style: the first Visual Novel Scene adds it, later ones leave the
-author's changes to it alone, and changing `player.css` restyles every
-Visual Novel Scene. It types each line out and advances on a click, Space, or
+Project Style: the first Visual Novel Scene adds it, and from then on it is
+the author's. OhMyGame never updates it, so a project keeps the player it
+started with; ask the Agent for anything a newer one does. Changing
+`player.css` restyles every Visual Novel Scene. It types each line out and advances on a click, Space, or
 Enter. Its quick menu has:
 
 - **Save** and **Load**: twelve slots, each showing when it was saved and
