@@ -22,7 +22,22 @@ and the tools it uses to verify results.
 
 ## Project instructions
 
-Every project contains an `AGENTS.md` with the stable rules:
+Every project contains an `AGENTS.md` with the stable rules, and a section on
+web stories:
+
+- `story/` holds the story runtime, which is project code: change it when the
+  game needs something it does not do, keeping `graph.json` as the flow, the
+  node `context`, the `scene` query parameter, and the one background per
+  node.
+- When `story/manifest.json` lists `pending` files, merge the newer runtime
+  files under `.ohmygame/story-runtime/<version>/` into the project's changed
+  ones, then remove `pending`.
+- Node code is a browser module with no bundler: relative imports, fetched
+  text files, and JSON with `with { type: "json" }`.
+- Browser storage may hold what belongs to the player across games; a game's
+  progress stays in State and positions.
+
+The rules for every story:
 
 - Every node is the same kind of thing. Presets are starting points; never
   recreate node types.

@@ -38,7 +38,22 @@ export class NodeCodebaseConflictError extends NodeCodebaseError {
   override readonly name = "NodeCodebaseConflictError";
 }
 
-const AGENT_INSTRUCTIONS = `# Playable Nodes Project
+/**
+ * Earlier AGENTS.md and README.md that OhMyGame wrote, by SHA-256. Upgrading
+ * a story to a web story replaces a copy that is still exactly one of them.
+ */
+export const PROJECT_GUIDE_UPGRADES: Record<"AGENTS.md" | "README.md", readonly string[]> = {
+  "AGENTS.md": [
+    "2466f982c14b84abb66f1521664644b687eb21c10f27f72bc6eedd807d9171d1",
+    "78bab6b86ae039e0b63d14da74e6f5f3fb3eca4ffbd2399de845a643d7ed699e",
+  ],
+  "README.md": [
+    "311594a64abc80d5b1c8270e064375268f8bb3eff44e58f634c3d275208c65e2",
+    "781d2b099d3acc5d87555668f8d935acbbbbccbddb39e052471367224275dc6f",
+  ],
+};
+
+export const AGENT_INSTRUCTIONS = `# Playable Nodes Project
 
 This workspace is the source of truth for an OhMyGame Playable Nodes project.
 
@@ -66,7 +81,17 @@ This workspace is the source of truth for an OhMyGame Playable Nodes project.
 - An entry, button, or link whose Signal may go nowhere checks \`context.navigation.connected(signalId)\` and shows disabled instead of emitting. Publishing requires every Signal other than navigation ones to be connected.
 - A new project has no Nodes. \`playable_add_node\` makes the first Node the Entry Node; when you add the first Node to graph.json yourself, set \`entryNodeId\` to it.
 - Keep IDs and source paths stable when editing existing objects. You do not need to edit \`editor/layout.json\`; the editor places new Nodes.
-- Read \`README.md\` and the schemas in \`schemas/\` before changing the contract. Do not copy or modify the OhMyGame Runtime inside this project.
+- Read \`README.md\` and the schemas in \`schemas/\` before changing the contract.
+
+## Web stories
+
+A project with \`index.html\` and \`story/\` is a web story: it plays as its own page, and \`story/\` holds the story runtime that reads \`graph.json\` and loads each Scene's files as they are. A project without them plays in OhMyGame's sandbox; there, never copy or modify the Runtime.
+
+- The runtime under \`story/\` is project code. Change it when the game needs something it does not do, and keep what the editor relies on: \`graph.json\` as the story's flow, the \`context\` every Scene's \`mount\` receives, the \`scene\` query parameter, and the one \`data-media="backdrop"\` background per Scene.
+- \`story/manifest.json\` records the runtime OhMyGame wrote. When it lists \`pending\` files, a newer runtime changed files you or the author changed; the newer ones are under \`.ohmygame/story-runtime/<version>/\`. Merge them into the project's files, keeping the project's changes, then remove \`pending\` from the manifest.
+- A Scene's code loads as a browser module, with no bundler: import project files by relative path, read text with \`await (await fetch(new URL("./script.txt", import.meta.url))).text()\`, and import JSON with \`with { type: "json" }\`. Packages from \`node_modules\` are not available.
+- The page may use browser storage for what belongs to the player across every game, such as lines read or pictures unlocked. Keep a game's progress in \`context.state\` and \`context.position\`, so saves, slots, and Continue stay right.
+- Media a Scene uses goes in \`graph.json\` \`assets\` as a project file, so publishing includes it.
 
 ## Words the editor uses
 
@@ -84,7 +109,7 @@ The user sees the editor, not this contract. Talk to them in its words: say "the
 | On Story map, Ending | \`story.hidden\`, \`story.ending\` |
 `;
 
-const PROJECT_DOCUMENTATION = `# Playable Nodes Project
+export const PROJECT_DOCUMENTATION = `# Playable Nodes Project
 
 This project is made of one graph plus ordinary browser source files. Every Node has the same capabilities; names such as menu, scene, archive, or puzzle are authoring ideas rather than runtime types.
 
@@ -116,7 +141,11 @@ Each Node module exports \`mount(context)\`. The Runtime supplies:
 
 A shared component receives the Node's context from the Node that mounts it, so it emits that Node's Signals: every Node that shows it declares them in \`graph.json\`.
 
-The mount function may return a synchronous or asynchronous cleanup function. Source may import local Shared Modules and dependencies declared by this project. Network access is unavailable at runtime.
+The mount function may return a synchronous or asynchronous cleanup function.
+
+In a web story (with \`index.html\` and \`story/\`), the page loads each Scene's files as they are: modules import local files by relative path, text files are fetched, and JSON imports use \`with { type: "json" }\`. The runtime under \`story/\` is the project's own and can be changed; \`story/manifest.json\` records the version OhMyGame wrote. Publishing packages the page, \`story/\`, \`graph.json\`, \`nodes/\`, \`shared/\`, and the assets the story uses.
+
+In a story that plays in OhMyGame's sandbox, Source may import local Shared Modules and dependencies declared by this project, and network access is unavailable at runtime.
 `;
 
 export function createPlayableStarterCodebase(

@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addPlayableNode } from "../src/daemon/playable-add-node.js";
-import { createNodeCodebase, readNodeCodebase, writeNodeCodebase } from "../src/daemon/playable-codebase.js";
+import {
+  AGENT_INSTRUCTIONS,
+  createNodeCodebase,
+  PROJECT_DOCUMENTATION,
+  PROJECT_GUIDE_UPGRADES,
+  readNodeCodebase,
+  writeNodeCodebase,
+} from "../src/daemon/playable-codebase.js";
 import { buildPlayableProject } from "../src/daemon/playable-project.js";
 import { storyWebRuntimeModules } from "../src/daemon/story-web-bundle.js";
 import {
@@ -152,5 +159,29 @@ describe("browserImports", () => {
       'import { playScript } from "../../shared/vn/player.js";',
       'import tree from "./tree.json" with { type: "json" };',
     ].join("\n"));
+  });
+});
+
+describe("project guides", () => {
+  it("records the guides that ship now, so changing them keeps earlier copies upgradable", () => {
+    // When this fails because a guide changed, add the old hash to PROJECT_GUIDE_UPGRADES, then record the new one here.
+    expect({ agents: sha(AGENT_INSTRUCTIONS), readme: sha(PROJECT_DOCUMENTATION) }).toEqual({
+      agents: "fa451c238c2e49ff840c6811abb3fda53cdf385e97cd5d9916e6f78dff9855b8",
+      readme: "547ed93bccfae4980075bfb76e8586971acb71de10ce4896def59d0a0ead4a6c",
+    });
+    expect(PROJECT_GUIDE_UPGRADES["AGENTS.md"]).not.toContain(sha(AGENT_INSTRUCTIONS));
+    expect(PROJECT_GUIDE_UPGRADES["README.md"]).not.toContain(sha(PROJECT_DOCUMENTATION));
+  });
+
+  it("tells the Agent how a web story's runtime and Scenes work", () => {
+    expect(AGENT_INSTRUCTIONS).toContain("## Web stories");
+    expect(AGENT_INSTRUCTIONS).toContain(".ohmygame/story-runtime/<version>/");
+  });
+
+  it("leaves a guide the author changed when upgrading", async () => {
+    const root = await legacyProject();
+    await writeFile(path.join(root, "AGENTS.md"), "# Our own rules\n");
+    await upgradeToWebStory(root, async () => undefined);
+    expect(await read(root, "AGENTS.md")).toBe("# Our own rules\n");
   });
 });

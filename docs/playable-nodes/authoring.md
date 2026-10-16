@@ -22,6 +22,19 @@ The editor also reuses the parts of the current Interactive Story editor that
 already work well. The redesign removes node-type-specific forms; it does not
 replace the whole interface.
 
+## Upgrading a story
+
+Interactive Stories play as their own web page (see
+[runtime.md](runtime.md#page-and-lifecycle)). A story made before that plays
+in OhMyGame's sandbox, and the Story canvas shows a notice at the top:
+"This story plays in the old sandbox. Upgrade it to play as its own web page,
+which the AI can change entirely, from saving to music," with **Upgrade** and
+the details of what it does. Upgrading takes a checkpoint first; the notice
+then says the story plays as its own page and offers **Undo upgrade**, and
+names any Library media that could not be found and must be replaced before
+publishing. Closing the notice keeps the upgrade. Unsaved edits are saved
+before either, and every editor reloads after.
+
 ## Workspace
 
 The workspace keeps the current Interactive Story layout:
@@ -524,6 +537,11 @@ Enter. Its quick menu has:
 - **Title**: the Scene's `title` navigation Exit, usually to the Main menu.
   It shows disabled until it is connected.
 
+A line's words can be changed where the preview shows them: with **Text**,
+editing the dialogue or narration changes those words in `script.txt`, and
+**Select** names the script line for the chat. The player marks each line it
+shows with where its words start in the script.
+
 An answer whose Exit is not connected shows disabled. A script mistake, or an
 Asset, Variable, or character the script uses but the project does not
 declare, stops the Scene when it opens, naming the line.
@@ -540,7 +558,8 @@ background, so Visual Novel and interactive film Scenes mix in one game.
 
 ### Scene thumbnails
 
-Thumbnails are screenshots of the real Scene, never a separate rendering.
+Thumbnails are screenshots of the real Scene, never a separate rendering. A
+web story's are taken from its own page, opened at the Scene without sound.
 
 - The canvas captures every Scene that has no thumbnail, or one of an older
   build, without it being opened: the desktop app runs the Scene in a hidden
@@ -568,10 +587,11 @@ The same capture is attached to Agent requests about that Scene.
 ### Element picking, text editing, and moving
 
 Picking (**Select**), in-place editing (**Text**), and moving (**Move**) are editor tooling
-implemented by the sandbox host, not by node code, and they are disabled in
-the Published Player.
+implemented by the editor bridge the preview injects into the story's page (or
+by the sandbox host, for a story that has not been upgraded), not by node
+code. A published game never has them.
 
-1. **Select**, **Text**, or **Move** puts the preview into pick mode. The sandbox host
+1. **Select**, **Text**, or **Move** puts the preview into pick mode. The bridge
    draws a hover outline inside the node's surface and blocks node input.
 2. With **Select**, clicking returns a **picked element** description: node
    ID, source location when known, CSS path within the node root, tag,

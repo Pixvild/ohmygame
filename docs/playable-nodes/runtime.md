@@ -13,32 +13,40 @@ The Runtime owns everything that must survive a node:
 - music and sounds;
 - the player's preferences;
 - what the player has seen, for the Story Map;
-- node lifecycle;
-- the sandbox that hosts node code.
+- node lifecycle and loading each node's files.
 
 Nodes own presentation and input. The Runtime never renders node content, and
 nodes never own authoritative state or choose the next node.
 
-The editor preview, Playtest, and the Published Player use the same Runtime,
-graph, and compiled surfaces. Editor tooling (preview policy, element picking,
-capture, diagnostics) is layered on by the host and never changes what node
-code sees.
+An Interactive Story is a **web story**: it plays as its own page. The
+project's `index.html` loads the Runtime from `story/`, which reads
+`graph.json` and loads each node's files as they are. The editor preview,
+Playtest, game_use, and the published game all open that page through the
+project preview or as static files. Editor tooling (preview policy, element
+picking, capture, diagnostics) is injected by the preview and never changes
+what node code sees, and never ships with the game.
+
+Stories made before web stories play the same Runtime in OhMyGame's sandbox
+until the author upgrades them; see [Sandboxed stories](#sandboxed-stories).
 
 ## Project files
 
 ```text
+index.html              the page that plays the story
+story/                  the story runtime: readable modules, project code
+story/manifest.json     the runtime version OhMyGame wrote, and each file's hash
 graph.json              runtime graph and dependency manifest
-nodes/<id>/             index.html, style.css, node.js for each node
+nodes/<id>/             index.html, style.css, node.js for each node, and the node's own files
 shared/                 ordinary modules imported by more than one node
 shared/components/      UI shown on more than one node, such as a top bar
 shared/style/           Project Style: theme and components
 editor/layout.json      editor-only positions and canvas viewport
 schemas/                JSON Schemas for graph.json and editor/layout.json
 AGENTS.md, README.md    rules and reference for the Agent and authors
-.ohmygame/              editor cache (thumbnails); never published
+.ohmygame/              editor cache (thumbnails, newer runtime files); never published
 ```
 
-A new project contains the default Project Style and no nodes; the author
+A new project is a web story with the default Project Style and no nodes; the author
 starts from a Template or the Agent from the author's description. A project
 with no nodes, new or after the author deletes them all, is a valid draft:
 `entryNodeId` then names nothing, and the first node added becomes the Entry
@@ -299,33 +307,40 @@ State.
   decides whether it is an `<img>`, a CSS background, a video, a texture, or
   anything else.
 
-## Sandbox and lifecycle
-
-One Player instance runs one sandbox:
+## Page and lifecycle
 
 ```text
-Player host (editor, Playtest, or Published Player)
-└── iframe sandbox="allow-scripts"   (opaque origin, strict CSP)
-    └── sandbox document
-        ├── Node Runtime
-        └── Node layer    → ShadowRoot → current node surface
+index.html (the project preview, Playtest, or the published game)
+└── story/story-web/runtime.js
+    ├── Node Runtime
+    └── stage, scaled to fit the window
+        └── ShadowRoot → current node surface
 ```
 
-- The iframe has exactly `sandbox="allow-scripts"`; it never gets
-  `allow-same-origin`. The CSP denies network, objects, forms, and base URLs,
-  and allows only the data/blob media and inline styles compiled surfaces
-  need.
-- The Runtime lives inside the sandbox and talks to the host only by
-  messages: initialization with the compiled definition and asset bytes, save
-  requests, snapshots, and diagnostics.
-- Each surface gets its own `ShadowRoot`, so markup and CSS are scoped.
-- Each mount imports the node's compiled module from a fresh blob URL, so
-  module-level variables start fresh on every mount.
-- Successive nodes share one JavaScript realm. `window`, `document`
-  listeners, and globals are not isolated between surfaces. Node code must use
-  `context.root`, cleanup, and `lifecycle.signal`, and must not rely on
-  globals surviving or being absent. This is a documented limitation, not a
-  guarantee.
+- The page fetches `graph.json`, starts at `?scene=<id>` or the Entry Node,
+  and keeps the stage at the project viewport, scaled to fit.
+- Mounting a node fetches its HTML into a new `ShadowRoot`, links its
+  stylesheet, and imports its module as a browser module, with a fresh query
+  each mount so module-level variables start fresh. Its imports and stylesheet
+  imports resolve like any page's; there is no bundler, so a node imports
+  project files by relative path, fetches text files with
+  `new URL("./script.txt", import.meta.url)`, and imports JSON with
+  `with { type: "json" }`.
+- Saves, slots, what was seen, and preferences are kept in the page's
+  `localStorage`. Node code runs with the page's full browser abilities,
+  storage included, and may keep what belongs to the player across games
+  there; a game's progress belongs in State and positions.
+- Successive nodes share one JavaScript realm; `window`, `document` listeners,
+  and globals are not isolated between surfaces. Node code must use
+  `context.root`, cleanup, and `lifecycle.signal`.
+
+The page reads a few query parameters: `scene`; `ohmygame-policy=report`
+(the Workbench preview); `ohmygame-save=none` (keep this session's games in
+memory, for Play from here); `ohmygame-new-game=1` and
+`ohmygame-forget-seen=1` (Playtest's Replay and its seen reset);
+`ohmygame-silent=1` (thumbnails); and `ohmygamePlaytest=1`, which exposes
+`window.__OHMYGAME_PLAYTEST__` for game_use. Editor tools find the Runtime as
+`window.__OHMYGAME_STORY__`.
 
 On a node transition the Runtime:
 
@@ -333,12 +348,35 @@ On a node transition the Runtime:
 2. aborts its lifecycle signal and awaits its cleanup;
 3. removes its ShadowRoot host;
 4. updates the back stack and checkpoints the save;
-5. imports the target's compiled module;
-6. creates a new ShadowRoot, injects compiled CSS and HTML;
+5. creates a new ShadowRoot with the target's HTML and stylesheet;
+6. imports the target's module;
 7. calls `mount(context)` and reveals the node when it settles.
 
 A startup or mount failure unmounts the node and puts the
 Runtime in an explicit failed state.
+
+### The story runtime in the project
+
+`story/` is project code, written by OhMyGame from its own Runtime source as
+one readable module per source file, comments kept. The Agent may change it.
+`story/manifest.json` records the runtime version and each file as written.
+When a web story opens in a newer OhMyGame, files nobody changed are
+replaced by the newer runtime's, files the runtime dropped are removed, and
+files the author or Agent changed stay: the newer file goes under
+`.ohmygame/story-runtime/<version>/` and the manifest lists it as `pending`
+for the Agent to merge.
+
+### Sandboxed stories
+
+A story without `index.html` and `story/` plays in OhMyGame's sandbox: an
+iframe with exactly `sandbox="allow-scripts"`, an opaque origin, and a CSP
+that denies network. The Runtime there talks to its host by messages, and the
+compiler bundles each node into one module. The Story editor offers
+**Upgrade**, which takes a checkpoint, copies the Library assets the story
+uses into `assets/library/`, rewrites imports a browser cannot load,
+adds `index.html` and `story/`, and replaces `AGENTS.md` and `README.md` if
+they are still as OhMyGame wrote them. **Undo upgrade** takes back the files
+changed between the two checkpoints.
 
 ## Save and session
 
@@ -531,17 +569,25 @@ empty under `follow`. `stateAccess` powers the
 Workbench's "State used" section; calling `get()` without a key records
 `"*"`.
 
-### Element picking and capture
+### Editor bridge, element picking, and capture
 
-In preview builds, the compiler adds an inert `data-ohmygame-source`
-attribute to each element written in node HTML. On request, the sandbox host
-enters pick mode and returns the picked element description defined in
-[authoring.md](authoring.md#element-picking-text-editing-and-moving). Capture
-uses the desktop host's page capture of the preview frame.
+For an Interactive Story, the preview proxy injects an editor bridge into
+every page it serves and annotates node HTML the page fetches with an inert
+`data-ohmygame-source` attribute on each element. In a page the editor opened,
+the bridge speaks the same messages as the sandbox: snapshots, reports,
+diagnostics, element picking and text editing as defined in
+[authoring.md](authoring.md#element-picking-text-editing-and-moving), and the
+background video's timeline. None of it is in the project or a published
+game. Node code may mark text it shows from a file of its own the same way,
+pointing at where the text starts on its line, as the Visual Novel player does
+for script lines. Capture uses the desktop host's page capture of the preview
+frame, for thumbnails too.
 
 ## Compiler
 
-The compiler turns the validated graph and workspace into one self-contained
+A web story's page loads node files as they are; the compiler still builds
+each node to check it and to report issues in the editor. For sandboxed
+stories it turns the validated graph and workspace into one self-contained
 JavaScript module and stylesheet per node.
 
 - HTML stays authored markup.
@@ -585,9 +631,18 @@ Limits: 500 nodes, 2,000 edges, 1,000 assets, 100 Signals per node, 500 asset de
 
 ## Publishing
 
-Publishing validates in `publish` mode, compiles the same definition used by
-Playtest, and writes a static directory with the Player, sandbox,
-`playable.json`, `manifest.json`, and the declared assets.
+A web story publishes as its own page. Publishing validates in `publish`
+mode, then packages `index.html`, `story/` (without its manifest),
+`graph.json`, `nodes/`, `shared/`, the assets `graph.json` declares, and
+other files under `assets/` that the story's code names by path. Editor
+files, schemas, the editor cache, and unused assets stay out. An asset still
+in the Library is refused; upgrading copies Library assets into the project.
+The same static directory is the HTML zip for itch.io and the like.
+
+A sandboxed story publishes as before: publishing validates in `publish`
+mode, compiles the same definition used by Playtest, and writes a static
+directory with the Player, sandbox, `playable.json`, `manifest.json`, and the
+declared assets.
 
 - Assets are stored by SHA-256 content hash; identical bytes share one file
   while keeping separate Asset IDs.
@@ -611,7 +666,6 @@ These fit the model but are not in v1:
 - a save management UI in the editor, and slot thumbnails;
 - a typed state schema;
 - voice and more than one music channel;
-- network access from node code;
 - stronger per-surface JavaScript isolation.
 
 Each should extend Node, Signal, State, and Runtime boundaries rather than

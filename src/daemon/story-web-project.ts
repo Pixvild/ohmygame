@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { NodeGraph } from "../shared/playable-nodes.js";
-import { resolveWorkspaceMutationPath } from "./playable-codebase.js";
+import { AGENT_INSTRUCTIONS, PROJECT_DOCUMENTATION, PROJECT_GUIDE_UPGRADES, resolveWorkspaceMutationPath } from "./playable-codebase.js";
 import { STORY_WEB_DIRECTORY, STORY_WEB_ENTRY, storyWebRuntimeModules } from "./story-web-bundle.js";
 
 /**
@@ -209,6 +209,11 @@ export async function upgradeToWebStory(
   }
   const runtime = await installStoryRuntime(workspacePath);
   await writeText(workspacePath, "index.html", storyWebIndexHtml(graph.title));
+  // The guides OhMyGame wrote gain the web story rules; ones the author changed stay theirs.
+  for (const [relative, content] of [["AGENTS.md", AGENT_INSTRUCTIONS], ["README.md", PROJECT_DOCUMENTATION]] as const) {
+    const current = await readText(workspacePath, relative);
+    if (current !== undefined && PROJECT_GUIDE_UPGRADES[relative].includes(hash(current))) await writeText(workspacePath, relative, content);
+  }
   return { copiedAssets, missingAssets, rewritten, runtime };
 }
 
