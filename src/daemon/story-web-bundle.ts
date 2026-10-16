@@ -1,44 +1,80 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
+import { build, transform } from "esbuild";
 
-const bundles = new Map<string, Promise<string>>();
+/** Where a web story project keeps its runtime, and the module its page loads. */
+export const STORY_WEB_DIRECTORY = "story";
+export const STORY_WEB_ENTRY = "story/story-web/runtime.js";
 
-/**
- * Bundles a web story module from OhMyGame's own source into one plain
- * script: the editor bridge the preview injects, or the story runtime a web
- * story project carries. Built once per daemon.
- */
-export function storyWebBundle(entry: "editor-bridge" | "runtime"): Promise<string> {
-  let bundle = bundles.get(entry);
-  if (!bundle) {
-    bundle = bundleEntry(entry);
-    bundle.catch(() => bundles.delete(entry));
-    bundles.set(entry, bundle);
-  }
-  return bundle;
+let bridge: Promise<string> | undefined;
+let modules: Promise<Record<string, string>> | undefined;
+
+/** The editor bridge the preview injects into a web story's pages, as one classic script. */
+export function storyWebEditorBridge(): Promise<string> {
+  bridge ??= (async () => {
+    const result = await build({
+      entryPoints: [await sourceFile("story-web/editor-bridge")],
+      bundle: true,
+      format: "iife",
+      target: "es2022",
+      write: false,
+      legalComments: "none",
+    });
+    return result.outputFiles[0]!.text;
+  })();
+  bridge.catch(() => { bridge = undefined; });
+  return bridge;
 }
 
-async function bundleEntry(entry: "editor-bridge" | "runtime"): Promise<string> {
-  // Source in development, the compiled module in a build.
-  const candidates = [".ts", ".js"].map((extension) => fileURLToPath(new URL(`../story-web/${entry}${extension}`, import.meta.url)));
-  let entryPoint: string | undefined;
-  for (const candidate of candidates) {
+/**
+ * The story runtime a web story project carries, as readable modules keyed by
+ * their path in the project: each is one OhMyGame source file with its types
+ * removed, so the Agent can read and change it like any project code.
+ */
+export function storyWebRuntimeModules(): Promise<Record<string, string>> {
+  modules ??= (async () => {
+    const entry = await sourceFile("story-web/runtime");
+    const sourceRoot = path.dirname(path.dirname(entry));
+    const { metafile } = await build({ entryPoints: [entry], bundle: true, format: "esm", write: false, metafile: true });
+    const files: Record<string, string> = {};
+    for (const input of Object.keys(metafile.inputs)) {
+      const absolute = path.resolve(input);
+      const relative = path.relative(sourceRoot, absolute).replace(/\.ts$/, ".js").split(path.sep).join("/");
+      files[`${STORY_WEB_DIRECTORY}/${relative}`] = await readableModule(absolute);
+    }
+    return files;
+  })();
+  modules.catch(() => { modules = undefined; });
+  return modules;
+}
+
+/**
+ * A module with its comments, which explain the runtime to whoever changes
+ * it. A build already holds it compiled by tsc; in development TypeScript
+ * strips the types, falling back to esbuild, which drops comments.
+ */
+async function readableModule(file: string): Promise<string> {
+  const source = await readFile(file, "utf8");
+  if (!file.endsWith(".ts")) return source.replace(/\n\/\/# sourceMappingURL=.*\s*$/, "\n");
+  try {
+    const { default: ts } = await import("typescript");
+    return ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+  } catch {
+    return (await transform(source, { loader: "ts", format: "esm", target: "es2022" })).code;
+  }
+}
+
+/** Source in development, the compiled module in a build. */
+async function sourceFile(name: string): Promise<string> {
+  for (const extension of [".ts", ".js"]) {
+    const candidate = fileURLToPath(new URL(`../${name}${extension}`, import.meta.url));
     try {
       await access(candidate);
-      entryPoint = candidate;
-      break;
+      return candidate;
     } catch {}
   }
-  if (!entryPoint) throw new Error(`The web story ${entry} is missing from this build.`);
-  const result = await build({
-    entryPoints: [entryPoint],
-    bundle: true,
-    // The bridge is injected as a classic script; the runtime is the page's module.
-    format: entry === "editor-bridge" ? "iife" : "esm",
-    target: "es2022",
-    write: false,
-    legalComments: "none",
-  });
-  return result.outputFiles[0]!.text;
+  throw new Error(`The web story module ${name} is missing from this build.`);
 }

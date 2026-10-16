@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Spike: turns an Interactive Story workspace into a web story in place. It
- * adds index.html and story/runtime.js, and rewrites the two imports a
+ * adds index.html and the story runtime under story/, and rewrites the two imports a
  * browser cannot load on its own: text files become fetches and JSON imports
  * get an import attribute. Library assets are copied into the workspace when
  * the library directory is given.
@@ -10,7 +10,7 @@
  */
 import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { storyWebBundle } from "../src/daemon/story-web-bundle.ts";
+import { STORY_WEB_ENTRY, storyWebRuntimeModules } from "../src/daemon/story-web-bundle.ts";
 
 const [workspace, library] = process.argv.slice(2);
 if (!workspace) throw new Error("Usage: story-web-spike.mjs <workspace> [<library-directory>]");
@@ -47,8 +47,10 @@ for (const file of await sourceFiles(workspace)) {
   }
 }
 
-await mkdir(path.join(workspace, "story"), { recursive: true });
-await writeFile(path.join(workspace, "story/runtime.js"), await storyWebBundle("runtime"));
+for (const [relative, code] of Object.entries(await storyWebRuntimeModules())) {
+  await mkdir(path.dirname(path.join(workspace, relative)), { recursive: true });
+  await writeFile(path.join(workspace, relative), code);
+}
 await writeFile(path.join(workspace, "index.html"), `<!doctype html>
 <html>
   <head>
@@ -57,7 +59,7 @@ await writeFile(path.join(workspace, "index.html"), `<!doctype html>
     <title>${escapeHtml(graph.title)}</title>
   </head>
   <body>
-    <script type="module" src="story/runtime.js"></script>
+    <script type="module" src="${STORY_WEB_ENTRY}"></script>
   </body>
 </html>
 `);

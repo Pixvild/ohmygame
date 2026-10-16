@@ -1,15 +1,18 @@
 /**
- * The story runtime a web story project carries in `story/runtime.js`. The
+ * The story runtime a web story project carries under `story/`. The
  * project's `index.html` loads it; it reads `graph.json`, plays the Scenes
  * from their own files, and keeps saves, slots, settings, and what the player
  * has seen in the browser's storage.
  *
- * The page understands two query parameters: `scene` starts at a Scene
- * instead of the Start, and `ohmygame-policy=report` previews a Scene for the
- * editor, reporting Exits instead of following them and saving nothing.
+ * The page understands a few query parameters: `scene` starts at a Scene
+ * instead of the Start; `ohmygame-policy=report` previews a Scene for the
+ * editor, reporting Exits instead of following them and saving nothing;
+ * `ohmygame-new-game=1` forgets the saved game first, `ohmygame-forget-seen=1`
+ * what the player has seen, and `ohmygame-save=none` keeps this session's
+ * games and settings in memory only; and `ohmygamePlaytest=1`
+ * exposes `window.__OHMYGAME_PLAYTEST__` for game_use.
  *
- * Editor tools find the runtime as `window.__OHMYGAME_STORY__`; game_use reads
- * `window.__OHMYGAME_PLAYTEST__`.
+ * Editor tools find the runtime as `window.__OHMYGAME_STORY__`.
  */
 import {
   MemoryPlayablePreferencesStore,
@@ -57,6 +60,8 @@ async function start(): Promise<void> {
   const graphText = await (await fetch(new URL("graph.json", base))).text();
   const graph = JSON.parse(graphText) as NodeGraph;
   const preview = params.get("ohmygame-policy") === "report";
+  // A preview, or a Playtest from a chosen Scene, saves nothing, so it never touches the player's games.
+  const transient = preview || params.get("ohmygame-save") === "none";
   const scene = params.get("scene") ?? undefined;
 
   // Each Scene plays from its own files; the page loads them as they are.
@@ -75,6 +80,8 @@ async function start(): Promise<void> {
     .map(([id, asset]) => [id, new URL((asset.source as { path: string }).path, base).href]));
 
   const key = `ohmygame:story:${base.pathname}`;
+  if (params.get("ohmygame-new-game") === "1") localStorage.removeItem(key);
+  if (params.get("ohmygame-forget-seen") === "1") localStorage.removeItem(`${key}:seen`);
   const audio = new DocumentPlayableAudio(document);
   const host = new DocumentPlayableSurfaceHost(document, undefined, (root) => audio.watchNode(root), { base });
   fitStage(graph.viewport);
@@ -83,11 +90,10 @@ async function start(): Promise<void> {
     compiled,
     graphSignature: await signature(graphText),
     surfaceHost: host,
-    // A preview saves nothing, so it never touches the player's games.
-    saveStore: preview ? new MemoryPlayableSaveStore() : stored<PlayableSaveStore>(key),
-    slotStore: preview ? new MemoryPlayableSlotStore() : stored<PlayableSlotStore>(`${key}:slots`),
-    seenStore: preview ? new MemoryPlayableSeenStore() : stored<PlayableSeenStore>(`${key}:seen`),
-    preferencesStore: preview ? new MemoryPlayablePreferencesStore() : stored<PlayablePreferencesStore>(`${key}:preferences`),
+    saveStore: transient ? new MemoryPlayableSaveStore() : stored<PlayableSaveStore>(key),
+    slotStore: transient ? new MemoryPlayableSlotStore() : stored<PlayableSlotStore>(`${key}:slots`),
+    seenStore: transient ? new MemoryPlayableSeenStore() : stored<PlayableSeenStore>(`${key}:seen`),
+    preferencesStore: transient ? new MemoryPlayablePreferencesStore() : stored<PlayablePreferencesStore>(`${key}:preferences`),
     audio,
     assetUrls,
     ...(preview ? { policy: "report" as const } : {}),
@@ -96,13 +102,15 @@ async function start(): Promise<void> {
     onError: (error) => window.dispatchEvent(new CustomEvent(STORY_ERROR_EVENT, { detail: { message: errorMessage(error) } })),
   });
   window.__OHMYGAME_STORY__ = { runtime, host, graph };
-  window.__OHMYGAME_PLAYTEST__ = {
-    snapshot: () => runtime.snapshot(),
-    reset: () => {
-      localStorage.removeItem(key);
-      location.reload();
-    },
-  };
+  if (params.get("ohmygamePlaytest") === "1") {
+    window.__OHMYGAME_PLAYTEST__ = {
+      snapshot: () => runtime.snapshot(),
+      reset: () => {
+        localStorage.removeItem(key);
+        location.reload();
+      },
+    };
+  }
   // Errors thrown from Scene event handlers never pass through a Runtime call.
   window.addEventListener("error", (event) => runtime.recordError(event.error ?? event.message));
   window.addEventListener("unhandledrejection", (event) => runtime.recordError(event.reason));

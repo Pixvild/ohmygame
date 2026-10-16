@@ -18,6 +18,7 @@ import { access as fileAccess, readFile } from "node:fs/promises";
 import { OnboardingStore } from "./onboarding.js";
 import type { UpdateOnboardingRequest } from "../shared/onboarding.js";
 import path from "node:path";
+import { STORY_WEB_ENTRY } from "./story-web-bundle.js";
 import { fileURLToPath } from "node:url";
 import { ModelRuntime, SettingsManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
@@ -801,7 +802,8 @@ export function createApp(options: AppOptions = {}) {
             driver: playtest,
             resolveOpenTarget: async () => ({
               runtime: "web",
-              url: project.type === "interactive-story"
+              // A web story is played as its own page, like a Web Game; its runtime offers the playtest bridge.
+              url: project.type === "interactive-story" && !await isWebStory(project.workspacePath)
                 ? await playableDrafts.open(project)
                 : previewPageUrl(await previews.ensureStarted(project, false), "playtest"),
             }),
@@ -1215,7 +1217,7 @@ export function createApp(options: AppOptions = {}) {
       const definition = await buildPlayableProject(project.workspacePath);
       if (!definition) return { available: false };
       // A web story carries its own runtime and plays as a page.
-      const web = await fileAccess(path.join(project.workspacePath, "story", "runtime.js")).then(() => true, () => false);
+      const web = await isWebStory(project.workspacePath);
       return { available: true, definition, ...(web ? { web: true } : {}) };
     } catch (cause) {
       return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) });
@@ -3417,4 +3419,9 @@ function configuredDefaultModel(cwd: string, agentDir: string): AgentModelRef | 
   const provider = settings.getDefaultProvider();
   const id = settings.getDefaultModel();
   return provider && id ? { provider, id } : undefined;
+}
+
+/** A web story carries its own runtime and plays as a page through the project preview. */
+function isWebStory(workspacePath: string): Promise<boolean> {
+  return fileAccess(path.join(workspacePath, ...STORY_WEB_ENTRY.split("/"))).then(() => true, () => false);
 }

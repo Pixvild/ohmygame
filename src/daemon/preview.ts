@@ -31,7 +31,7 @@ import {
   previewScriptArguments,
 } from "./preview-launch.js";
 import { startStaticPreview } from "./preview-static.js";
-import { storyWebBundle } from "./story-web-bundle.js";
+import { storyWebEditorBridge } from "./story-web-bundle.js";
 
 interface PreviewOptions {
   readinessTimeoutMs?: number;
@@ -493,7 +493,7 @@ export class PreviewManager {
         },
         {
           port: preferredPort,
-          ...(project.type === "interactive-story" ? { story: { bridge: () => storyWebBundle("editor-bridge") } } : {}),
+          ...(project.type === "interactive-story" ? { story: { bridge: storyWebEditorBridge } } : {}),
           onActivity: (id, active) => {
             if (proxyHandle && this.#proxies.get(project.id) === proxyHandle)
               this.touch(project, `page:${id}`, active);
