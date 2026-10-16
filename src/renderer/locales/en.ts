@@ -1318,6 +1318,7 @@ const en = {
   contextMenu: {
     section: {
       Add: "Add",
+      Commands: "Commands",
       Plugins: "Plugins",
       Skills: "Skills",
     },
