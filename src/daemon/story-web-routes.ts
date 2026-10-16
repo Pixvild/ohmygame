@@ -9,7 +9,7 @@ import type { AssetLibrary } from "./asset-library.js";
 import type { CheckpointStore } from "./checkpoints.js";
 import type { ProjectManager } from "./projects.js";
 import type { ProjectWrites } from "./project-writes.js";
-import { isWebStory, upgradeToWebStory } from "./story-web-project.js";
+import { copyLibraryAssets, isWebStory, libraryAssets, upgradeToWebStory } from "./story-web-project.js";
 import { writeWorkspaceNotice } from "./workspace-notice.js";
 
 /** The last upgrade's snapshots, so the author can take it back. Editor cache; never published. */
@@ -75,22 +75,34 @@ export function registerStoryWebRoutes(
       const project = story(request.params.projectId);
       const web = await isWebStory(project.workspacePath);
       const record = web ? await readRecord(project.workspacePath) : undefined;
-      return { web, ...(record ? { upgradedAt: record.at } : {}) };
+      const library = web ? await libraryAssets(project.workspacePath) : [];
+      return { web, ...(record ? { upgradedAt: record.at } : {}), ...(library.length ? { libraryAssets: library } : {}) };
     }));
 
   app.post<{ Params: { projectId: string } }>("/projects/:projectId/interactive-story/upgrade", async (request, reply) =>
     send(reply, async (): Promise<StoryUpgradeResult> => {
       const project = story(request.params.projectId);
       assertIdle(project.id);
-      if (await isWebStory(project.workspacePath)) throw new Error("This story is already a web story.");
-      const before = await snapshot(project);
-      const upgrade = await writes.exclusive(project.id, () => upgradeToWebStory(project.workspacePath, async (assetId) => {
+      const libraryFile = async (assetId: string) => {
         try {
           return (await library.content(assetId)).absolutePath;
         } catch {
           return undefined;
         }
-      }));
+      };
+      // A web story can still take media in from the Library, which upgrading could not find before.
+      if (await isWebStory(project.workspacePath)) {
+        if (!(await libraryAssets(project.workspacePath)).length) throw new Error("This story is already a web story.");
+        const copied = await writes.exclusive(project.id, () => copyLibraryAssets(project.workspacePath, libraryFile));
+        const graph = JSON.parse(await readFile(path.join(project.workspacePath, "graph.json"), "utf8")) as { assets: Record<string, { source: { path?: string } }> };
+        const changed = copied.copiedAssets.length
+          ? ["graph.json", ...copied.copiedAssets.map((id) => graph.assets[id]?.source.path).filter((file): file is string => !!file)]
+          : [];
+        if (changed.length) await announce(project, changed, `Library media this story used were copied into the project under assets/library/, and graph.json now points at them: ${JSON.stringify(copied.copiedAssets)}.`);
+        return { ...copied, rewritten: [], changed };
+      }
+      const before = await snapshot(project);
+      const upgrade = await writes.exclusive(project.id, () => upgradeToWebStory(project.workspacePath, libraryFile));
       const after = await snapshot(project);
       await writeRecord(project.workspacePath, { before, after, at: new Date().toISOString() });
       const changed = (await checkpoints.diff(project, before, after)).map((change) => change.path);

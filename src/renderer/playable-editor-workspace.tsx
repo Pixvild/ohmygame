@@ -141,7 +141,6 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   const [writeVersion] = useState(() => workspaceVersion(projectId));
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [upgrade, setUpgrade] = useState<StoryUpgradeStatus>();
-  const [missingAfterUpgrade, setMissingAfterUpgrade] = useState<string[]>([]);
   const [notice, setNotice] = useState<string>();
   const [graphMeta, setGraphMeta] = useState<GraphMeta>();
   const [nodes, setNodes] = useState<PlayableFlowNode[]>([]);
@@ -289,15 +288,13 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   async function runUpgrade(): Promise<void> {
     // Unsaved edits go first; the upgrade then reloads every editor.
     if (codebase) await save(codebase);
-    const result = await upgradeStory(projectId);
-    setMissingAfterUpgrade(result.missingAssets);
+    await upgradeStory(projectId);
     setUpgrade(await getStoryUpgrade(projectId));
   }
 
   async function undoUpgrade(): Promise<void> {
     if (codebase) await save(codebase);
     await undoStoryUpgrade(projectId);
-    setMissingAfterUpgrade([]);
     setUpgrade(await getStoryUpgrade(projectId));
   }
 
@@ -1114,11 +1111,15 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
             actionLabel={t("storyEditor.upgrade")}
             onAction={runUpgrade}
           /> : null}
-          {phase === "ready" && upgrade?.web && upgrade.upgradedAt ? <CanvasNotice
+          {phase === "ready" && upgrade?.web && upgrade.libraryAssets?.length ? <CanvasNotice
             className="story-upgrade-notice"
-            tone={missingAfterUpgrade.length ? "warning" : "neutral"}
+            tone="warning"
+            message={t("storyEditor.libraryMedia", { assets: upgrade.libraryAssets.join(", ") })}
+            actionLabel={t("storyEditor.copyLibraryMedia")}
+            onAction={runUpgrade}
+          /> : phase === "ready" && upgrade?.web && upgrade.upgradedAt ? <CanvasNotice
+            className="story-upgrade-notice"
             message={t("storyEditor.upgraded")}
-            {...(missingAfterUpgrade.length ? { detail: t("storyEditor.upgradedMissing", { assets: missingAfterUpgrade.join(", ") }) } : {})}
             actionLabel={t("storyEditor.undoUpgrade")}
             onAction={undoUpgrade}
             onDismiss={() => setUpgrade({ web: true })}

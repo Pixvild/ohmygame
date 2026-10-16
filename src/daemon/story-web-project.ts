@@ -127,7 +127,7 @@ export async function publishableWebStoryFiles(workspacePath: string): Promise<s
   }
   for (const [id, asset] of Object.entries(graph.assets)) {
     if (asset.source.kind !== "workspace")
-      throw new Error(`Asset "${id}" is in the Library, not the project. Upgrade the story again to copy it in.`);
+      throw new Error(`Asset "${id}" is in the Library, not the project. Copy it into the project from the Story canvas, or replace it.`);
     files.add(asset.source.path);
   }
   // Code can name an asset by path rather than declare it.
@@ -181,23 +181,7 @@ export async function upgradeToWebStory(
   const graphText = await readText(workspacePath, "graph.json");
   if (graphText === undefined) throw new Error("This project has no graph.json.");
   const graph = JSON.parse(graphText) as NodeGraph;
-  const copiedAssets: string[] = [];
-  const missingAssets: string[] = [];
-  for (const [id, asset] of Object.entries(graph.assets)) {
-    if (asset.source.kind !== "library") continue;
-    const source = await libraryFile(asset.source.assetId);
-    if (!source) {
-      missingAssets.push(id);
-      continue;
-    }
-    const relative = `assets/library/${safeName(id)}${path.extname(source)}`;
-    const destination = await resolveWorkspaceMutationPath(workspacePath, relative);
-    await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(source, destination);
-    asset.source = { kind: "workspace", path: relative };
-    copiedAssets.push(id);
-  }
-  if (copiedAssets.length) await writeText(workspacePath, "graph.json", `${JSON.stringify(graph, null, 2)}\n`);
+  const { copiedAssets, missingAssets } = await copyLibraryAssets(workspacePath, libraryFile);
 
   const rewritten: string[] = [];
   for (const relative of await moduleFiles(workspacePath)) {
@@ -215,6 +199,44 @@ export async function upgradeToWebStory(
     if (current !== undefined && PROJECT_GUIDE_UPGRADES[relative].includes(hash(current))) await writeText(workspacePath, relative, content);
   }
   return { copiedAssets, missingAssets, rewritten, runtime };
+}
+
+/** Asset IDs the story still takes from the Library rather than the project. */
+export async function libraryAssets(workspacePath: string): Promise<string[]> {
+  const graph = JSON.parse((await readText(workspacePath, "graph.json")) ?? "null") as NodeGraph | null;
+  return graph ? Object.entries(graph.assets).filter(([, asset]) => asset.source.kind === "library").map(([id]) => id) : [];
+}
+
+/**
+ * Copies the Library assets the story uses into `assets/library/` and points
+ * the graph at the copies, so the project holds everything it plays.
+ * Assets the Library no longer has stay as they were.
+ */
+export async function copyLibraryAssets(
+  workspacePath: string,
+  libraryFile: (assetId: string) => Promise<string | undefined>,
+): Promise<{ copiedAssets: string[]; missingAssets: string[] }> {
+  const graphText = await readText(workspacePath, "graph.json");
+  if (graphText === undefined) throw new Error("This project has no graph.json.");
+  const graph = JSON.parse(graphText) as NodeGraph;
+  const copiedAssets: string[] = [];
+  const missingAssets: string[] = [];
+  for (const [id, asset] of Object.entries(graph.assets)) {
+    if (asset.source.kind !== "library") continue;
+    const source = await libraryFile(asset.source.assetId);
+    if (!source) {
+      missingAssets.push(id);
+      continue;
+    }
+    const relative = `assets/library/${safeName(id)}${path.extname(source)}`;
+    const destination = await resolveWorkspaceMutationPath(workspacePath, relative);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await copyFile(source, destination);
+    asset.source = { kind: "workspace", path: relative };
+    copiedAssets.push(id);
+  }
+  if (copiedAssets.length) await writeText(workspacePath, "graph.json", `${JSON.stringify(graph, null, 2)}\n`);
+  return { copiedAssets, missingAssets };
 }
 
 /**
