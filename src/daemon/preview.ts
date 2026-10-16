@@ -282,7 +282,10 @@ export class PreviewManager {
     let child: ChildProcess | undefined;
     let began = false;
     try {
-      const workspace = await resolvePreviewWorkspace(project);
+      // A web story is its own page: the folder is served as it is, whatever scripts it carries.
+      const workspace = await resolvePreviewWorkspace(project.type === "interactive-story"
+        ? { workspacePath: project.workspacePath, startupDirectory: ".", previewMode: "static" }
+        : project);
       assertCurrent();
       if (!workspace.runnable) {
         const message = workspace.error ?? "Workspace is not runnable yet";
