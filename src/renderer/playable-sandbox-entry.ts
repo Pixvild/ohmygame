@@ -17,6 +17,7 @@ import type { PlayableSeen } from "../shared/playable-story-map.js";
 import { DocumentPlayableAudio } from "../shared/playable-audio.js";
 import { reportBackdropMedia, type BackdropMediaReport } from "../shared/playable-media-report.js";
 import { DocumentPlayableSurfaceHost, loadPlayableModule } from "../shared/playable-sandbox.js";
+import { startPlayablePicking } from "../shared/playable-picking.js";
 
 let session: SandboxSession | undefined;
 
@@ -32,8 +33,7 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
     return;
   }
   if (event.data.kind === "ohmygame:playable:pick-cancel") {
-    if (session?.instanceId === event.data.instanceId)
-      session.host.stopPicking();
+    if (session?.instanceId === event.data.instanceId) stopPicking(session);
     return;
   }
   if (event.data.kind === "ohmygame:playable:media-control") {
@@ -123,18 +123,28 @@ function startPicking(instanceId: string, tool: PlayablePreviewTool): void {
   const current = session;
   // Picking is an authoring tool; published sessions never enable it.
   if (current?.instanceId !== instanceId || !current.preview) return;
-  current.host.startPicking(tool, {
+  stopPicking(current);
+  current.picking = startPlayablePicking(current.host.projectRoot, tool, {
     onPick: (pick, additive) => post({ kind: "ohmygame:playable:picked", instanceId, pick, additive }),
     onTextEdit: (edit) => post({ kind: "ohmygame:playable:text-edited", instanceId, edit }),
     onMove: (move) => post({ kind: "ohmygame:playable:moved", instanceId, move }),
-    onCancel: () => post({ kind: "ohmygame:playable:pick-cancelled", instanceId }),
+    onCancel: () => {
+      current.picking = undefined;
+      post({ kind: "ohmygame:playable:pick-cancelled", instanceId });
+    },
   });
+}
+
+function stopPicking(current: SandboxSession): void {
+  current.picking?.stop();
+  current.picking = undefined;
 }
 
 async function disposeSession(): Promise<void> {
   const current = session;
   session = undefined;
   if (!current) return;
+  stopPicking(current);
   current.saveStore.dispose();
   current.media?.stop();
   await current.runtime.dispose();
@@ -250,6 +260,7 @@ interface SandboxSession {
   host: DocumentPlayableSurfaceHost;
   saveStore: ParentSaveStore;
   audio?: DocumentPlayableAudio;
+  picking?: { stop: () => void };
   assetUrls: Record<string, string>;
   media?: BackdropMediaReport;
 }

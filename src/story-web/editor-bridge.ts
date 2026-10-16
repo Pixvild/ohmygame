@@ -10,6 +10,7 @@ import {
   type PlayableFrameMessage,
 } from "../shared/playable-player-protocol.js";
 import { reportBackdropMedia, type BackdropMediaReport } from "../shared/playable-media-report.js";
+import { startPlayablePicking } from "../shared/playable-picking.js";
 import type { StoryWebHandle } from "./runtime.js";
 
 const instanceId = new URLSearchParams(location.search).get("ohmygame-instance");
@@ -18,6 +19,11 @@ if (instanceId && window.parent !== window) connect(instanceId);
 function connect(instance: string): void {
   let story: StoryWebHandle | undefined;
   let media: BackdropMediaReport | undefined;
+  let picking: { stop: () => void } | undefined;
+  const stopPicking = () => {
+    picking?.stop();
+    picking = undefined;
+  };
   let scheduled = false;
 
   const post = (message: PlayableFrameMessage) => window.parent.postMessage(message, "*");
@@ -45,20 +51,28 @@ function connect(instance: string): void {
       ? { kind: "ohmygame:playable:error", instanceId: instance, error: detail.message }
       : { kind: "ohmygame:playable:diagnostic", instanceId: instance, error: detail.message });
   });
-  window.addEventListener("pagehide", () => media?.stop());
+  window.addEventListener("pagehide", () => {
+    stopPicking();
+    media?.stop();
+  });
 
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.source !== window.parent || !isPlayableHostMessage(event.data) || event.data.instanceId !== instance) return;
     const message = event.data;
     if (message.kind === "ohmygame:playable:pick-start") {
-      story?.host.startPicking(message.tool, {
+      stopPicking();
+      if (!story) return;
+      picking = startPlayablePicking(story.host.projectRoot, message.tool, {
         onPick: (pick, additive) => post({ kind: "ohmygame:playable:picked", instanceId: instance, pick, additive }),
         onTextEdit: (edit) => post({ kind: "ohmygame:playable:text-edited", instanceId: instance, edit }),
         onMove: (move) => post({ kind: "ohmygame:playable:moved", instanceId: instance, move }),
-        onCancel: () => post({ kind: "ohmygame:playable:pick-cancelled", instanceId: instance }),
+        onCancel: () => {
+          picking = undefined;
+          post({ kind: "ohmygame:playable:pick-cancelled", instanceId: instance });
+        },
       });
     } else if (message.kind === "ohmygame:playable:pick-cancel") {
-      story?.host.stopPicking();
+      stopPicking();
     } else if (message.kind === "ohmygame:playable:media-control") {
       media?.control(message.command);
     }
