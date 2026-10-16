@@ -6,21 +6,6 @@
  * keeps its lines in `nodes/<id>/script.txt`.
  */
 
-/**
- * Earlier player files OhMyGame shipped, by SHA-256. A project whose copy is
- * still exactly one of them gets the current file when it opens; a copy the
- * author changed is left alone. When changing a file here, add the hash of
- * the version it replaces. characters.json is the author's, never replaced.
- */
-export const VISUAL_NOVEL_PLAYER_UPGRADES: Record<string, readonly string[]> = {
-  "shared/vn/player.js": [
-    "c7aed0d3ec9495abb739be47dfc6c5598feece28c9fe8ca0eb0bd93708bbbe15",
-    "d164b05a476d8177749d6988b41789a487a889912a8d8cf8f036f059efaf0133",
-    "eeb772f1d6e65c3ddfd60f6118ac6be067b63b153fed93726ab8562938c21f4d",
-  ],
-  "shared/vn/player.css": ["77fbec372dd12114ce42681c0ee11769e4544dd6cf17cdc19d921f71b7c60c8f"],
-};
-
 /** Shared files a Visual Novel Scene imports, written only when missing. */
 export const VISUAL_NOVEL_SHARED_FILES: Record<string, string> = {
   "shared/vn/characters.json": `{

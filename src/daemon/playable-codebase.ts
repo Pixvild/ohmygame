@@ -16,7 +16,6 @@ import {
 import type { NodeGraph } from "../shared/playable-nodes.js";
 import { blankSource } from "./playable-presets.js";
 import { PLAYABLE_PROJECT_STYLE_FILES } from "./playable-style.js";
-import { VISUAL_NOVEL_PLAYER_UPGRADES, VISUAL_NOVEL_SHARED_FILES } from "./playable-visual-novel.js";
 import { installStoryRuntime, isWebStory, storyWebIndexHtml } from "./story-web-project.js";
 import { listWorkspaceFiles } from "./workspace.js";
 
@@ -223,7 +222,6 @@ export async function openNodeCodebaseDetail(
   return withCodebaseLock(workspacePath, async () => {
     const codebase = await readCodebase(workspacePath);
     await migratePlayableProjectStyle(workspacePath);
-    await upgradeVisualNovelPlayer(workspacePath);
     // A web story gets the runtime this OhMyGame ships, keeping files the author changed.
     if (await isWebStory(workspacePath)) await installStoryRuntime(workspacePath);
     return codebase;
@@ -323,7 +321,6 @@ async function writeCodebase(
     LAYOUT_SCHEMA_FILE,
     ...PROJECT_STYLE_FILES,
     PROJECT_STYLE_MIGRATION_FILE,
-    ...Object.keys(VISUAL_NOVEL_PLAYER_UPGRADES),
   ];
   const snapshot = await snapshotFiles(workspacePath, touchedFiles);
   try {
@@ -353,7 +350,6 @@ export async function ensureNodeCodebaseContract(
     ensureFile(path.join(workspacePath, "AGENTS.md"), AGENT_INSTRUCTIONS),
     ensureFile(path.join(workspacePath, "README.md"), PROJECT_DOCUMENTATION),
     migratePlayableProjectStyle(workspacePath),
-    upgradeVisualNovelPlayer(workspacePath),
     writeJsonIfChanged(
       path.join(workspacePath, GRAPH_SCHEMA_FILE),
       PLAYABLE_GRAPH_SCHEMA,
@@ -400,24 +396,6 @@ async function migratePlayableProjectStyle(
   } catch (cause) {
     await restoreFiles(workspacePath, snapshot);
     throw cause;
-  }
-}
-
-/**
- * Brings a Visual Novel player the author never changed up to date: a file
- * that is exactly one OhMyGame shipped before becomes the current one.
- */
-async function upgradeVisualNovelPlayer(workspacePath: string): Promise<void> {
-  for (const [relative, earlier] of Object.entries(VISUAL_NOVEL_PLAYER_UPGRADES)) {
-    let content: Buffer;
-    try {
-      content = await readFile(await resolveWorkspaceMutationPath(workspacePath, relative));
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw cause;
-    }
-    if (!earlier.includes(createHash("sha256").update(content).digest("hex"))) continue;
-    await writeTextAtomic(workspacePath, relative, VISUAL_NOVEL_SHARED_FILES[relative]!);
   }
 }
 
