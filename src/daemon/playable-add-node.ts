@@ -67,7 +67,7 @@ export async function addPlayableNode(
       throw new NodeCodebaseError(`Node "${request.id}" already exists.`);
     }
     // Without a title the starter text keeps the Preset's own wording.
-    const starter = preset.source(request.title ? title : preset.label);
+    const starter = preset.source(request.title ? title : preset.label, request.id);
     // The first Node of an empty project becomes its Start.
     const graph = withPlayableEntry({
       ...codebase.graph,

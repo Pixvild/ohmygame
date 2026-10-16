@@ -562,13 +562,17 @@ function validateSourceUpdates(
     throw new Error("Playable source updates must be an object.");
   }
   const declared = new Set<string>();
+  // A Node's folder holds its own files too, such as a Visual Novel's script.
+  const folders = new Set<string>();
   for (const node of graph.nodes) {
     declared.add(node.source.html);
     declared.add(node.source.css);
     declared.add(node.source.javascript);
+    folders.add(`${path.posix.dirname(node.source.html)}/`);
   }
   for (const [relative, content] of Object.entries(value)) {
-    if (!declared.has(relative)) {
+    const inFolder = [...folders].some((folder) => folder !== "./" && relative.startsWith(folder) && !relative.slice(folder.length).includes("/"));
+    if (!declared.has(relative) && !inFolder) {
       throw new Error(`Source update "${relative}" is not declared by a Node.`);
     }
     if (typeof content !== "string") {

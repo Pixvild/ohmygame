@@ -438,6 +438,19 @@ describe("Playable codebase", () => {
     expect((await readNodeCodebaseDetail(workspace)).revision).toBe(before.revision);
   });
 
+  it("writes a file in a Node's own folder, and nothing outside the Nodes' folders", async () => {
+    const workspace = await temporaryWorkspace();
+    await createNodeCodebase(workspace, createStarterCodebaseWithScene("Story", { width: 1280, height: 720 }));
+    const codebase = await readNodeCodebaseDetail(workspace);
+    await writeNodeCodebase(workspace, { ...codebase, sources: { "nodes/start/script.txt": "Hello.\n" } });
+    expect(await readFile(path.join(workspace, "nodes/start/script.txt"), "utf8")).toBe("Hello.\n");
+    const latest = await readNodeCodebaseDetail(workspace);
+    for (const relative of ["shared/vn/script.txt", "nodes/start/deeper/script.txt", "nodes/other/script.txt"]) {
+      await expect(writeNodeCodebase(workspace, { ...latest, sources: { [relative]: "x" } }))
+        .rejects.toThrow(`Source update "${relative}" is not declared by a Node.`);
+    }
+  });
+
   it("writes without a revision whatever the files hold", async () => {
     const workspace = await temporaryWorkspace();
     await createNodeCodebase(

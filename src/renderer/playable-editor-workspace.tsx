@@ -39,7 +39,7 @@ import {
 import { setPlayableElementTranslate } from "../shared/playable-move.js";
 import { isPlayableStoryEnding, withPlayableStoryOption } from "../shared/playable-story-map.js";
 import type { NodePlayerDefinition, PlayableMove, PlayableTextEdit } from "../shared/playable-player-protocol.js";
-import { parsePlayableSourceLocation, replacePlayableElementText } from "../shared/playable-text-edit.js";
+import { parsePlayableSourceLocation, replacePlayableElementText, replacePlayableLineText } from "../shared/playable-text-edit.js";
 import { clearPlayableBackdrop, playableBackdrop, setPlayableBackdrop } from "../shared/playable-backdrop.js";
 import {
   addPlayableNodeAsset,
@@ -711,10 +711,17 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     const graph = codebase?.graph;
     const location = edit.pick.source ? parsePlayableSourceLocation(edit.pick.source) : undefined;
     const node = graph?.nodes.find((candidate) => candidate.id === edit.pick.nodeId);
-    if (!graph || !location || !node || node.source.html !== location.file) return false;
+    if (!graph || !location || !node) return false;
+    // Text a Scene shows from a file of its own, such as a Visual Novel script line, changes in that file.
+    const lineText = location.file !== node.source.html
+      && location.file.startsWith(`${node.source.html.slice(0, node.source.html.lastIndexOf("/") + 1)}`)
+      && location.file.endsWith(".txt");
+    if (location.file !== node.source.html && !lineText) return false;
     const file = await getWorkspaceFile(projectId, location.file);
     const before = file.truncated ? undefined : file.content;
-    const html = before === undefined ? undefined : replacePlayableElementText(before, location, edit.before, edit.after);
+    const html = before === undefined ? undefined : lineText
+      ? replacePlayableLineText(before, location, edit.before, edit.after)
+      : replacePlayableElementText(before, location, edit.before, edit.after);
     if (before === undefined || html === undefined) return false;
     const signal = node.signals.find((candidate) => candidate.id === edit.pick.signal);
     const next = signal && signal.label.trim() === edit.before.trim()

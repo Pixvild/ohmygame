@@ -16,6 +16,7 @@ export const VISUAL_NOVEL_PLAYER_UPGRADES: Record<string, readonly string[]> = {
   "shared/vn/player.js": [
     "c7aed0d3ec9495abb739be47dfc6c5598feece28c9fe8ca0eb0bd93708bbbe15",
     "d164b05a476d8177749d6988b41789a487a889912a8d8cf8f036f059efaf0133",
+    "eeb772f1d6e65c3ddfd60f6118ac6be067b63b153fed93726ab8562938c21f4d",
   ],
   "shared/vn/player.css": ["77fbec372dd12114ce42681c0ee11769e4544dd6cf17cdc19d921f71b7c60c8f"],
 };
@@ -425,11 +426,14 @@ export function parseScript(text) {
     const number = index + 1;
     const line = lines[index].trim();
     if (!line || line.startsWith("#")) continue;
+    const indent = lines[index].length - lines[index].trimStart().length;
     const fail = (message) => {
       throw new Error("script.txt line " + number + ": " + message);
     };
     const step = readLine(line, fail);
     step.line = number;
+    // Where a line's words start, so the editor can change them in place.
+    if (step.kind === "say") step.column = indent + line.length - step.text.length + 1;
     const previous = steps[steps.length - 1];
     if (step.kind === "answer" && previous?.kind === "choice") {
       previous.answers.push(step);
@@ -540,9 +544,11 @@ function readValue(text, fail) {
  *
  * @param {object} context the Node context passed to mount
  * @param {string} script the Scene's script.txt
+ * @param {{ source?: string }} [options] the script's path in the project,
+ *   which lets the editor change a line's words where the player shows them
  * @returns {() => void} cleanup
  */
-export function playScript(context, script) {
+export function playScript(context, script, options = {}) {
   const steps = parseScript(script);
   const version = scriptVersion(script);
   const stage = context.root.querySelector(".vn") ?? context.root.firstElementChild;
@@ -675,6 +681,7 @@ export function playScript(context, script) {
     const { name, color } = speaker(step);
     ui.box.hidden = false;
     ui.name.textContent = name;
+    if (options.source) ui.text.setAttribute("data-ohmygame-source", options.source + ":" + step.line + ":" + step.column);
     ui.box.style.setProperty("--vn-speaker", color || null);
     stage.classList.toggle("has-speaker", Boolean(step.who && sprites.has(step.who)));
     for (const [id, sprite] of sprites) sprite.classList.toggle("is-speaking", id === step.who);
@@ -1026,7 +1033,7 @@ function buildInterface(stage) {
 };
 
 /** A Visual Novel Scene's own files, keyed by file name inside `nodes/<id>/`. */
-export function visualNovelSource(): {
+export function visualNovelSource(_title: string, id?: string): {
   html: string;
   css: string;
   javascript: string;
@@ -1045,7 +1052,9 @@ export function visualNovelSource(): {
       'import script from "./script.txt";',
       "",
       "export function mount(context) {",
-      "  return playScript(context, script);",
+      ...(id
+        ? [`  return playScript(context, script, { source: ${JSON.stringify(`nodes/${id}/script.txt`)} });`]
+        : ["  return playScript(context, script);"]),
       "}",
       "",
     ].join("\n"),

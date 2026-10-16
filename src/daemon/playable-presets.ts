@@ -32,7 +32,8 @@ export interface PlayablePreset {
   /** How a Node made from this Preset starts out on the Story Map. */
   story?: PlayableStoryOptions;
   /** Source for `nodes/<id>/`; `files` are further files there, keyed by file name. */
-  source: (title: string) => { html: string; css: string; javascript: string; files?: Record<string, string> };
+  /** `id` is the new Node's, for source that names its own files. */
+  source: (title: string, id?: string) => { html: string; css: string; javascript: string; files?: Record<string, string> };
   /** Shared files the source imports, keyed by workspace path. Added only when the project lacks them. */
   sharedFiles?: Record<string, string>;
 }

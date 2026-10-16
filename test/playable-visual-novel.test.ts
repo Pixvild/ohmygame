@@ -76,9 +76,9 @@ describe("Visual Novel script", () => {
       { kind: "show", who: "mio", look: "smile", at: "left", line: 3 },
       { kind: "music", asset: "rain", line: 4 },
       { kind: "set", key: "trust", op: "+=", value: 1, line: 5 },
-      { kind: "say", text: "The rain had not stopped.", line: 6 },
-      { kind: "say", who: "mio", text: "你来了。", line: 7 },
-      { kind: "say", text: "Note: not a name", line: 8 },
+      { kind: "say", text: "The rain had not stopped.", line: 6, column: 1 },
+      { kind: "say", who: "mio", text: "你来了。", line: 7, column: 5 },
+      { kind: "say", text: "Note: not a name", line: 8, column: 2 },
       { kind: "exit", when: { key: "trust", op: ">=", value: 5 }, signal: "secret", line: 9 },
       {
         kind: "choice",
@@ -123,6 +123,7 @@ describe("playScript", () => {
     connected?: string[];
     characters?: object;
     position?: unknown;
+    source?: string;
     slots?: { id: string; savedAt: string; nodeId: string; note?: string; incompatible?: true }[];
   } = {}) {
     const { playScript } = await loadPlayer(options.characters);
@@ -182,7 +183,7 @@ describe("playScript", () => {
         connected: (signal: string) => connected.has(signal),
       },
     };
-    const cleanup = playScript(context, script);
+    const cleanup = playScript(context, script, options.source ? { source: options.source } : {});
     const stage = root.querySelector<HTMLElement>(".vn")!;
     const click = (target: Element = stage) => target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     const text = () => root.querySelector(".vn-text")!.textContent;
@@ -310,6 +311,19 @@ describe("playScript", () => {
     expect(scene.patches).toEqual([{ trust: 2 }]);
   });
 
+  it("marks where each line's words are in the script, so the editor can change them there", async () => {
+    const scene = await play("  stranger: You came alone.\n\\Note: not a name", { source: "nodes/chapter/script.txt" });
+    const text = scene.root.querySelector(".vn-text")!;
+    expect(text.getAttribute("data-ohmygame-source")).toBe("nodes/chapter/script.txt:1:13");
+    vi.runAllTimers();
+    scene.click();
+    vi.runAllTimers();
+    expect(text.getAttribute("data-ohmygame-source")).toBe("nodes/chapter/script.txt:2:2");
+    // Without the script's path the player marks nothing.
+    const unmarked = await play("Hello.");
+    expect(unmarked.root.querySelector(".vn-text")!.hasAttribute("data-ohmygame-source")).toBe(false);
+  });
+
   it("starts over when the script changed since the save", async () => {
     const scene = await play("One.\nTwo.", { position: { script: "older", step: 1 } });
     vi.runAllTimers();
@@ -419,7 +433,7 @@ describe("Visual Novel Template", () => {
     // When this fails because a player file changed, add the old hash below to
     // VISUAL_NOVEL_PLAYER_UPGRADES, then record the new one here.
     expect(shipped).toEqual({
-      "shared/vn/player.js": "eeb772f1d6e65c3ddfd60f6118ac6be067b63b153fed93726ab8562938c21f4d",
+      "shared/vn/player.js": "b8beebc358e903a28d3f3eaf4b2530644a1015f1eebae8d4dc5644ba11b72f84",
       "shared/vn/player.css": "aeffa88b0e3f5880af7a118d8f0657d150ce5ebdb95c347140152ff9974ef0ea",
     });
     for (const [relative, hash] of Object.entries(shipped)) expect(VISUAL_NOVEL_PLAYER_UPGRADES[relative]).not.toContain(hash);
