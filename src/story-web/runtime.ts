@@ -9,7 +9,8 @@
  * editor, reporting Exits instead of following them and saving nothing;
  * `ohmygame-new-game=1` forgets the saved game first, `ohmygame-forget-seen=1`
  * what the player has seen, and `ohmygame-save=none` keeps this session's
- * games and settings in memory only; and `ohmygamePlaytest=1`
+ * games and settings in memory only, `ohmygame-silent=1` plays no music or
+ * sounds (for thumbnails); and `ohmygamePlaytest=1`
  * exposes `window.__OHMYGAME_PLAYTEST__` for game_use.
  *
  * Editor tools find the runtime as `window.__OHMYGAME_STORY__`.
@@ -82,8 +83,8 @@ async function start(): Promise<void> {
   const key = `ohmygame:story:${base.pathname}`;
   if (params.get("ohmygame-new-game") === "1") localStorage.removeItem(key);
   if (params.get("ohmygame-forget-seen") === "1") localStorage.removeItem(`${key}:seen`);
-  const audio = new DocumentPlayableAudio(document);
-  const host = new DocumentPlayableSurfaceHost(document, undefined, (root) => audio.watchNode(root), { base });
+  const audio = params.get("ohmygame-silent") === "1" ? undefined : new DocumentPlayableAudio(document);
+  const host = new DocumentPlayableSurfaceHost(document, undefined, audio && ((root) => audio.watchNode(root)), { base });
   fitStage(graph.viewport);
   const runtime = new NodeRuntime({
     graph,
@@ -94,7 +95,7 @@ async function start(): Promise<void> {
     slotStore: transient ? new MemoryPlayableSlotStore() : stored<PlayableSlotStore>(`${key}:slots`),
     seenStore: transient ? new MemoryPlayableSeenStore() : stored<PlayableSeenStore>(`${key}:seen`),
     preferencesStore: transient ? new MemoryPlayablePreferencesStore() : stored<PlayablePreferencesStore>(`${key}:preferences`),
-    audio,
+    ...(audio ? { audio } : {}),
     assetUrls,
     ...(preview ? { policy: "report" as const } : {}),
     ...(scene ? { startNodeId: scene } : {}),

@@ -228,6 +228,7 @@ export function NodePlayer({
     url.searchParams.set("ohmygame-instance", instanceId);
     if (preview?.startNodeId) url.searchParams.set("scene", preview.startNodeId);
     if (preview?.policy === "report") url.searchParams.set("ohmygame-policy", "report");
+    if (preview?.silent) url.searchParams.set("ohmygame-silent", "1");
     return url.href;
   }, [page, instanceId, previewKey]);
 
