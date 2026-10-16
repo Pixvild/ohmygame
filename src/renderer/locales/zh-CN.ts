@@ -371,7 +371,7 @@ const zhCN: typeof en = {
     low: "低",
     medium: "中",
     high: "高",
-    xhigh: "xhigh",
+    xhigh: "xHigh",
     max: "最高",
   },
   customProvider: {
@@ -683,6 +683,7 @@ const zhCN: typeof en = {
     loading: "正在加载模型…",
     error: "无法加载模型",
     none: "没有语言模型",
+    backToModels: "返回模型列表",
     textModel: "文本模型：{{name}}",
     textModelTitle: "文本模型：{{provider}} · {{name}}",
     reasoning: "推理：{{level}}",

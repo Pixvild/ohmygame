@@ -378,7 +378,7 @@ const en = {
     low: "Low",
     medium: "Medium",
     high: "High",
-    xhigh: "xhigh",
+    xhigh: "xHigh",
     max: "Max",
   },
   customProvider: {
@@ -701,6 +701,7 @@ const en = {
     loading: "Loading models...",
     error: "Could not load models",
     none: "No language model",
+    backToModels: "Back to models",
     textModel: "Text model: {{name}}",
     textModelTitle: "Text model: {{provider}} · {{name}}",
     reasoning: "Reasoning: {{level}}",
