@@ -327,7 +327,9 @@ index.html (the project preview, Playtest, or the published game)
   `new URL("./script.txt", import.meta.url)`, and imports JSON with
   `with { type: "json" }`.
 - Saves, slots, what was seen, and preferences are kept in the page's
-  `localStorage`. Node code runs with the page's full browser abilities,
+  `localStorage`, under the story ID in `index.html`'s
+  `<meta name="ohmygame-story">`, so they last when the game moves to a new
+  address, as each itch.io upload does. A page without one uses its path. Node code runs with the page's full browser abilities,
   storage included, and may keep what belongs to the player across games
   there; a game's progress belongs in State and positions.
 - Successive nodes share one JavaScript realm; `window`, `document` listeners,

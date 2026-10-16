@@ -30,10 +30,15 @@ in OhMyGame's sandbox, and the Story canvas shows a notice at the top:
 "This story plays in the old sandbox. Upgrade it to play as its own web page,
 which the AI can change entirely, from saving to music," with **Upgrade** and
 the details of what it does. Upgrading takes a checkpoint first; the notice
-then says the story plays as its own page and offers **Undo upgrade**, and
-names any Library media that could not be found and must be replaced before
-publishing. Closing the notice keeps the upgrade. Unsaved edits are saved
-before either, and every editor reloads after.
+then says the story plays as its own page and offers **Undo upgrade**.
+Closing the notice keeps the upgrade for good, and Undo upgrade is no longer
+offered. Unsaved edits are saved before either, and every
+editor reloads after.
+
+Upgrading copies the Library media the story uses into the project. A
+published story cannot reach media left in the Library, such as one the
+Library no longer had at the time, so while a web story still uses any, the
+Story canvas names them in a warning and offers **Copy into project**.
 
 ## Workspace
 
