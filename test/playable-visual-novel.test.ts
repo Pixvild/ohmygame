@@ -19,7 +19,7 @@ interface Step {
 
 interface Player {
   parseScript(text: string): Step[];
-  playScript(context: unknown, script: string): () => void;
+  playScript(context: unknown, script: string, options?: { source?: string }): () => void;
 }
 
 const DEFAULT_CHARACTERS = {

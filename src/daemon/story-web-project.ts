@@ -104,6 +104,60 @@ export function storyWebIndexHtml(title: string): string {
 `;
 }
 
+/** What plays a web story besides its assets; everything else is the editor's. */
+const PLAYED_FILES = ["index.html", "graph.json"];
+const PLAYED_DIRECTORIES = [STORY_WEB_DIRECTORY, "nodes", "shared"];
+
+/**
+ * The project files a published web story needs: its page, runtime, graph,
+ * Scenes, and shared code, the assets the graph declares, and any other file
+ * under `assets/` that that code names by path. Editor files, schemas, the
+ * runtime manifest, and unused assets stay out. Throws when a declared asset
+ * is not a project file, such as a Library asset that was never copied in.
+ */
+export async function publishableWebStoryFiles(workspacePath: string): Promise<string[]> {
+  const graph = JSON.parse((await readText(workspacePath, "graph.json")) ?? "null") as NodeGraph | null;
+  if (!graph) throw new Error("This project has no graph.json.");
+  const files = new Set<string>();
+  for (const relative of PLAYED_FILES) if ((await readText(workspacePath, relative)) !== undefined) files.add(relative);
+  for (const directory of PLAYED_DIRECTORIES) {
+    for (const relative of await listFiles(workspacePath, directory)) {
+      if (relative !== STORY_WEB_MANIFEST && !path.posix.basename(relative).startsWith(".")) files.add(relative);
+    }
+  }
+  for (const [id, asset] of Object.entries(graph.assets)) {
+    if (asset.source.kind !== "workspace")
+      throw new Error(`Asset "${id}" is in the Library, not the project. Upgrade the story again to copy it in.`);
+    files.add(asset.source.path);
+  }
+  // Code can name an asset by path rather than declare it.
+  const code = (await Promise.all([...files].filter((relative) => /\.(?:html|css|m?js|json|txt)$/.test(relative))
+    .map((relative) => readText(workspacePath, relative)))).join("\n");
+  for (const relative of await listFiles(workspacePath, "assets")) {
+    if (!files.has(relative) && code.includes(relative.slice("assets/".length))) files.add(relative);
+  }
+  return [...files].sort();
+}
+
+async function listFiles(workspacePath: string, directory: string): Promise<string[]> {
+  const files: string[] = [];
+  const walk = async (relative: string) => {
+    let entries;
+    try {
+      entries = await readdir(path.join(workspacePath, relative), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const child = `${relative}/${entry.name}`;
+      if (entry.isDirectory()) await walk(child);
+      else if (entry.isFile()) files.push(child);
+    }
+  };
+  await walk(directory);
+  return files;
+}
+
 export interface StoryWebUpgrade {
   /** Library assets copied into the project, by Asset ID. */
   copiedAssets: string[];
