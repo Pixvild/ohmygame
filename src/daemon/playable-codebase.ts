@@ -17,6 +17,7 @@ import type { NodeGraph } from "../shared/playable-nodes.js";
 import { blankSource } from "./playable-presets.js";
 import { PLAYABLE_PROJECT_STYLE_FILES } from "./playable-style.js";
 import { VISUAL_NOVEL_PLAYER_UPGRADES, VISUAL_NOVEL_SHARED_FILES } from "./playable-visual-novel.js";
+import { installStoryRuntime, isWebStory, storyWebIndexHtml } from "./story-web-project.js";
 import { listWorkspaceFiles } from "./workspace.js";
 
 const GRAPH_FILE = "graph.json";
@@ -138,12 +139,14 @@ export async function createNodeCodebase(
   await withCodebaseLock(workspacePath, async () => {
     await validateCodebase(workspacePath, codebase, false);
     const existingProject = await workspaceFileExists(workspacePath, GRAPH_FILE);
+    // A new project is a web story; a folder that already holds a project keeps its shape until the author upgrades it.
     const files: Record<string, string> = existingProject
       ? { [LAYOUT_FILE]: jsonText(layout({})) }
       : {
           [GRAPH_FILE]: jsonText(codebase.graph),
           [LAYOUT_FILE]: jsonText(codebase.editorLayout),
           ...starterSources(codebase.graph),
+          "index.html": storyWebIndexHtml(codebase.graph.title),
         };
     const snapshot = await snapshotFiles(workspacePath, [
       ...Object.keys(files),
@@ -158,6 +161,7 @@ export async function createNodeCodebase(
         await ensureFile(await resolveWorkspaceMutationPath(workspacePath, file), content);
       }
       await ensureNodeCodebaseContract(workspacePath);
+      if (!existingProject) await installStoryRuntime(workspacePath);
     } catch (cause) {
       await restoreFiles(workspacePath, snapshot);
       throw cause;
@@ -191,6 +195,8 @@ export async function openNodeCodebaseDetail(
     const codebase = await readCodebase(workspacePath);
     await migratePlayableProjectStyle(workspacePath);
     await upgradeVisualNovelPlayer(workspacePath);
+    // A web story gets the runtime this OhMyGame ships, keeping files the author changed.
+    if (await isWebStory(workspacePath)) await installStoryRuntime(workspacePath);
     return codebase;
   });
 }
@@ -222,11 +228,14 @@ export interface NodeCodebaseFiles {
  */
 export async function changeNodeCodebase(
   workspacePath: string,
-  change: (codebase: NodeCodebaseDetail) => (NodeCodebaseUpdate & NodeCodebaseFiles) | undefined,
+  change: (codebase: NodeCodebaseDetail) =>
+    | (NodeCodebaseUpdate & NodeCodebaseFiles)
+    | undefined
+    | Promise<(NodeCodebaseUpdate & NodeCodebaseFiles) | undefined>,
 ): Promise<void> {
   await withCodebaseLock(workspacePath, async () => {
     const current = await readCodebase(workspacePath);
-    const update = change(current);
+    const update = await change(current);
     if (!update) return;
     const { files, missingFiles, ...codebase } = update;
     // The revision still refuses to write over a file the Agent edited in the meantime.
@@ -664,7 +673,8 @@ async function removeEmptySourceDirectories(
   }
 }
 
-async function resolveWorkspaceMutationPath(
+/** A workspace-relative path for writing, refused if it leaves the workspace or goes through a link. */
+export async function resolveWorkspaceMutationPath(
   workspacePath: string,
   relative: string,
 ): Promise<string> {

@@ -419,7 +419,7 @@ describe("Visual Novel Template", () => {
     // When this fails because a player file changed, add the old hash below to
     // VISUAL_NOVEL_PLAYER_UPGRADES, then record the new one here.
     expect(shipped).toEqual({
-      "shared/vn/player.js": "d164b05a476d8177749d6988b41789a487a889912a8d8cf8f036f059efaf0133",
+      "shared/vn/player.js": "eeb772f1d6e65c3ddfd60f6118ac6be067b63b153fed93726ab8562938c21f4d",
       "shared/vn/player.css": "aeffa88b0e3f5880af7a118d8f0657d150ce5ebdb95c347140152ff9974ef0ea",
     });
     for (const [relative, hash] of Object.entries(shipped)) expect(VISUAL_NOVEL_PLAYER_UPGRADES[relative]).not.toContain(hash);

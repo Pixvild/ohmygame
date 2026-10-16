@@ -70,7 +70,8 @@ async function readableModule(file: string): Promise<string> {
 /** Source in development, the compiled module in a build. */
 async function sourceFile(name: string): Promise<string> {
   for (const extension of [".ts", ".js"]) {
-    const candidate = fileURLToPath(new URL(`../${name}${extension}`, import.meta.url));
+    // Built from the module's own path, not the global URL, which test DOMs replace.
+    const candidate = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", `${name}${extension}`);
     try {
       await access(candidate);
       return candidate;

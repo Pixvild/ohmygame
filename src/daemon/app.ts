@@ -18,7 +18,7 @@ import { access as fileAccess, readFile } from "node:fs/promises";
 import { OnboardingStore } from "./onboarding.js";
 import type { UpdateOnboardingRequest } from "../shared/onboarding.js";
 import path from "node:path";
-import { STORY_WEB_ENTRY } from "./story-web-bundle.js";
+import { isWebStory } from "./story-web-project.js";
 import { fileURLToPath } from "node:url";
 import { ModelRuntime, SettingsManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
@@ -3419,9 +3419,4 @@ function configuredDefaultModel(cwd: string, agentDir: string): AgentModelRef | 
   const provider = settings.getDefaultProvider();
   const id = settings.getDefaultModel();
   return provider && id ? { provider, id } : undefined;
-}
-
-/** A web story carries its own runtime and plays as a page through the project preview. */
-function isWebStory(workspacePath: string): Promise<boolean> {
-  return fileAccess(path.join(workspacePath, ...STORY_WEB_ENTRY.split("/"))).then(() => true, () => false);
 }
