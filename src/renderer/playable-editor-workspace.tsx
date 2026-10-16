@@ -62,6 +62,8 @@ import {
   listPlayablePresets,
   listPlayableThumbnails,
   updateNodeCodebase,
+  copyStoryLibraryMedia,
+  keepStoryUpgrade,
   undoStoryUpgrade,
   upgradeStory,
 } from "./api.js";
@@ -290,6 +292,17 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     if (codebase) await save(codebase);
     await upgradeStory(projectId);
     setUpgrade(await getStoryUpgrade(projectId));
+  }
+
+  async function copyLibraryMedia(): Promise<void> {
+    if (codebase) await save(codebase);
+    await copyStoryLibraryMedia(projectId);
+    setUpgrade(await getStoryUpgrade(projectId));
+  }
+
+  async function keepUpgrade(): Promise<void> {
+    setUpgrade((current) => current && { web: current.web, ...(current.libraryAssets ? { libraryAssets: current.libraryAssets } : {}) });
+    await keepStoryUpgrade(projectId).catch(() => {});
   }
 
   async function undoUpgrade(): Promise<void> {
@@ -1116,13 +1129,13 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
             tone="warning"
             message={t("storyEditor.libraryMedia", { assets: upgrade.libraryAssets.join(", ") })}
             actionLabel={t("storyEditor.copyLibraryMedia")}
-            onAction={runUpgrade}
+            onAction={copyLibraryMedia}
           /> : phase === "ready" && upgrade?.web && upgrade.upgradedAt ? <CanvasNotice
             className="story-upgrade-notice"
             message={t("storyEditor.upgraded")}
             actionLabel={t("storyEditor.undoUpgrade")}
             onAction={undoUpgrade}
-            onDismiss={() => setUpgrade({ web: true })}
+            onDismiss={() => void keepUpgrade()}
           /> : null}
           {phase === "ready" ? (
             <PlayableCanvasContext.Provider value={canvasPlayer}>

@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { access, copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { NodeGraph } from "../shared/playable-nodes.js";
 import { AGENT_INSTRUCTIONS, PROJECT_DOCUMENTATION, PROJECT_GUIDE_UPGRADES, resolveWorkspaceMutationPath } from "./playable-codebase.js";
@@ -68,7 +68,8 @@ export async function installStoryRuntime(workspacePath: string): Promise<StoryR
       // The author's change stays; the base it was made from stays recorded.
       files[relative] = manifest?.files[relative] ?? hash(current);
       pending.push(relative);
-      await writeText(workspacePath, `${STORY_WEB_UPDATES}/${version}/${relative}`, content);
+      const update = `${STORY_WEB_UPDATES}/${version}/${relative}`;
+      if ((await readText(workspacePath, update)) !== content) await writeText(workspacePath, update, content);
     }
   }
   for (const [relative, recorded] of Object.entries(manifest?.files ?? {})) {
@@ -88,13 +89,18 @@ export async function installStoryRuntime(workspacePath: string): Promise<StoryR
   return { written: [...written, STORY_WEB_MANIFEST], pending };
 }
 
-/** The page that plays the story. */
-export function storyWebIndexHtml(title: string): string {
+/**
+ * The page that plays the story. Its story ID names the player's saves, so
+ * they last when the game is published somewhere new or updated where the
+ * address changes with each upload, as on itch.io.
+ */
+export function storyWebIndexHtml(title: string, storyId: string = randomUUID()): string {
   return `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ohmygame-story" content="${escapeHtml(storyId)}" />
     <title>${escapeHtml(title)}</title>
   </head>
   <body>
@@ -107,12 +113,15 @@ export function storyWebIndexHtml(title: string): string {
 /** What plays a web story besides its assets; everything else is the editor's. */
 const PLAYED_FILES = ["index.html", "graph.json"];
 const PLAYED_DIRECTORIES = [STORY_WEB_DIRECTORY, "nodes", "shared"];
+/** Folders of the editor and of tools, never part of a published story even when code names a file in them. */
+const UNPUBLISHED_DIRECTORIES = new Set(["editor", "schemas", "canvas", "node_modules", "dist"]);
 
 /**
  * The project files a published web story needs: its page, runtime, graph,
- * Scenes, and shared code, the assets the graph declares, and any other file
- * under `assets/` that that code names by path. Editor files, schemas, the
- * runtime manifest, and unused assets stay out. Throws when a declared asset
+ * Scenes, and shared code, the assets the graph declares, and any other
+ * project file that code names by its path, such as a font a stylesheet
+ * uses. Editor files, schemas, the runtime manifest, and unused assets stay
+ * out. Throws when a declared asset
  * is not a project file, such as a Library asset that was never copied in.
  */
 export async function publishableWebStoryFiles(workspacePath: string): Promise<string[]> {
@@ -130,11 +139,13 @@ export async function publishableWebStoryFiles(workspacePath: string): Promise<s
       throw new Error(`Asset "${id}" is in the Library, not the project. Copy it into the project from the Story canvas, or replace it.`);
     files.add(asset.source.path);
   }
-  // Code can name an asset by path rather than declare it.
+  // Code can name a file by its path rather than declare it.
   const code = (await Promise.all([...files].filter((relative) => /\.(?:html|css|m?js|json|txt)$/.test(relative))
     .map((relative) => readText(workspacePath, relative)))).join("\n");
-  for (const relative of await listFiles(workspacePath, "assets")) {
-    if (!files.has(relative) && code.includes(relative.slice("assets/".length))) files.add(relative);
+  for (const relative of await listFiles(workspacePath, ".")) {
+    const top = relative.split("/")[0]!;
+    if (files.has(relative) || top.startsWith(".") || UNPUBLISHED_DIRECTORIES.has(top) || !relative.includes("/")) continue;
+    if (code.includes(relative)) files.add(relative);
   }
   return [...files].sort();
 }
@@ -149,7 +160,7 @@ async function listFiles(workspacePath: string, directory: string): Promise<stri
       return;
     }
     for (const entry of entries) {
-      const child = `${relative}/${entry.name}`;
+      const child = relative === "." ? entry.name : `${relative}/${entry.name}`;
       if (entry.isDirectory()) await walk(child);
       else if (entry.isFile()) files.push(child);
     }
@@ -310,7 +321,7 @@ async function writeText(workspacePath: string, relative: string, content: strin
 
 async function exists(file: string): Promise<boolean> {
   try {
-    await readFile(file);
+    await access(file);
     return true;
   } catch {
     return false;

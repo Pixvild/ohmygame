@@ -1,4 +1,4 @@
-import type { StoryUpgradeResult, StoryUpgradeStatus } from "../shared/story-web.js";
+import type { StoryLibraryMediaResult, StoryUpgradeResult, StoryUpgradeStatus } from "../shared/story-web.js";
 import type { CommunityGameStats, CommunityGamesQuery, CommunityProfile } from "../shared/publish-v1.js";
 import { runtimeConnection, subscribeRuntimeConnection } from "./runtime-connection.js";
 import { assertWorkspaceVersion, observeWorkspaceVersion, workspaceVersion, type WorkspaceRequestInit } from "./workspace-version.js";
@@ -645,6 +645,15 @@ export async function getStoryUpgrade(projectId: string): Promise<StoryUpgradeSt
 
 export async function upgradeStory(projectId: string): Promise<StoryUpgradeResult> {
   return request(`/projects/${projectId}/interactive-story/upgrade`, { method: "POST" });
+}
+
+/** Keeps the upgrade, so it is no longer offered to be taken back. */
+export async function keepStoryUpgrade(projectId: string): Promise<void> {
+  await request(`/projects/${projectId}/interactive-story/upgrade/keep`, { method: "POST" });
+}
+
+export async function copyStoryLibraryMedia(projectId: string): Promise<StoryLibraryMediaResult> {
+  return request(`/projects/${projectId}/interactive-story/library-media`, { method: "POST" });
 }
 
 export async function undoStoryUpgrade(projectId: string): Promise<{ changed: string[] }> {

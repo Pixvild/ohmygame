@@ -58,7 +58,10 @@ describe("Web story output", () => {
       writeFile(path.join(workspace, "assets", "paper.png"), "named in CSS"),
       writeFile(path.join(workspace, "assets", "unused.mp4"), "unused"),
       writeFile(path.join(workspace, ".ohmygame", "cache.json"), "{}"),
+      mkdir(path.join(workspace, "fonts")).then(() => writeFile(path.join(workspace, "fonts", "serif.woff2"), "font")),
+      mkdir(path.join(workspace, "canvas")).then(() => writeFile(path.join(workspace, "canvas", "board.png"), "board")),
     ]);
+    await writeFile(path.join(workspace, "shared", "style", "fonts.css"), '@font-face { font-family: Serif; src: url("../../fonts/serif.woff2"); }\n/* canvas/board.png belongs to the editor */\n');
     await writeFile(path.join(workspace, "nodes", "chapter", "style.css"), '.vn { background: url("../../assets/paper.png"); }\n');
     const codebase = await readNodeCodebaseDetail(workspace);
     await writeNodeCodebase(workspace, {
@@ -82,6 +85,8 @@ describe("Web story output", () => {
       expect(names).toContain("shared/vn/player.js");
       expect(names).toContain("assets/street.webp");
       expect(names).toContain("assets/paper.png");
+      expect(names).toContain("fonts/serif.woff2");
+      expect(names).not.toContain("canvas/board.png");
       for (const left of ["assets/unused.mp4", "story/manifest.json", "editor/layout.json", "AGENTS.md", "README.md", "schemas/graph.schema.json", ".ohmygame/cache.json"])
         expect(names).not.toContain(left);
     } finally { await builder.close(); }

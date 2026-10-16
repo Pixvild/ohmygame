@@ -54,6 +54,8 @@ describe("story runtime install", () => {
     await createNodeCodebase(root, createStarterCodebaseWithScene("Story", { width: 1280, height: 720 }));
     expect(await isWebStory(root)).toBe(true);
     expect(await read(root, "index.html")).toContain('<script type="module" src="story/story-web/runtime.js"></script>');
+    // Saves follow this ID rather than the page's address.
+    expect(await read(root, "index.html")).toMatch(/<meta name="ohmygame-story" content="[0-9a-f-]{36}" \/>/);
     const modules = await storyWebRuntimeModules();
     for (const [relative, content] of Object.entries(modules)) expect(await read(root, relative)).toBe(content);
     expect((await manifest(root)).files).toEqual(Object.fromEntries(Object.entries(modules).map(([relative, content]) => [relative, sha(content)])));

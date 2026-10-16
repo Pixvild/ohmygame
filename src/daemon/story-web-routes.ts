@@ -3,7 +3,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { ProjectState } from "../shared/contracts.js";
 import type { RuntimeEventBus } from "../shared/events.js";
-import type { StoryUpgradeStatus, StoryUpgradeResult } from "../shared/story-web.js";
+import type { StoryLibraryMediaResult, StoryUpgradeStatus, StoryUpgradeResult } from "../shared/story-web.js";
 import type { AgentManager } from "./agent.js";
 import type { AssetLibrary } from "./asset-library.js";
 import type { CheckpointStore } from "./checkpoints.js";
@@ -61,6 +61,13 @@ export function registerStoryWebRoutes(
       events.publish(project.id, "workspace.restored", { version, changed });
     }
   };
+  const libraryFile = async (assetId: string) => {
+    try {
+      return (await library.content(assetId)).absolutePath;
+    } catch {
+      return undefined;
+    }
+  };
   const send = async <T>(reply: { code(status: number): { send(body: unknown): unknown } }, operation: () => Promise<T>) => {
     try {
       return await operation();
@@ -83,24 +90,7 @@ export function registerStoryWebRoutes(
     send(reply, async (): Promise<StoryUpgradeResult> => {
       const project = story(request.params.projectId);
       assertIdle(project.id);
-      const libraryFile = async (assetId: string) => {
-        try {
-          return (await library.content(assetId)).absolutePath;
-        } catch {
-          return undefined;
-        }
-      };
-      // A web story can still take media in from the Library, which upgrading could not find before.
-      if (await isWebStory(project.workspacePath)) {
-        if (!(await libraryAssets(project.workspacePath)).length) throw new Error("This story is already a web story.");
-        const copied = await writes.exclusive(project.id, () => copyLibraryAssets(project.workspacePath, libraryFile));
-        const graph = JSON.parse(await readFile(path.join(project.workspacePath, "graph.json"), "utf8")) as { assets: Record<string, { source: { path?: string } }> };
-        const changed = copied.copiedAssets.length
-          ? ["graph.json", ...copied.copiedAssets.map((id) => graph.assets[id]?.source.path).filter((file): file is string => !!file)]
-          : [];
-        if (changed.length) await announce(project, changed, `Library media this story used were copied into the project under assets/library/, and graph.json now points at them: ${JSON.stringify(copied.copiedAssets)}.`);
-        return { ...copied, rewritten: [], changed };
-      }
+      if (await isWebStory(project.workspacePath)) throw new Error("This story is already a web story.");
       const before = await snapshot(project);
       const upgrade = await writes.exclusive(project.id, () => upgradeToWebStory(project.workspacePath, libraryFile));
       const after = await snapshot(project);
@@ -113,6 +103,29 @@ export function registerStoryWebRoutes(
         rewritten: upgrade.rewritten,
         changed,
       };
+    }));
+
+  // A web story can still take in Library media that upgrading could not find then.
+  app.post<{ Params: { projectId: string } }>("/projects/:projectId/interactive-story/library-media", async (request, reply) =>
+    send(reply, async (): Promise<StoryLibraryMediaResult> => {
+      const project = story(request.params.projectId);
+      assertIdle(project.id);
+      if (!await isWebStory(project.workspacePath)) throw new Error("Upgrade the story first; upgrading copies its Library media.");
+      const copied = await writes.exclusive(project.id, () => copyLibraryAssets(project.workspacePath, libraryFile));
+      const graph = JSON.parse(await readFile(path.join(project.workspacePath, "graph.json"), "utf8")) as { assets: Record<string, { source: { path?: string } }> };
+      const changed = copied.copiedAssets.length
+        ? ["graph.json", ...copied.copiedAssets.map((id) => graph.assets[id]?.source.path).filter((file): file is string => !!file)]
+        : [];
+      if (changed.length) await announce(project, changed, `Library media this story used were copied into the project under assets/library/, and graph.json now points at them: ${JSON.stringify(copied.copiedAssets)}.`);
+      return { ...copied, changed };
+    }));
+
+  // Keeping the upgrade forgets how to take it back.
+  app.post<{ Params: { projectId: string } }>("/projects/:projectId/interactive-story/upgrade/keep", async (request, reply) =>
+    send(reply, async () => {
+      const project = story(request.params.projectId);
+      await rm(path.join(project.workspacePath, UPGRADE_RECORD), { force: true });
+      return {};
     }));
 
   app.post<{ Params: { projectId: string } }>("/projects/:projectId/interactive-story/upgrade/undo", async (request, reply) =>

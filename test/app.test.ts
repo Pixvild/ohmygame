@@ -2099,7 +2099,7 @@ describe("Playable Nodes projects", () => {
     } });
     expect(put.statusCode, put.body).toBe(200);
     expect(await status()).toMatchObject({ web: true, libraryAssets: ["opening"] });
-    const copied = await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/upgrade` });
+    const copied = await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/library-media` });
     expect(copied.json()).toMatchObject({ copiedAssets: ["opening"], changed: ["graph.json", "assets/library/opening.mp4"] });
     expect((await status()).libraryAssets).toBeUndefined();
 
@@ -2108,6 +2108,12 @@ describe("Playable Nodes projects", () => {
     expect(await status()).toEqual({ web: false });
     await expect(readFile(path.join(project.workspacePath, "index.html"))).rejects.toThrow();
     expect(await readFile(path.join(project.workspacePath, "nodes/chapter/node.js"), "utf8")).toContain('import script from "./script.txt";');
+
+    // Keeping an upgrade forgets how to take it back.
+    expect((await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/upgrade` })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/upgrade/keep` })).statusCode).toBe(200);
+    expect(await status()).toEqual({ web: true });
+    expect((await app.inject({ method: "POST", url: `/projects/${project.id}/interactive-story/upgrade/undo` })).statusCode).toBe(409);
   });
 
   it("lists Presets and adds a Node from one", async () => {

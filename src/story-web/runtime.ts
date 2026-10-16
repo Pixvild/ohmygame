@@ -58,7 +58,9 @@ void start().catch((cause: unknown) => {
 async function start(): Promise<void> {
   const base = new URL("./", document.baseURI);
   const params = new URLSearchParams(location.search);
-  const graphText = await (await fetch(new URL("graph.json", base))).text();
+  const response = await fetch(new URL("graph.json", base));
+  if (!response.ok) throw new Error(`The story's graph.json could not be loaded (${response.status}).`);
+  const graphText = await response.text();
   const graph = JSON.parse(graphText) as NodeGraph;
   const preview = params.get("ohmygame-policy") === "report";
   // A preview, or a Playtest from a chosen Scene, saves nothing, so it never touches the player's games.
@@ -80,16 +82,18 @@ async function start(): Promise<void> {
     .filter(([, asset]) => asset.source.kind === "workspace")
     .map(([id, asset]) => [id, new URL((asset.source as { path: string }).path, base).href]));
 
-  const key = `ohmygame:story:${base.pathname}`;
-  if (params.get("ohmygame-new-game") === "1") localStorage.removeItem(key);
-  if (params.get("ohmygame-forget-seen") === "1") localStorage.removeItem(`${key}:seen`);
+  // Saves follow the story, not its address, which can change with every upload.
+  const storyId = document.querySelector<HTMLMetaElement>('meta[name="ohmygame-story"]')?.content;
+  const key = `ohmygame:story:${storyId || base.pathname}`;
+  if (params.get("ohmygame-new-game") === "1") forget(key);
+  if (params.get("ohmygame-forget-seen") === "1") forget(`${key}:seen`);
   const audio = params.get("ohmygame-silent") === "1" ? undefined : new DocumentPlayableAudio(document);
   const host = new DocumentPlayableSurfaceHost(document, undefined, audio && ((root) => audio.watchNode(root)), { base });
   fitStage(graph.viewport);
   const runtime = new NodeRuntime({
     graph,
     compiled,
-    graphSignature: await signature(graphText),
+    graphSignature: signature(graphText),
     surfaceHost: host,
     saveStore: transient ? new MemoryPlayableSaveStore() : stored<PlayableSaveStore>(key),
     slotStore: transient ? new MemoryPlayableSlotStore() : stored<PlayableSlotStore>(`${key}:slots`),
@@ -107,7 +111,7 @@ async function start(): Promise<void> {
     window.__OHMYGAME_PLAYTEST__ = {
       snapshot: () => runtime.snapshot(),
       reset: () => {
-        localStorage.removeItem(key);
+        forget(key);
         location.reload();
       },
     };
@@ -119,7 +123,11 @@ async function start(): Promise<void> {
   await runtime.start();
 }
 
-/** A store kept in localStorage under one key; one that cannot be read starts over. */
+/**
+ * A store kept in localStorage under one key; one that cannot be read starts
+ * over. Where the browser keeps no storage, reading finds nothing and saving
+ * fails, which the Runtime reports without stopping the game.
+ */
 function stored<T>(key: string): T {
   return {
     load: async () => {
@@ -156,9 +164,25 @@ function fitStage(viewport: { width: number; height: number }): void {
   addEventListener("resize", fit);
 }
 
-async function signature(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+function forget(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // No storage, nothing to forget.
+  }
+}
+
+/**
+ * Tells one graph.json from another, so a save made with another graph is
+ * not continued. FNV-1a, which needs nothing a plain http page lacks.
+ */
+function signature(text: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= BigInt(text.charCodeAt(index));
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, "0");
 }
 
 function errorMessage(value: unknown): string {

@@ -7,6 +7,14 @@ export interface StoryUpgradeStatus {
   libraryAssets?: string[];
 }
 
+export interface StoryLibraryMediaResult {
+  /** Library assets copied into the project, by project Asset ID. */
+  copiedAssets: string[];
+  /** Library assets the Library no longer has. */
+  missingAssets: string[];
+  changed: string[];
+}
+
 export interface StoryUpgradeResult {
   /** Library assets copied into the project, by project Asset ID. */
   copiedAssets: string[];
