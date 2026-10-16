@@ -41,6 +41,11 @@ export interface NodePlayerProps {
   preferencesKey?: string;
   /** Authoring preview options; omit in the Published Player. */
   preview?: PlayablePreviewOptions;
+  /**
+   * A web story's own page in the project preview, played instead of the
+   * sandbox. The preview's editor bridge answers in the sandbox's messages.
+   */
+  page?: string;
   /** Hands the preview's input to an authoring tool; requires `preview`. */
   tool?: PlayablePreviewTool;
   /** `additive` asks to add the element to the selection instead of replacing it. */
@@ -68,6 +73,7 @@ export function NodePlayer({
   seenStorage = window.localStorage,
   preferencesKey = `${saveKey}:preferences`,
   preview,
+  page,
   tool,
   onPick,
   onTextEdit,
@@ -211,10 +217,19 @@ export function NodePlayer({
   };
 
   // A new instance (changed definition or preview options) restarts the
-  // session in the already-loaded frame.
+  // session in the already-loaded frame. A page starts itself.
   useEffect(() => {
-    if (frameLoaded.current) void initialize();
+    if (frameLoaded.current && !page) void initialize();
   }, [instanceId]);
+
+  const pageUrl = useMemo(() => {
+    if (!page) return undefined;
+    const url = new URL(page);
+    url.searchParams.set("ohmygame-instance", instanceId);
+    if (preview?.startNodeId) url.searchParams.set("scene", preview.startNodeId);
+    if (preview?.policy === "report") url.searchParams.set("ohmygame-policy", "report");
+    return url.href;
+  }, [page, instanceId, previewKey]);
 
   // Nodes are always laid out at the project viewport and scaled to fit, so
   // a Node looks the same in the Workbench, a thumbnail, and any window.
@@ -240,12 +255,13 @@ export function NodePlayer({
           <iframe
             ref={iframe}
             className="playable-player-frame"
-            src={frameUrl}
-            sandbox={PLAYABLE_IFRAME_SANDBOX}
+            src={pageUrl ?? frameUrl}
+            // A web story's page has its own preview origin and keeps its saves there.
+            sandbox={pageUrl ? "allow-scripts allow-same-origin allow-pointer-lock" : PLAYABLE_IFRAME_SANDBOX}
             title={title}
             onLoad={() => {
               frameLoaded.current = true;
-              void initialize();
+              if (!pageUrl) void initialize();
             }}
           />
         </div>

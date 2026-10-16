@@ -18,7 +18,12 @@ export interface NodePlayerDefinition {
 
 // `available: false` marks an Interactive Story project whose graph.json is missing.
 export type NodeRuntimeResponse =
-  | { available: true; definition: NodePlayerDefinition }
+  | {
+      available: true;
+      definition: NodePlayerDefinition;
+      /** The project is a web story: its own page plays it, through the project preview. */
+      web?: true;
+    }
   | { available: false };
 
 /**

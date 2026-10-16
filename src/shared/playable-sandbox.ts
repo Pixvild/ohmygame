@@ -27,6 +27,16 @@ export interface PlayableSurfaceModule {
 
 export type PlayableModuleLoader = (javascript: string) => Promise<unknown>;
 
+/**
+ * A story played as an ordinary web page rather than in the sandbox: each
+ * surface's `html`, `css`, and `javascript` are paths of the Node's files,
+ * which the page loads from `base` as they are. Its own modules and
+ * stylesheets resolve like any page's.
+ */
+export interface PlayablePageSurfaces {
+  base: URL;
+}
+
 export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
   readonly #document: Document;
   readonly #loadModule: PlayableModuleLoader;
@@ -35,6 +45,8 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
   #picking?: { stop: () => void };
   #watchingMedia?: () => void;
   readonly #watchSurface?: (root: ShadowRoot) => () => void;
+  readonly #page?: PlayablePageSurfaces;
+  #mounts = 0;
 
   /**
    * `watchSurface` is called with each surface as it mounts, before its code
@@ -45,12 +57,16 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     document: Document,
     loadModule: PlayableModuleLoader = loadPlayableModule,
     watchSurface?: (root: ShadowRoot) => () => void,
+    page?: PlayablePageSurfaces,
   ) {
     this.#document = document;
     this.#loadModule = loadModule;
     this.#watchSurface = watchSurface;
-    assertPlayableSandboxDocument(document);
-    installPlayableSandboxCsp(document);
+    this.#page = page;
+    if (!page) {
+      assertPlayableSandboxDocument(document);
+      installPlayableSandboxCsp(document);
+    }
     const scaffold = createSandboxScaffold(document);
     this.#projectRoot = scaffold.projectRoot;
     this.#nodeLayer = scaffold.nodeLayer;
@@ -312,11 +328,27 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     host.style.width = "100%";
     host.style.height = "100%";
     const root = host.attachShadow({ mode: "open" });
-    const style = this.#document.createElement("style");
-    style.textContent = surface.css;
     const template = this.#document.createElement("template");
-    template.innerHTML = surface.html;
-    root.append(style, template.content.cloneNode(true));
+    let stylesheet: Promise<unknown> | undefined;
+    if (this.#page) {
+      // A page loads the Node's own files; its stylesheet's imports resolve from where it is.
+      const response = await fetch(new URL(surface.html, this.#page.base));
+      if (!response.ok) throw new Error(`Could not load ${surface.html} (${response.status}).`);
+      template.innerHTML = await response.text();
+      const link = this.#document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = new URL(surface.css, this.#page.base).href;
+      stylesheet = new Promise((resolve) => {
+        link.onload = resolve;
+        link.onerror = resolve;
+      });
+      root.append(link, template.content.cloneNode(true));
+    } else {
+      const style = this.#document.createElement("style");
+      style.textContent = surface.css;
+      template.innerHTML = surface.html;
+      root.append(style, template.content.cloneNode(true));
+    }
     layer.append(host);
     const unwatch = this.#watchSurface?.(root);
     const remove = () => {
@@ -325,7 +357,11 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     };
 
     try {
-      const module = await this.#loadModule(surface.javascript);
+      // Each mount gets the Node's module afresh, as the sandbox does.
+      const module = this.#page
+        ? await import(/* @vite-ignore */ `${new URL(surface.javascript, this.#page.base).href}?mount=${++this.#mounts}`)
+        : await this.#loadModule(surface.javascript);
+      await stylesheet;
       if (!isPlayableSurfaceModule(module))
         throw new Error(
           `Playable surface "${surface.id}" does not export a mount function.`,

@@ -14,7 +14,7 @@ import { isUtf8 } from "node:buffer";
 import { sniffImageType } from "./image-format.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { access as fileAccess, readFile } from "node:fs/promises";
 import { OnboardingStore } from "./onboarding.js";
 import type { UpdateOnboardingRequest } from "../shared/onboarding.js";
 import path from "node:path";
@@ -1213,7 +1213,10 @@ export function createApp(options: AppOptions = {}) {
     if (project.type !== "interactive-story") return reply.code(409).send({ error: "Node Runtime requires an Interactive Story project" });
     try {
       const definition = await buildPlayableProject(project.workspacePath);
-      return definition ? { available: true, definition } : { available: false };
+      if (!definition) return { available: false };
+      // A web story carries its own runtime and plays as a page.
+      const web = await fileAccess(path.join(project.workspacePath, "story", "runtime.js")).then(() => true, () => false);
+      return { available: true, definition, ...(web ? { web: true } : {}) };
     } catch (cause) {
       return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) });
     }
@@ -2813,7 +2816,8 @@ export function createApp(options: AppOptions = {}) {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
     const reuse = request.query.reuse === "1";
-    if (reuse && !isWebRuntimeProjectType(project.type)) return reply.code(409).send({ error: "Play requires a Web Game or General Game project." });
+    // A web story plays its own page through the preview.
+    if (reuse && !isWebRuntimeProjectType(project.type) && project.type !== "interactive-story") return reply.code(409).send({ error: "Play requires a Web Game or General Game project." });
     try {
       const url = await (reuse ? previews.ensureStarted(project) : previews.start(project, request.query.reinstall === "1"));
       return { url, title: project.name };

@@ -31,6 +31,7 @@ import {
   previewScriptArguments,
 } from "./preview-launch.js";
 import { startStaticPreview } from "./preview-static.js";
+import { storyWebBundle } from "./story-web-bundle.js";
 
 interface PreviewOptions {
   readinessTimeoutMs?: number;
@@ -62,6 +63,11 @@ export class PreviewCancelledError extends Error {
 
 /** An automatic start found nothing to run yet, which is expected before the first files exist. */
 class PreviewNotReadyError extends ProjectWorkspaceError {}
+
+/** A web story plays its own page through the project preview, like a Web Game. */
+function previewable(project: ProjectState): boolean {
+  return supportsWebPreview(project) || project.type === "interactive-story";
+}
 
 export class PreviewManager {
   readonly #suspended = new Set<string>();
@@ -208,7 +214,7 @@ export class PreviewManager {
 
   ensureStarted(project: ProjectState, manual = true): Promise<string> {
     if (this.#suspended.has(project.id)) return Promise.reject(new PreviewCancelledError());
-    if (!supportsWebPreview(project))
+    if (!previewable(project))
       return Promise.reject(
         new ProjectWorkspaceError(
           "Enable Web preview in project settings first.",
@@ -261,7 +267,7 @@ export class PreviewManager {
     reinstall: boolean,
     automatic: boolean,
   ): Promise<string> {
-    if (!supportsWebPreview(project))
+    if (!previewable(project))
       throw new ProjectWorkspaceError(
         "Enable Web preview in project settings first.",
       );
@@ -487,6 +493,7 @@ export class PreviewManager {
         },
         {
           port: preferredPort,
+          ...(project.type === "interactive-story" ? { story: { bridge: () => storyWebBundle("editor-bridge") } } : {}),
           onActivity: (id, active) => {
             if (proxyHandle && this.#proxies.get(project.id) === proxyHandle)
               this.touch(project, `page:${id}`, active);
