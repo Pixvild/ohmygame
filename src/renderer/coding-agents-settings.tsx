@@ -270,10 +270,7 @@ export function CodingAgentDetail({
     );
   }
   const signedOut = agent.auth.status === "signed-out";
-  // Partial isolation is explained next to the configuration switch it qualifies.
-  const problems = agent.diagnostics.filter(
-    (diagnostic) => diagnostic.code !== "user-config-not-isolated",
-  );
+  const problems = agent.diagnostics;
   return (
     <section className="settings-panel settings-provider-detail coding-agent-detail">
       <header className="settings-provider-detail-header">
@@ -642,8 +639,6 @@ function diagnosticText(
       });
     case "signed-out":
       return t("codingAgents.diagnostic.signedOut", { name: agent.name });
-    case "user-config-not-isolated":
-      return t("codingAgents.partialIsolation", { name: agent.name });
     case "models-unavailable":
       return t("codingAgents.diagnostic.modelsUnavailable", {
         name: agent.name,

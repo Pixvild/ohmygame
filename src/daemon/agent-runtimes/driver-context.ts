@@ -54,12 +54,11 @@ export async function decideApproval(
   details: ApprovalRequestDetails,
   context: DriverContext,
   sink: NativeTurnSink,
-  options?: { callId?: string; signal?: AbortSignal; escalation?: boolean },
+  options?: { callId?: string; signal?: AbortSignal },
 ): Promise<ApprovalDecision> {
   if (options?.signal?.aborted) return "deny";
   const verdict = judgeApproval(details, context.policy);
-  // An agent asks to escalate only for what its own sandbox would stop, so the workspace rule cannot allow it.
-  if (verdict === "allow" && !options?.escalation) return "allow";
+  if (verdict === "allow") return "allow";
   if (verdict === "deny") return "deny";
   return sink.requestApproval(details, options);
 }
@@ -185,4 +184,16 @@ export function piToolCall(
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
+}
+
+/** An object field of a native protocol message, if it is one. */
+export function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** A token count a native protocol reported, or 0. */
+export function number(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

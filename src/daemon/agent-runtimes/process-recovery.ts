@@ -50,9 +50,14 @@ function originalProcessLives(pid: number, identity: string): boolean {
 
 let ownIdentity: string | undefined;
 
+/** The daemon's own identity; it cannot change while the daemon runs, and reading it runs `ps`. */
+function daemonIdentity(): string | undefined {
+  return (ownIdentity ??= processIdentity(process.pid));
+}
+
 /** A private folder belongs to a daemon, not to whichever daemon next starts. */
 export async function leaseAgentDirectory(directory: string): Promise<void> {
-  ownIdentity ??= processIdentity(process.pid);
+  const ownIdentity = daemonIdentity();
   if (!ownIdentity) return;
   await writeFile(
     path.join(directory, ".owner.json"),
@@ -100,7 +105,7 @@ export function trackAgentProcess(
   child.once("spawn", () => {
     if (!child.pid) return;
     const identity = processIdentity(child.pid);
-    const ownerIdentity = processIdentity(process.pid);
+    const ownerIdentity = daemonIdentity();
     if (!identity || !ownerIdentity) return; // Never reclaim a PID without evidence.
     try {
       mkdirSync(directory, { recursive: true, mode: 0o700 });

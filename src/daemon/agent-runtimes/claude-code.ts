@@ -16,11 +16,13 @@ import { BRIDGE_SERVER_NAME } from "./tool-bridge.js";
 import {
   BridgeResults,
   decideApproval,
+  number,
   piToolCall,
+  record,
   textResult,
   type DriverContext,
 } from "./driver-context.js";
-import { stageSkills } from "./skills.js";
+import { stageSkills, stagedSkillsRoot } from "./skills.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 
 const CONTROL_TIMEOUT_MS = 30_000;
@@ -227,7 +229,11 @@ export class ClaudeCodeDriver implements NativeDriver {
       args.push("--setting-sources", "", "--strict-mcp-config");
     if (context.skillDirectories.length) {
       // Skills reach Claude Code as a plugin of this session's own.
-      const plugin = path.join(context.privateDirectory, "claude-plugin");
+      const skills = stagedSkillsRoot(
+        "claude-code-cli",
+        context.privateDirectory,
+      );
+      const plugin = path.dirname(skills);
       await mkdir(path.join(plugin, ".claude-plugin"), {
         recursive: true,
         mode: 0o700,
@@ -240,14 +246,7 @@ export class ClaudeCodeDriver implements NativeDriver {
           description: "OhMyGame Skills for this project",
         }),
       );
-      if (
-        (
-          await stageSkills(
-            context.skillDirectories,
-            path.join(plugin, "skills"),
-          )
-        ).length
-      )
+      if ((await stageSkills(context.skillDirectories, skills)).length)
         args.push("--plugin-dir", plugin);
     }
     if (this.#sessionId) args.push("--resume", this.#sessionId);
@@ -758,16 +757,6 @@ function claudeApproval(
       : {}),
     canAllowSession: request.suppress_always_allow_rule !== true,
   };
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function number(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function stripAnsi(value: string): string {

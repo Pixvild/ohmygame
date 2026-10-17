@@ -10,8 +10,14 @@ import type {
   NativeTurnSink,
 } from "./native-session.js";
 import { AgentProcess, processFailure } from "./process.js";
-import { textResult, type DriverContext } from "./driver-context.js";
-import { stageSkills } from "./skills.js";
+import {
+  BridgeResults,
+  number,
+  record,
+  textResult,
+  type DriverContext,
+} from "./driver-context.js";
+import { stageSkills, stagedSkillsRoot } from "./skills.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 import { canonicalPath, judgeApproval } from "./policy.js";
 import type { AgentContextUsage } from "../../shared/contracts.js";
@@ -191,7 +197,7 @@ export class CodexDriver implements NativeDriver {
   #starting?: Promise<CodexAppServer>;
   #threadId?: string;
   #turn?: CodexTurn;
-  #bridged = new Map<string, { result: NativeToolResult; isError: boolean }>();
+  #bridged = new BridgeResults();
 
   constructor(private readonly context: DriverContext) {
     this.#threadId = context.resume;
@@ -330,7 +336,10 @@ export class CodexDriver implements NativeDriver {
           .then((value) => this.#readLimits(value))
           .catch(() => {});
         if (this.context.skillDirectories.length) {
-          const root = path.join(this.context.privateDirectory, "codex-skills");
+          const root = stagedSkillsRoot(
+            "codex-cli",
+            this.context.privateDirectory,
+          );
           if ((await stageSkills(this.context.skillDirectories, root)).length) {
             await server
               .request("skills/extraRoots/set", { extraRoots: [root] })
@@ -425,7 +434,9 @@ export class CodexDriver implements NativeDriver {
     // Private staged Skills remain readable; the rest of app data stays denied.
     if (this.context.skillDirectories.length)
       filesystem[
-        canonicalPath(path.join(this.context.privateDirectory, "codex-skills"))
+        canonicalPath(
+          stagedSkillsRoot("codex-cli", this.context.privateDirectory),
+        )
       ] = "read";
     for (const protectedPath of this.context.policy.neverTouch) {
       const target = canonicalPath(protectedPath);
@@ -701,8 +712,7 @@ export class CodexDriver implements NativeDriver {
         return;
       }
       case "dynamicToolCall": {
-        const stored = this.#bridged.get(id);
-        this.#bridged.delete(id);
+        const stored = this.#bridged.take(id);
         sink.toolResult(
           id,
           stored?.result ?? dynamicResult(item.contentItems),
@@ -754,7 +764,7 @@ export class CodexDriver implements NativeDriver {
         callId,
         turn?.signal,
       );
-      this.#bridged.set(callId, outcome);
+      this.#bridged.record(callId, outcome);
       return {
         contentItems: outcome.result.content.map((part) =>
           part.type === "text"
@@ -932,14 +942,4 @@ function codexError(message: unknown): string {
     /* plain text */
   }
   return message;
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function number(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

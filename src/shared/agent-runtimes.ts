@@ -20,9 +20,6 @@ export function isAgentRuntimeId(value: unknown): value is AgentRuntimeId {
   );
 }
 
-/** Full adapters handle approvals and context lifecycle; availability still depends on the CLI and account. */
-export type AgentRuntimeTier = "full" | "basic";
-
 /** Where the agent's model requests are billed, as far as OhMyGame can tell. */
 export type AgentRuntimeBilling =
   "subscription" | "api-key" | "provider" | "unknown";
@@ -34,8 +31,7 @@ export type AgentRuntimeDiagnosticCode =
   | "version-unsupported"
   | "signed-out"
   | "probe-failed"
-  | "models-unavailable"
-  | "user-config-not-isolated";
+  | "models-unavailable";
 
 export interface AgentRuntimeDiagnostic {
   code: AgentRuntimeDiagnosticCode;
@@ -48,7 +44,6 @@ export interface AgentRuntimeDiagnostic {
 export interface AgentRuntimeStatus {
   id: AgentRuntimeId;
   name: string;
-  tier: AgentRuntimeTier;
   enabled: boolean;
   installed: boolean;
   /** The executable that runs, resolved to an absolute path. */

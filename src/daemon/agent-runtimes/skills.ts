@@ -1,5 +1,21 @@
 import { cp, mkdir, readdir, lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import type { AgentRuntimeId } from "../../shared/agent-runtimes.js";
+
+const STAGED_SKILLS: Record<AgentRuntimeId, string> = {
+  // Claude Code reads Skills from a plugin of the session's own.
+  "claude-code-cli": path.join("claude-plugin", "skills"),
+  "codex-cli": "codex-skills",
+  "opencode-cli": "opencode-skills",
+};
+
+/** Where a session's Skills are staged inside its private folder, the only app data its agent may read. */
+export function stagedSkillsRoot(
+  runtime: AgentRuntimeId,
+  privateDirectory: string,
+): string {
+  return path.join(privateDirectory, STAGED_SKILLS[runtime]);
+}
 
 /**
  * Copies Skill folders into a folder of the session's own, where a CLI is

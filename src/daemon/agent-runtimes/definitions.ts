@@ -1,7 +1,4 @@
-import type {
-  AgentRuntimeId,
-  AgentRuntimeTier,
-} from "../../shared/agent-runtimes.js";
+import type { AgentRuntimeId } from "../../shared/agent-runtimes.js";
 
 /**
  * What OhMyGame knows about a coding agent CLI before running it: how to find
@@ -13,7 +10,6 @@ import type {
 export interface AgentRuntimeDefinition {
   id: AgentRuntimeId;
   name: string;
-  tier: AgentRuntimeTier;
   /** Executable names to look for, in order. */
   binaries: readonly string[];
   /**
@@ -36,7 +32,6 @@ export const AGENT_RUNTIME_DEFINITIONS: Record<
   "claude-code-cli": {
     id: "claude-code-cli",
     name: "Claude Code",
-    tier: "full",
     binaries: ["claude"],
     versionArgs: ["--version"],
     minimumVersion: "2.1.76",
@@ -46,7 +41,6 @@ export const AGENT_RUNTIME_DEFINITIONS: Record<
   "codex-cli": {
     id: "codex-cli",
     name: "Codex",
-    tier: "full",
     binaries: ["codex"],
     bundledPaths: {
       darwin: [
@@ -62,7 +56,6 @@ export const AGENT_RUNTIME_DEFINITIONS: Record<
   "opencode-cli": {
     id: "opencode-cli",
     name: "OpenCode",
-    tier: "full",
     binaries: ["opencode"],
     versionArgs: ["--version"],
     minimumVersion: "1.18.33",

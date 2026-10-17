@@ -38,6 +38,7 @@ import { ToolBridge } from "./tool-bridge.js";
 import type { DriverContext, HttpBridgeHandlers } from "./driver-context.js";
 import type { AgentPolicyContext } from "./policy.js";
 import { AgentRuntimeSettingsStore } from "./settings.js";
+import { stagedSkillsRoot } from "./skills.js";
 import { ClaudeCodeDriver } from "./claude-code.js";
 import { CodexAppServer, CodexDriver } from "./codex.js";
 import { OpenCodeDriver } from "./opencode.js";
@@ -101,7 +102,6 @@ export class AgentRuntimeService {
     string,
     { bridge: ToolBridge; handlers: HttpBridgeHandlers }
   >();
-  #logins = new Set<AgentProcess | CodexAppServer>();
   #modelErrors = new Map<AgentRuntimeId, string>();
   readonly #root: string;
 
@@ -135,7 +135,6 @@ export class AgentRuntimeService {
     const base = {
       id,
       name: definition.name,
-      tier: definition.tier,
       enabled: settings.enabled,
       isolateUserConfig: settings.isolateUserConfig,
       ...(id === "codex-cli" && settings.isolateUserConfig
@@ -222,10 +221,10 @@ export class AgentRuntimeService {
     const lists = await Promise.all(
       AGENT_RUNTIME_IDS.map(async (id) => {
         if (!this.settings.get(id).enabled) return [];
-        const load = this.#loadModels(id).catch(() => [] as AgentModel[]);
         const cached = this.#models.get(id);
         if (cached && Date.now() - cached.at < MODELS_TTL_MS)
           return cached.models;
+        const load = this.#loadModels(id).catch(() => [] as AgentModel[]);
         const late = Symbol("late");
         let timer: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([
@@ -264,13 +263,10 @@ export class AgentRuntimeService {
         notification: (method) => {
           if (method !== "account/login/completed") return;
           forget();
-          this.#logins.delete(server);
           void server.stop();
         },
       });
-      this.#logins.add(server);
       setTimeout(() => {
-        this.#logins.delete(server);
         void server.stop();
       }, LOGIN_TIMEOUT_MS).unref();
       try {
@@ -283,7 +279,6 @@ export class AgentRuntimeService {
           ? { url: started.authUrl }
           : { command: definition.loginCommand };
       } catch (cause) {
-        this.#logins.delete(server);
         await server.stop();
         throw cause;
       }
@@ -303,12 +298,10 @@ export class AgentRuntimeService {
             resolve({ url });
           },
           onExit: () => {
-            this.#logins.delete(child);
             forget();
             if (!found) resolve({ command: definition.loginCommand });
           },
         });
-        this.#logins.add(child);
         setTimeout(() => {
           if (!found) {
             found = true;
@@ -316,7 +309,6 @@ export class AgentRuntimeService {
           }
         }, 15_000).unref();
         setTimeout(() => {
-          this.#logins.delete(child);
           void child.stop();
         }, LOGIN_TIMEOUT_MS).unref();
       });
@@ -388,16 +380,7 @@ export class AgentRuntimeService {
       bridge,
       policy: {
         ...request.policy,
-        readablePaths: [
-          path.join(
-            folder.path,
-            request.runtime === "claude-code-cli"
-              ? "claude-plugin/skills"
-              : request.runtime === "codex-cli"
-                ? "codex-skills"
-                : "opencode-skills",
-          ),
-        ],
+        readablePaths: [stagedSkillsRoot(request.runtime, folder.path)],
       },
       skillDirectories: request.skillDirectories,
       httpBridge: async (handlers) => {
@@ -512,7 +495,6 @@ export class AgentRuntimeService {
 
   /** Stops every CLI still running: sessions let go of theirs without waiting, sign-ins may still be open. */
   async close(): Promise<void> {
-    this.#logins.clear();
     this.#bridges.clear();
     await stopAgentProcesses();
   }
@@ -619,13 +601,6 @@ export class AgentRuntimeService {
           message: `${definition.name} is not signed in`,
           command: definition.loginCommand,
         });
-      if (id === "codex-cli" && this.settings.get(id).isolateUserConfig) {
-        diagnostics.push({
-          code: "user-config-not-isolated",
-          message:
-            "Codex always loads Skills, plugins and AGENTS.md from its own folder; OhMyGame turns off your Codex MCP servers and notification hook for its runs.",
-        });
-      }
       const result: ProbeCache = {
         signature: binary.signature,
         ...(version ? { version } : {}),

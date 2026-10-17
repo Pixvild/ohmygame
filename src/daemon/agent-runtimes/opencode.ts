@@ -16,11 +16,13 @@ import { AgentProcess, processFailure } from "./process.js";
 import { BRIDGE_SERVER_NAME } from "./tool-bridge.js";
 import {
   decideApproval,
+  number,
   piToolCall,
+  record,
   textResult,
   type DriverContext,
 } from "./driver-context.js";
-import { stageSkills } from "./skills.js";
+import { stageSkills, stagedSkillsRoot } from "./skills.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 
 const START_TIMEOUT_MS = 30_000;
@@ -336,7 +338,7 @@ export class OpenCodeDriver implements NativeDriver {
   /** OpenCode's configuration for this conversation, passed in its environment and never written to the workspace. */
   async #environment(): Promise<Record<string, string>> {
     const { context } = this;
-    const skills = path.join(context.privateDirectory, "opencode-skills");
+    const skills = stagedSkillsRoot("opencode-cli", context.privateDirectory);
     const staged = context.skillDirectories.length
       ? await stageSkills(context.skillDirectories, skills)
       : [];
@@ -787,12 +789,8 @@ export class OpenCodeDriver implements NativeDriver {
     }
     if (turn.signal.aborted || this.#turn !== turn) decision = "deny";
     await this.#api("POST", `/permission/${id}/reply`, {
-      reply:
-        decision === "allow"
-          ? "once"
-          : decision === "allow-session"
-            ? "once"
-            : "reject",
+      // Conversation grants are kept by OhMyGame for the exact request, never as a native pattern.
+      reply: decision === "deny" ? "reject" : "once",
     }).catch(() => {});
   }
 
@@ -871,14 +869,4 @@ function stableJson(value: unknown): string {
       )
       .join(",")}}`;
   return JSON.stringify(value);
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function number(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
