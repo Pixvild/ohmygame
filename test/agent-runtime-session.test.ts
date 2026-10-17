@@ -152,6 +152,31 @@ describe("coding agent sessions", () => {
     return { session, sessionManager, drivers };
   }
 
+  it("stops an idle CLI and resumes the same native session with the next message", async () => {
+    const { session, drivers } = fixture(
+      [
+        async (_input, sink) => {
+          sink.nativeSession("native-1");
+          sink.textDone("a", "first");
+          return { status: "completed" };
+        },
+      ],
+      undefined,
+      { idleTimeoutMs: 5 },
+    );
+    await session.prompt("first request");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(drivers[0]!.disposed).toBe(true);
+    expect(drivers[1]!.resume).toBe("native-1");
+    await session.prompt("second request");
+    expect(drivers[0]!.inputs).toHaveLength(1);
+    // The resumed CLI keeps its context, so the message is not wrapped in a handoff.
+    expect(drivers[1]!.inputs.map((input) => input.text)).toEqual([
+      "second request",
+    ]);
+    session.dispose();
+  });
+
   it("invalidates native context when editing a later message and keeps it invalid after restart", async () => {
     const { session, sessionManager, drivers } = fixture([
       async (_input, sink) => {

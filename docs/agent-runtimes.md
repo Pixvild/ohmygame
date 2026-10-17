@@ -162,7 +162,9 @@ follow-ups. They are not concurrent mid-turn injection. Pi retains its own
 steering behavior. The UI must describe the supported queue behavior instead
 of claiming steering parity across CLIs.
 
-Check abort before spawning and again before delivery. Interrupt waits are
+A CLI idle for ten minutes is stopped and its replacement resumes the ready
+native session with the next message, so open conversations do not each keep
+a process. Check abort before spawning and again before delivery. Interrupt waits are
 bounded and fall back to stopping the process group. A turn must settle on
 spawn failure, close, transport loss, timeout, and cancellation, including
 startup races. Ignore late callbacks/results after settlement.

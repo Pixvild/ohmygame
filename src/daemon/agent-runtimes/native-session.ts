@@ -141,7 +141,11 @@ export interface NativeSessionOptions {
   dispose?(): void | Promise<void>;
   /** Time allowed for a native interrupt before its process is stopped. */
   cancellationTimeoutMs?: number;
+  /** How long a CLI may sit idle before it is stopped; the next message resumes its native session. */
+  idleTimeoutMs?: number;
 }
+
+const IDLE_PROCESS_MS = 10 * 60_000;
 
 const NATIVE_API = "ohmygame-native";
 
@@ -170,6 +174,9 @@ export class NativeCodingSession implements CodingSession {
   #allowed = new Set<string>();
   #checkpointFailure?: { cause: unknown };
   #disposed = false;
+  #idleTimer?: ReturnType<typeof setTimeout>;
+  /** An idle CLI still stopping; the next run waits so two processes never share a native session. */
+  #idleStop?: Promise<void>;
 
   constructor(private readonly options: NativeSessionOptions) {
     this.runtime = options.runtime;
@@ -212,6 +219,8 @@ export class NativeCodingSession implements CodingSession {
     this.#running = { controller, done };
     this.#checkpointFailure = undefined;
     try {
+      const stopping = this.#takeIdleStop();
+      if (stopping) await stopping;
       let next: { text: string; images: PromptImage[] } | undefined = {
         text: prompt,
         images: options?.images ?? [],
@@ -232,6 +241,7 @@ export class NativeCodingSession implements CodingSession {
     } finally {
       this.#running = undefined;
       settle();
+      this.#scheduleIdleStop();
       this.#emit({ type: "agent_settled", aborted: controller.signal.aborted });
     }
     // A failed snapshot stops the run before the agent sees the message, as it does for Pi.
@@ -290,6 +300,8 @@ export class NativeCodingSession implements CodingSession {
     const turn = new TurnRecorder(this, this.options.model);
     this.#storeNativeState("active");
     try {
+      const stopping = this.#takeIdleStop();
+      if (stopping) await stopping;
       const sink = turn.sink();
       const report = sink.compaction;
       sink.compaction = (phase, result) =>
@@ -306,6 +318,7 @@ export class NativeCodingSession implements CodingSession {
     } finally {
       this.#running = undefined;
       settle();
+      this.#scheduleIdleStop();
     }
   }
 
@@ -379,6 +392,7 @@ export class NativeCodingSession implements CodingSession {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    clearTimeout(this.#idleTimer);
     this.#running?.controller.abort();
     // Keep generated config/Skills until the process has actually stopped.
     void Promise.resolve(this.#driver.dispose())
@@ -514,6 +528,39 @@ export class NativeCodingSession implements CodingSession {
     if (outcome.status === "completed") this.#storeNativeState("ready");
     else await this.#resetContext();
     return outcome.status !== "completed";
+  }
+
+  #scheduleIdleStop(): void {
+    clearTimeout(this.#idleTimer);
+    if (this.#disposed) return;
+    this.#idleTimer = setTimeout(
+      () => this.#stopIdleProcess(),
+      this.options.idleTimeoutMs ?? IDLE_PROCESS_MS,
+    );
+    this.#idleTimer.unref?.();
+  }
+
+  /**
+   * Stops a CLI no message has used for a while. Its replacement starts only
+   * with the next message and resumes the same native session, which is
+   * valid here: a turn that did not complete has already reset the context.
+   */
+  #stopIdleProcess(): void {
+    if (this.#running || this.#disposed) return;
+    const idle = this.#driver;
+    this.#driver = this.options.createDriver(this.#nativeSessionId, {
+      model: this.options.model,
+      reasoningLevel: this.options.nativeReasoningLevel,
+    });
+    this.#idleStop = Promise.resolve(idle.dispose()).catch(() => {});
+  }
+
+  /** Cancels the idle stop and returns a stop still in progress, if any; awaiting nothing keeps the snapshot synchronous. */
+  #takeIdleStop(): Promise<void> | undefined {
+    clearTimeout(this.#idleTimer);
+    const stopping = this.#idleStop;
+    this.#idleStop = undefined;
+    return stopping;
   }
 
   #storeNativeState(state: StoredNativeSession["state"]): void {
