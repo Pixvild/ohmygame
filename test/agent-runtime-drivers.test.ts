@@ -1381,6 +1381,7 @@ describe("OpenCode adapter", () => {
       if (permission) {
         replies.push({ id: permission[1]!, body });
         response.end("true");
+        if (replies.length < 2) return;
         emit("message.part.updated", {
           sessionID: "ses_1",
           part: {
@@ -1502,6 +1503,15 @@ describe("OpenCode adapter", () => {
           always: ["sudo *"],
           tool: { messageID: "msg_a", callID: "call_1" },
         });
+        // A subagent may explore while planning; its own requests are judged like the parent's.
+        emit("permission.asked", {
+          id: "per_2",
+          sessionID: "ses_1",
+          permission: "task",
+          patterns: ["explore"],
+          metadata: { description: "Find the speed" },
+          always: ["*"],
+        });
         return;
       }
       response.writeHead(404).end();
@@ -1549,7 +1559,19 @@ describe("OpenCode adapter", () => {
         parts: [{ type: "text", text: "go" }],
       }),
     ]);
-    expect(replies).toEqual([{ id: "per_1", body: { reply: "reject" } }]);
+    expect(replies).toHaveLength(2);
+    expect(replies).toEqual(
+      expect.arrayContaining([
+        {
+          id: "per_1",
+          body: {
+            reply: "reject",
+            message: expect.stringContaining("planning turn"),
+          },
+        },
+        { id: "per_2", body: { reply: "once" } },
+      ]),
+    );
     // Planning turns deny shell execution without offering an override.
     expect(recorded.asked).toEqual([]);
     expect(recorded.sessionId()).toBe("ses_1");

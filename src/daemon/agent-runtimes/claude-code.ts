@@ -18,6 +18,7 @@ import {
   decideApproval,
   number,
   piToolCall,
+  PLANNING_DENIAL,
   record,
   textResult,
   type DriverContext,
@@ -664,8 +665,7 @@ export class ClaudeCodeDriver implements NativeDriver {
         ? { decision: "allow", reason: "Approved by OhMyGame" }
         : {
             decision: "deny",
-            reason:
-              "This is a planning turn: do not change anything. Use Read, or one simple read command at a time (ls, cat, head, tail, wc, grep, rg) without pipes, &&, redirection or globs.",
+            reason: PLANNING_DENIAL,
           };
     }
     const decision = await decideApproval(details, this.context, turn.sink, {

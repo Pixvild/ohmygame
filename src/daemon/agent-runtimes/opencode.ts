@@ -18,11 +18,13 @@ import {
   decideApproval,
   number,
   piToolCall,
+  PLANNING_DENIAL,
   record,
   textResult,
   type DriverContext,
 } from "./driver-context.js";
 import { stageSkills, stagedSkillsRoot } from "./skills.js";
+import { judgeApproval } from "./policy.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 
 const START_TIMEOUT_MS = 30_000;
@@ -773,24 +775,33 @@ export class OpenCodeDriver implements NativeDriver {
         ? String(record(request.tool)!.callID)
         : undefined;
     let decision: ApprovalDecision;
+    // A rejection with feedback lets OpenCode adjust and continue; a bare one stops its loop.
+    let feedback: string | undefined;
     try {
-      decision =
-        turn.readOnly &&
-        !["read", "glob", "grep", "list", "external_directory"].includes(
-          permission,
-        )
-          ? "deny"
-          : await decideApproval(details, this.context, turn.sink, {
-              ...(callId ? { callId } : {}),
-              signal: turn.signal,
-            });
+      if (OPENCODE_OWN_PERMISSIONS.has(permission)) decision = "allow";
+      else if (turn.readOnly && !OPENCODE_READ_PERMISSIONS.has(permission)) {
+        decision =
+          permission === "bash" &&
+          judgeApproval(details, this.context.policy) === "allow"
+            ? "allow"
+            : "deny";
+        if (decision === "deny") feedback = PLANNING_DENIAL;
+      } else
+        decision = await decideApproval(details, this.context, turn.sink, {
+          ...(callId ? { callId } : {}),
+          signal: turn.signal,
+        });
     } catch {
       decision = "deny";
     }
-    if (turn.signal.aborted || this.#turn !== turn) decision = "deny";
+    if (turn.signal.aborted || this.#turn !== turn) {
+      decision = "deny";
+      feedback = undefined;
+    }
     await this.#api("POST", `/permission/${id}/reply`, {
       // Conversation grants are kept by OhMyGame for the exact request, never as a native pattern.
       reply: decision === "deny" ? "reject" : "once",
+      ...(decision === "deny" && feedback ? { message: feedback } : {}),
     }).catch(() => {});
   }
 
@@ -825,6 +836,30 @@ export class OpenCodeDriver implements NativeDriver {
     );
   }
 }
+
+/**
+ * OpenCode requests that touch no file and run no command: subagents (whose
+ * own requests arrive here with their session's ancestry checked), its todo
+ * list, Skill loading and web research. Asking would interrupt the person for
+ * the agent's bookkeeping, and planning may use them too.
+ */
+const OPENCODE_OWN_PERMISSIONS = new Set([
+  "task",
+  "todowrite",
+  "todoread",
+  "skill",
+  "webfetch",
+  "websearch",
+]);
+
+/** What a planning turn may request; bash only for the read commands the policy allows. */
+const OPENCODE_READ_PERMISSIONS = new Set([
+  "read",
+  "glob",
+  "grep",
+  "list",
+  "external_directory",
+]);
 
 class OpenCodeHttpError extends Error {
   constructor(

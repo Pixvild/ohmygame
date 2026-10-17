@@ -6,6 +6,10 @@ import type { NativeToolResult, NativeTurnSink } from "./native-session.js";
 import { judgeApproval, type AgentPolicyContext } from "./policy.js";
 import type { ToolBridge } from "./tool-bridge.js";
 
+/** Why a planning turn refused a request, so the agent can adjust instead of stopping. */
+export const PLANNING_DENIAL =
+  "This is a planning turn: do not change anything. Use Read, or one simple read command at a time (ls, cat, head, tail, wc, grep, rg) without pipes, &&, redirection or globs.";
+
 /** What every protocol adapter is given to run one conversation. */
 export interface DriverContext {
   binaryPath: string;

@@ -44,6 +44,13 @@ import { CodexAppServer, CodexDriver } from "./codex.js";
 import { OpenCodeDriver } from "./opencode.js";
 
 const STATUS_TTL_MS = 60_000;
+
+/**
+ * Coding agents see OhMyGame's tools under their CLI's MCP names and follow
+ * their own planning habits, such as plan files; Pi needs neither line.
+ */
+const NATIVE_INSTRUCTIONS =
+  "OhMyGame's own tools (canvas checks, image, video, 3D and audio generation, game playtesting, questionnaire, update_plan and plugin services) come from its ohmygame tool server; your CLI may name them with a prefix such as mcp__ohmygame__ or ohmygame_. In a planning turn, record the plan with update_plan before you finish, rather than writing a plan file or only describing it.";
 const MODELS_TTL_MS = 10 * 60_000;
 const MODELS_WAIT_MS = 6_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -376,7 +383,7 @@ export class AgentRuntimeService {
       privateDirectory: folder.path,
       processDirectory: path.join(this.#root, "processes"),
       isolateUserConfig: settings.isolateUserConfig,
-      instructions: request.instructions,
+      instructions: `${request.instructions}\n\n${NATIVE_INSTRUCTIONS}`,
       bridge,
       policy: {
         ...request.policy,
