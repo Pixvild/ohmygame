@@ -36,9 +36,12 @@ and effort as `defaultModel` in `agent-runtimes.json`; it applies while that
 agent is enabled and offers the model. Choosing a Pi default clears it. Plain
 `GET /models` continues to report Pi's default for one-off generation.
 An explicitly chosen different model does not inherit an incompatible effort.
-Context usage uses the native context window when reported. Codex quota
-windows and reset times are displayed separately; missing measurements remain
-unknown rather than being inferred from token totals.
+Context usage uses the native context window when reported. Stored assistant
+messages record the latest model request's usage, as Pi's own messages do,
+rather than a turn's or thread's running total, so a conversation that moves
+back to Pi does not look larger than it is. Codex quota windows and reset times
+are displayed separately; missing measurements remain unknown rather than being
+inferred from token totals.
 
 ![Codex conversation with a denied read, a cancelled turn, and Medium effort selected](assets/coding-agent-native-effort.png)
 
@@ -132,11 +135,21 @@ does. `judgeApproval` decides each request first:
   and include custom CLI credential homes. A command reaches a folder when it names it or a folder
   that holds it, quoted or not.
 - **Allow** workspace file requests and a small set of simple read commands.
+  Claude Code's own tools that touch no file and run no command (`TodoWrite`,
+  `Skill`, `Task`, `WebSearch`, `WebFetch` and its background-shell and MCP
+  resource readers) also run without asking; a subagent's tool calls are
+  checked like any other.
 - **Ask** the person for paths outside the workspace and other commands,
-  including build scripts, interpreters, Git and
-  compound commands. A request
+  including build scripts, interpreters, Git, compound commands, globs and
+  recursive link-following (`grep -R`, `rg -L`). A request
   Codex makes to leave its sandbox always asks, because Codex only makes one
   when its sandbox would stop the command.
+
+Planning turns are read-only on every path. Claude's `ExitPlanMode` is
+declined with a pointer to `update_plan`, because OhMyGame reviews plans itself.
+Codex registers every OhMyGame tool when its thread starts, since a thread that
+begins in planning continues after the plan is approved; tools the current mode
+does not allow are refused when called.
 
 A request the policy leaves to the person appears as an approval card above the
 composer: Allow, Allow for this conversation, or Deny. Answered requests stay
@@ -183,7 +196,9 @@ subscription to metered billing; Claude Code keeps `CLAUDE_CODE_OAUTH_TOKEN`,
 which is a subscription sign-in. The daemon's token and `OHMYGAME_*` variables
 never reach a CLI. The executable is resolved to an absolute path from the
 person's choice, PATH, the login shell's PATH, usual install folders, and known
-bundled copies such as ChatGPT's Codex. An explicit path wins; automatic
+bundled copies such as ChatGPT's Codex. On Windows only `.exe` programs are
+used, because Node cannot start `.cmd`/`.bat` shims without a shell. An
+explicit path wins; automatic
 discovery chooses the newest SemVer, including prerelease ordering, and retries
 failed version probes. Recheck also invalidates successful probes. Catalog
 refreshes honor their TTL and discard results from a superseded configuration.
@@ -206,14 +221,15 @@ By default each agent runs without the person's own configuration:
 `binaryPath`, and an optional native model/effort `defaultModel`. A damaged file falls
 back to the defaults. Credentials remain in the CLI's own store.
 
-| Route                                                     | Purpose                                                        |
-| --------------------------------------------------------- | -------------------------------------------------------------- |
-| `GET /agent-runtimes`                                     | Status of every agent; `?recheck=1` probes again               |
-| `PATCH /agent-runtimes/:id`                               | `enabled`, `isolateUserConfig`, `binaryPath`                   |
-| `POST /agent-runtimes/:id/recheck`                        | Probe one agent again                                          |
-| `POST /agent-runtimes/:id/login`                          | Start the CLI's sign-in; returns a browser URL or a command    |
-| `PUT /projects/:p/conversations/:c/reasoning`             | Select a native effort/variant string                          |
-| `POST /projects/:p/conversations/:c/approvals/:requestId` | Answer an approval request: `allow`, `allow-session` or `deny` |
+| Route                                                     | Purpose                                                                |
+| --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `GET /agent-runtimes`                                     | Status of every agent; `?recheck=1` probes again                       |
+| `PATCH /agent-runtimes/:id`                               | `enabled`, `isolateUserConfig`, `binaryPath`                           |
+| `POST /agent-runtimes/:id/recheck`                        | Probe one agent again                                                  |
+| `POST /agent-runtimes/:id/login`                          | Start the CLI's sign-in; returns a browser URL or a command            |
+| `PUT /projects/:p/conversations/:c/reasoning`             | Select a native effort/variant string                                  |
+| `PUT /models/default`, `POST /projects/:p/conversations`  | Take `nativeReasoningLevel` for a native model, never `reasoningLevel` |
+| `POST /projects/:p/conversations/:c/approvals/:requestId` | Answer an approval request: `allow`, `allow-session` or `deny`         |
 
 Status and models are probed only when asked for and cached by executable
 signature; choosing Pi never starts a CLI.
