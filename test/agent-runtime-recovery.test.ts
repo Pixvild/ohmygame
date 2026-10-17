@@ -102,6 +102,14 @@ it("resolves workspace symlinks, including missing descendants, before protectin
     "rg --pre=sh pattern",
     "git status; echo hi",
     "cat $(echo file)",
+    // A glob or recursive link-following reaches `linked` without naming it.
+    "cat l*/auth.json",
+    "cat linke?/auth.json",
+    "cat {linked,other}/auth.json",
+    "grep -R token .",
+    "rg -L token",
+    "rg --follow token",
+    "ls -lR",
   ]) {
     expect(
       judgeApproval(
@@ -109,6 +117,19 @@ it("resolves workspace symlinks, including missing descendants, before protectin
         policy,
       ),
     ).toBe("ask");
+  }
+  for (const command of [
+    "cat notes.txt",
+    "grep -rn token src",
+    "rg token",
+    "ls -la",
+  ]) {
+    expect(
+      judgeApproval(
+        { kind: "command", tool: "Bash", command, canAllowSession: true },
+        policy,
+      ),
+    ).toBe("allow");
   }
 });
 it("protects custom CLI credential roots", () => {

@@ -128,7 +128,9 @@ export function judgeApproval(
       )
     )
       return "ask";
-    return SAFE_COMMAND.test(command.trim()) && !SHELL_CONTROL.test(command)
+    return SAFE_COMMAND.test(command.trim()) &&
+      !SHELL_CONTROL.test(command) &&
+      !UNSCOPED_ARGUMENT.test(command)
       ? "allow"
       : "ask";
   }
@@ -140,6 +142,11 @@ export function judgeApproval(
 const SAFE_COMMAND = /^(?:pwd|ls|cat|head|tail|wc|rg|grep)\b/;
 const SHELL_CONTROL =
   /[\n;&|<>`$]|(?:^|\s)--(?:pre|exec|hostname-bin)(?:=|\s|$)|(?:^|\s)(?:-exec|-execdir|-delete)(?:\s|$)/;
+
+// Globs expand to paths this check never sees, and recursive link-following
+// (`grep -R`, `rg -L`, `ls -LR`) reaches whatever workspace links point at.
+const UNSCOPED_ARGUMENT =
+  /[*?[\]{}]|(?:^|\s)(?:-[A-Za-z]*[RL][A-Za-z]*|--dereference-recursive|--follow)(?=\s|$)/;
 
 /** Resolve links even when the final file has not been created yet. */
 export function canonicalPath(value: string): string {
