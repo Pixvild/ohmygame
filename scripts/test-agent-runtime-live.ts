@@ -25,6 +25,14 @@ const externalFixture = await mkdtemp(
 );
 const workspace = path.join(root, "workspace");
 await mkdir(workspace);
+// A Skill of OhMyGame's own, staged for the session; its code proves the agent read it.
+const skillCode = "LIVE-SKILL-" + randomUUID().slice(0, 8);
+const skillDirectory = path.join(root, "pi", "skills", "live-check");
+await mkdir(skillDirectory, { recursive: true });
+await writeFile(
+  path.join(skillDirectory, "SKILL.md"),
+  `---\nname: live-check\ndescription: Gives the live check code when someone asks for the live check code.\n---\n\nThe live check code is ${skillCode}. Reply with exactly that code.\n`,
+);
 const token = randomUUID();
 let app!: ReturnType<typeof createApp>;
 let origin = "";
@@ -116,7 +124,8 @@ async function waitTurn(
         ? state.turns.findLast((t) =>
             t.items.some(
               (item) =>
-                item.type === "userMessage" && item.text === expectedText,
+                // Planning prefixes the stored message with its instructions.
+                item.type === "userMessage" && item.text.includes(expectedText),
             ),
           )
         : undefined);
@@ -150,9 +159,10 @@ async function waitTurn(
   await call("POST", base + "/turns/" + turnId + "/cancel").catch(() => {});
   throw new Error("Timed out waiting for native turn");
 }
-async function prompt(text: string) {
+async function prompt(text: string, mode?: "planning") {
   const result = await call<{ turnId: string }>("POST", base + "/turns", {
     prompt: text,
+    ...(mode ? { mode } : {}),
   });
   const turn = await waitTurn(result.turnId, 180_000, text);
   assert.equal(turn.status, "completed", JSON.stringify(turn));
@@ -342,6 +352,43 @@ try {
     ),
     "Approval record disappeared on restart",
   );
+  // Skills and planning, in a conversation of their own so the pending plan
+  // does not hold up the checks above.
+  const extra = await call("POST", `/projects/${project.id}/conversations`, {
+    model: { provider: runtime, id: model.id },
+  });
+  base = `/projects/${project.id}/conversations/${extra.id}`;
+  const skillTurn = await prompt(
+    "What is the live check code? Use the live-check Skill to find out, and reply with only the code.",
+  );
+  assert(
+    skillTurn.items.some(
+      (item) => item.type === "agentMessage" && item.text.includes(skillCode),
+    ),
+    "The staged Skill did not reach the agent",
+  );
+  checkBoundary(
+    !skillTurn.items.some((item) => item.type === "approvalRequest"),
+    "Loading a staged Skill asked for approval",
+  );
+  await mkdir(path.join(workspace, "src"), { recursive: true });
+  await writeFile(
+    path.join(workspace, "src", "player.ts"),
+    "export const PLAYER_SPEED = 4;\n",
+  );
+  const planTurn = await prompt(
+    "Plan how to double the player's speed. First search the project to find where the player speed is defined. This is planning only: present the plan, do not create or change files.",
+    "planning",
+  );
+  assert.equal(
+    await readFile(path.join(workspace, "src", "player.ts"), "utf8"),
+    "export const PLAYER_SPEED = 4;\n",
+  );
+  assert(
+    planTurn.items.some((item) => item.type === "plan"),
+    "Planning did not record a structured plan",
+  );
+  assert.equal((await detail()).plan?.mode, "awaiting_approval");
   console.log(
     JSON.stringify({
       result: boundaryFailures.length ? "FAIL_BOUNDARY" : "PASS",
