@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { AgentModel, AgentModelRef, AgentReasoningLevel, ConversationCapabilities, PluginMention, ProjectState, ProjectType, PromptAttachment, PromptImage, PromptMode } from "../shared/contracts.js";
 import { clampReasoningLevel } from "../shared/reasoning.js";
 import { preferredAgentModel } from "../shared/agent-models.js";
+import { isAgentRuntimeId, nativeEffort } from "../shared/agent-runtimes.js";
 import { createConversation, createProject, getHomeComposerCapabilities, listProjects, updateAgentDefaults, waitForRuntime } from "./api.js";
 import { AttachmentStrip, appendAttachments, attachmentFiles, uploadAttachments, type ComposerAttachment } from "./composer-attachments.js";
 import { ModelSelector, useAgentModels } from "./model-selector.js";
@@ -77,9 +78,8 @@ export function ProjectPromptCreator({ projectType, projectTypes = PROJECT_TYPES
 
   useEffect(() => {
     if (!selectedModel) return;
-    if (selectedModel.runtime) {
-      const levels = selectedModel.nativeReasoningLevels ?? [];
-      const next = nativeReasoningLevel && levels.includes(nativeReasoningLevel) ? nativeReasoningLevel : modelCatalog.defaultNativeReasoningLevel && levels.includes(modelCatalog.defaultNativeReasoningLevel) ? modelCatalog.defaultNativeReasoningLevel : levels[0];
+    if (isAgentRuntimeId(selectedModel.provider)) {
+      const next = nativeEffort(selectedModel, nativeReasoningLevel, modelCatalog.defaultNativeReasoningLevel);
       if (next !== nativeReasoningLevel) setNativeReasoningLevel(next);
       return;
     }
@@ -128,19 +128,23 @@ export function ProjectPromptCreator({ projectType, projectTypes = PROJECT_TYPES
   }
   function addFiles(files: DroppedFile[]): void { addAttachments(attachmentFiles(files)); }
 
-  async function saveDefaults(nextModel: AgentModelRef, nextReasoningLevel: AgentReasoningLevel, nativeLevel?: string): Promise<void> {
+  /** Saves the model with Pi's reasoning level, or with its own effort for a coding agent's model. */
+  async function saveDefaults(nextModel: AgentModel, choice: { reasoningLevel?: AgentReasoningLevel; nativeReasoningLevel?: string } = {}): Promise<void> {
     if (savingDefaults) return;
     const modelRef = { provider: nextModel.provider, id: nextModel.id };
     setSavingDefaults(true);
     setError(undefined);
     try {
-      const target = modelCatalog.models.find((entry) => entry.provider === nextModel.provider && entry.id === nextModel.id);
-      const levels = target?.nativeReasoningLevels ?? [];
-      const chosenNativeLevel = nativeLevel ?? (nativeReasoningLevel && levels.includes(nativeReasoningLevel) ? nativeReasoningLevel : levels[0]);
-      await updateAgentDefaults({ model: modelRef, reasoningLevel: nextReasoningLevel, ...(target?.runtime && chosenNativeLevel ? { nativeReasoningLevel: chosenNativeLevel } : {}) });
+      if (isAgentRuntimeId(nextModel.provider)) {
+        const effort = nativeEffort(nextModel, choice.nativeReasoningLevel, nativeReasoningLevel);
+        await updateAgentDefaults({ model: modelRef, ...(effort ? { nativeReasoningLevel: effort } : {}) });
+        setNativeReasoningLevel(effort);
+      } else {
+        const level = choice.reasoningLevel ?? clampReasoningLevel(reasoningLevel ?? modelCatalog.defaultReasoningLevel, nextModel.reasoningLevels);
+        await updateAgentDefaults({ model: modelRef, reasoningLevel: level });
+        setReasoningLevel(level);
+      }
       setModel(modelRef);
-      setReasoningLevel(nextReasoningLevel);
-      setNativeReasoningLevel(target?.runtime ? chosenNativeLevel : undefined);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -176,8 +180,7 @@ export function ProjectPromptCreator({ projectType, projectTypes = PROJECT_TYPES
   }
 
   function changeModel(nextModel: AgentModel): void {
-    const nextReasoningLevel = clampReasoningLevel(reasoningLevel ?? modelCatalog.defaultReasoningLevel, nextModel.reasoningLevels);
-    void saveDefaults(nextModel, nextReasoningLevel);
+    void saveDefaults(nextModel);
   }
 
   function togglePlanning(clearDraft = true): void {
@@ -297,8 +300,8 @@ export function ProjectPromptCreator({ projectType, projectTypes = PROJECT_TYPES
               nativeReasoningLevel={nativeReasoningLevel}
               disabled={creating || savingDefaults}
               onChange={changeModel}
-              onReasoningChange={(next) => { if (selectedModel) void saveDefaults(selectedModel, next); }}
-              onNativeReasoningChange={(next) => { if (selectedModel) void saveDefaults(selectedModel, reasoningLevel ?? "medium", next); }}
+              onReasoningChange={(next) => { if (selectedModel) void saveDefaults(selectedModel, { reasoningLevel: next }); }}
+              onNativeReasoningChange={(next) => { if (selectedModel) void saveDefaults(selectedModel, { nativeReasoningLevel: next }); }}
             />
             <button
               className="icon-button send-button"

@@ -19,7 +19,7 @@ import {
   lazy,
   Suspense,
 } from "react";
-import type { AgentModel, AgentModelRef, AgentReasoningLevel, CheckpointChangeItem, ConversationCapabilities, ConversationSummary, PendingPrompt, PluginMention, ProjectState, PromptAttachment, PromptContext, PromptImage, PromptMode, PromptReference, ThreadItem } from "../shared/contracts.js";
+import type { AgentContextUsage, AgentModel, AgentModelRef, AgentReasoningLevel, CheckpointChangeItem, ConversationCapabilities, ConversationSummary, PendingPrompt, PluginMention, ProjectState, PromptAttachment, PromptContext, PromptImage, PromptMode, PromptReference, ThreadItem } from "../shared/contracts.js";
 import { findAgentModel, preferredAgentModel } from "../shared/agent-models.js";
 import { isWebRuntimeProjectType, supportsWebPreview } from "../shared/project-runtime.js";
 import {
@@ -471,13 +471,9 @@ export function ProjectShell({
     }
   }
 
-  async function currentContextPercent(): Promise<number | import("../shared/contracts.js").AgentContextUsage | undefined> {
+  async function currentContextUsage(): Promise<AgentContextUsage | undefined> {
     if (!project || !conversation) return undefined;
-    const usage = await getConversationContextUsage(project.id, conversation.id);
-    if (isAgentRuntimeId(displayedModel?.provider)) return usage;
-    return usage?.percent === null || usage?.percent === undefined
-      ? undefined
-      : Math.round(Math.max(0, Math.min(100, usage.percent)));
+    return getConversationContextUsage(project.id, conversation.id);
   }
 
   async function executePlan(): Promise<boolean> {
@@ -915,7 +911,7 @@ export function ProjectShell({
               else playableChat?.removeAttachment(key);
             }}
             onCompact={compactCurrentConversation}
-            onContextUsage={currentContextPercent}
+            onContextUsage={currentContextUsage}
             onCancelPlan={discardPlan}
             onModelChange={(model) => void changeModel(model)}
             onReasoningChange={(level) => void changeReasoning(level)}

@@ -59,7 +59,7 @@ export class AgentRuntimeSettingsStore {
       value && typeof value === "object"
         ? (value as Record<string, unknown>)
         : {};
-    this.#default = parseDefault(stored.defaultModel ?? stored.defaults);
+    this.#default = parseDefault(stored.defaultModel);
     if (!runtimes || typeof runtimes !== "object") return;
     for (const [id, entry] of Object.entries(runtimes)) {
       if (!isAgentRuntimeId(id) || !entry || typeof entry !== "object")
@@ -138,7 +138,6 @@ function parseDefault(value: unknown): AgentRuntimeDefault | undefined {
   const stored = value as {
     model?: { provider?: unknown; id?: unknown };
     nativeReasoningLevel?: unknown;
-    reasoningLevel?: unknown;
   };
   if (
     !isAgentRuntimeId(stored.model?.provider) ||
@@ -146,8 +145,7 @@ function parseDefault(value: unknown): AgentRuntimeDefault | undefined {
     !stored.model.id
   )
     return undefined;
-  // Migrate early defaults that used Pi's enum without retaining a second source.
-  const level = stored.nativeReasoningLevel ?? stored.reasoningLevel;
+  const level = stored.nativeReasoningLevel;
   return {
     model: { provider: stored.model.provider, id: stored.model.id },
     ...(typeof level === "string" && level

@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/daemon/app.js";
-import type { AgentRuntimeStatus } from "../src/shared/agent-runtimes.js";
+import {
+  isAgentRuntimeId,
+  type AgentRuntimeStatus,
+} from "../src/shared/agent-runtimes.js";
 import type { AgentModelCatalog } from "../src/shared/contracts.js";
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -81,7 +84,7 @@ describe("coding agent routes", () => {
     const catalog = await call<AgentModelCatalog>("GET", "/models?runtimes=1");
     expect(
       catalog.body.models
-        .filter((model) => model.runtime)
+        .filter((model) => isAgentRuntimeId(model.provider))
         .map((model) => model.id),
     ).toEqual(["sonnet", "haiku"]);
   });
@@ -101,7 +104,6 @@ describe("coding agent routes", () => {
       (
         await call("PUT", "/models/default", {
           model: { provider: "claude-code-cli", id: "sonnet" },
-          reasoningLevel: "off",
           nativeReasoningLevel: "balanced-custom",
         })
       ).status,
@@ -259,20 +261,25 @@ describe("coding agent routes", () => {
       enabled: true,
     });
     const plain = await call<AgentModelCatalog>("GET", "/models");
-    expect(plain.body.models.some((model) => model.runtime)).toBe(false);
+    expect(
+      plain.body.models.some((model) => isAgentRuntimeId(model.provider)),
+    ).toBe(false);
     const withAgents = await call<AgentModelCatalog>(
       "GET",
       "/models?runtimes=1",
     );
-    expect(withAgents.body.models.filter((model) => model.runtime)).toEqual([
+    expect(
+      withAgents.body.models.filter((model) =>
+        isAgentRuntimeId(model.provider),
+      ),
+    ).toEqual([
       {
         provider: "claude-code-cli",
         id: "sonnet",
         name: "Sonnet",
         providerName: "Claude Code",
-        reasoningLevels: ["low", "high"],
+        reasoningLevels: [],
         nativeReasoningLevels: ["low", "high"],
-        runtime: "claude-code-cli",
       },
       {
         provider: "claude-code-cli",
@@ -281,7 +288,6 @@ describe("coding agent routes", () => {
         providerName: "Claude Code",
         reasoningLevels: [],
         nativeReasoningLevels: [],
-        runtime: "claude-code-cli",
       },
     ]);
 
@@ -300,7 +306,7 @@ describe("coding agent routes", () => {
       (
         await call("POST", `/projects/${project.body.id}/conversations`, {
           model: { provider: "claude-code-cli", id: "sonnet" },
-          reasoningLevel: "max",
+          nativeReasoningLevel: "max",
         })
       ).status,
     ).toBe(400);
@@ -309,7 +315,7 @@ describe("coding agent routes", () => {
       `/projects/${project.body.id}/conversations`,
       {
         model: { provider: "claude-code-cli", id: "sonnet" },
-        reasoningLevel: "high",
+        nativeReasoningLevel: "high",
       },
     );
     expect(conversation.status).toBe(201);
@@ -344,7 +350,7 @@ describe("coding agent routes", () => {
     expect(
       (
         await call<AgentModelCatalog>("GET", "/models?runtimes=1")
-      ).body.models.some((model) => model.runtime),
+      ).body.models.some((model) => isAgentRuntimeId(model.provider)),
     ).toBe(false);
     expect(
       (
@@ -367,6 +373,23 @@ describe("coding agent routes", () => {
       (
         await call("PUT", "/models/default", {
           model: { provider: "claude-code-cli", id: "missing" },
+          nativeReasoningLevel: "high",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await call("PUT", "/models/default", {
+          model: { provider: "claude-code-cli", id: "sonnet" },
+          nativeReasoningLevel: "max",
+        })
+      ).status,
+    ).toBe(400);
+    // Pi's reasoning enum is not a native effort; it is not coerced into one.
+    expect(
+      (
+        await call("PUT", "/models/default", {
+          model: { provider: "claude-code-cli", id: "sonnet" },
           reasoningLevel: "high",
         })
       ).status,
@@ -375,15 +398,7 @@ describe("coding agent routes", () => {
       (
         await call("PUT", "/models/default", {
           model: { provider: "claude-code-cli", id: "sonnet" },
-          reasoningLevel: "max",
-        })
-      ).status,
-    ).toBe(400);
-    expect(
-      (
-        await call("PUT", "/models/default", {
-          model: { provider: "claude-code-cli", id: "sonnet" },
-          reasoningLevel: "high",
+          nativeReasoningLevel: "high",
         })
       ).status,
     ).toBe(204);

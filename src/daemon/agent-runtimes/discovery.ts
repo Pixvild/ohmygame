@@ -11,11 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  AGENT_REASONING_LEVELS,
-  type AgentModel,
-  type AgentReasoningLevel,
-} from "../../shared/contracts.js";
+import type { AgentModel } from "../../shared/contracts.js";
 import type {
   AgentRuntimeAuthStatus,
   AgentRuntimeBilling,
@@ -283,9 +279,8 @@ export async function probeModels(
     id: modelId,
     name: label,
     providerName: name,
-    reasoningLevels: reasoningLevels(levels),
+    reasoningLevels: [],
     nativeReasoningLevels: [...new Set(levels)],
-    runtime: id,
   });
   if (id === "claude-code-cli") {
     const listed = await claudeModels(binaryPath, env, privateDirectory);
@@ -559,10 +554,6 @@ export function parseOpenCodeModels(output: string): Array<{
     }
   }
   return models;
-}
-
-function reasoningLevels(values: readonly string[]): AgentReasoningLevel[] {
-  return AGENT_REASONING_LEVELS.filter((level) => values.includes(level));
 }
 
 /** A private folder for one probe or session, removed with it. */

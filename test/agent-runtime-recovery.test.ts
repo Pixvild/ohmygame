@@ -158,32 +158,6 @@ it("keeps runtimes opt-in and persists native defaults independently of Pi", asy
   expect(restarted.get("codex-cli").enabled).toBe(true);
   expect(restarted.get("opencode-cli").enabled).toBe(false);
 });
-it("migrates both early native default schemas to one persisted field", async () => {
-  const root = await folder();
-  const file = path.join(root, "agent-runtimes.json");
-  for (const [field, level] of [
-    ["defaultModel", { reasoningLevel: "high" }],
-    ["defaults", { nativeReasoningLevel: "custom-effort" }],
-  ] as const) {
-    await writeFile(
-      file,
-      JSON.stringify({
-        version: 1,
-        [field]: { model: { provider: "codex-cli", id: "test" }, ...level },
-      }),
-    );
-    const store = new AgentRuntimeSettingsStore(root);
-    await store.load();
-    expect(store.defaultModel()?.nativeReasoningLevel).toBe(
-      field === "defaultModel" ? "high" : "custom-effort",
-    );
-    await store.update("codex-cli", { enabled: true });
-    const stored = JSON.parse(await readFile(file, "utf8"));
-    expect(stored.defaultModel).toEqual(store.defaultModel());
-    expect(stored).not.toHaveProperty("defaults");
-  }
-});
-
 it("reclaims a verified orphan, preserving a live daemon and unrelated PID identities", async () => {
   const root = await folder();
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {

@@ -20,6 +20,21 @@ export function isAgentRuntimeId(value: unknown): value is AgentRuntimeId {
   );
 }
 
+/**
+ * A native model's effort: the first preferred value the model offers, else
+ * the model's first. Undefined for a model without efforts.
+ */
+export function nativeEffort(
+  model: { nativeReasoningLevels?: readonly string[] } | undefined,
+  ...preferred: Array<string | undefined>
+): string | undefined {
+  const offered = model?.nativeReasoningLevels ?? [];
+  return (
+    preferred.find((level) => level !== undefined && offered.includes(level)) ??
+    offered[0]
+  );
+}
+
 /** Where the agent's model requests are billed, as far as OhMyGame can tell. */
 export type AgentRuntimeBilling =
   "subscription" | "api-key" | "provider" | "unknown";

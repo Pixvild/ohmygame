@@ -45,7 +45,7 @@ interface ComposerProps {
   onInitialDraftHandled?: () => void;
   onSubmit: (prompt: string, mentions: PluginMention[], images: PromptImage[], mode: PromptMode, attachments: PromptAttachment[], references: PromptReference[], contexts: PromptContext[]) => Promise<boolean>;
   onCompact: (instructions?: string) => Promise<void>;
-  onContextUsage: () => Promise<number | AgentContextUsage | undefined>;
+  onContextUsage: () => Promise<AgentContextUsage | undefined>;
   onCancelPlan: () => Promise<boolean>;
   onModelChange: (model: AgentModel) => void;
   onReasoningChange: (level: AgentReasoningLevel) => void;
@@ -106,8 +106,8 @@ export function Composer({
   const [attachmentError, setAttachmentError] = useState<string>();
   const [history, setHistory] = useState(() => createPromptHistory(promptHistory.map((entry) => entry.prompt)));
   const [mentionHistory, setMentionHistory] = useState(() => new Map(promptHistory.map((entry) => [entry.prompt, entry.mentions])));
-  const [contextPercent, setContextPercent] = useState<number>();
   const [runtimeUsage, setRuntimeUsage] = useState<AgentContextUsage>();
+  const contextPercent = runtimeUsage?.percent == null ? undefined : Math.round(Math.max(0, Math.min(100, runtimeUsage.percent)));
   const [mentionCursor, setMentionCursor] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -300,19 +300,15 @@ export function Composer({
 
   useEffect(() => {
     if (!showCompactCommand && !isAgentRuntimeId(model?.provider)) {
-      setContextPercent(undefined);
       setRuntimeUsage(undefined);
       return;
     }
     let disposed = false;
-    setContextPercent(undefined);
     setRuntimeUsage(undefined);
     void onContextUsage().then((usage) => {
-      if (disposed) return;
-      if (typeof usage === "object") { setRuntimeUsage(usage); setContextPercent(usage.percent ?? undefined); }
-      else { setRuntimeUsage(undefined); setContextPercent(usage); }
+      if (!disposed) setRuntimeUsage(usage);
     }).catch(() => {
-      if (!disposed) { setContextPercent(undefined); setRuntimeUsage(undefined); }
+      if (!disposed) setRuntimeUsage(undefined);
     });
     return () => { disposed = true; };
   }, [showCompactCommand, running, model?.provider, model?.id, conversationId]);

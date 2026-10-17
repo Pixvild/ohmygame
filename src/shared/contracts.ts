@@ -32,10 +32,9 @@ export type AgentModelRef = ModelRef;
 export interface AgentModel extends AgentModelRef {
   name: string;
   providerName: string;
+  /** Pi's reasoning levels; empty for a coding agent's model, whose provider is the agent's ID. */
   reasoningLevels: AgentReasoningLevel[];
-  /** Set when a coding agent CLI, not OhMyGame's own agent, runs conversations with this model. */
-  runtime?: AgentRuntimeId;
-  /** Native effort/variant values, kept separate from Pi's reasoning enum. */
+  /** A coding agent model's own effort/variant values, kept separate from Pi's reasoning enum. */
   nativeReasoningLevels?: string[];
   contextWindow?: number;
 }
@@ -876,14 +875,16 @@ export interface CreateProjectRequest {
   /** Absolute path returned by the desktop directory picker. */
   workspacePath?: string;
 }
+/** `reasoningLevel` is for a Pi model and `nativeReasoningLevel` for a coding agent's. */
 export interface CreateConversationRequest {
   model?: AgentModelRef;
   reasoningLevel?: AgentReasoningLevel;
   nativeReasoningLevel?: string;
 }
+/** `reasoningLevel` is for a Pi model and `nativeReasoningLevel` for a coding agent's. */
 export interface UpdateAgentDefaultsRequest {
   model: AgentModelRef;
-  reasoningLevel: AgentReasoningLevel;
+  reasoningLevel?: AgentReasoningLevel;
   nativeReasoningLevel?: string;
 }
 export interface RenameConversationRequest { title: string }
