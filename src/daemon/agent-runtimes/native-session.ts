@@ -13,6 +13,7 @@ import type {
 import { CHECKPOINT_ENTRY, recordCheckpoint } from "../checkpoint-extension.js";
 import type { CodingSession, SkillCatalogItem } from "../agent.js";
 import { handoffSummary } from "./handoff.js";
+import { NATIVE_API } from "./replay.js";
 
 /** The custom entry that records which native session a conversation's branch continues. */
 export const NATIVE_SESSION_ENTRY = "ohmygame-native-session";
@@ -146,8 +147,6 @@ export interface NativeSessionOptions {
 }
 
 const IDLE_PROCESS_MS = 10 * 60_000;
-
-const NATIVE_API = "ohmygame-native";
 
 /**
  * A conversation run by a coding agent CLI. It keeps the conversation in the

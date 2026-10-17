@@ -73,7 +73,11 @@ plan mode, cancellation, errors and events are the same code.
   files the earlier agent worked on, the structured plan, and restore notices.
   It asks no model, and private context such
   as file references is left out. Moving back to Pi needs no summary; Pi reads
-  the stored messages.
+  the stored messages. A native turn reaches Pi as text: what the agent said,
+  the tools it used with their arguments, and bounded results. Its tool calls
+  are the CLI's own (Skill, subagents, Codex's path-only `edit`), so replayed
+  as calls they would read as examples of Pi's tools; its reasoning is left
+  out because no other model can verify it.
 
 Terminal approval decisions and native compaction results are custom entries
 in the same session file. Reload restores their history without restoring

@@ -147,6 +147,11 @@ notices. Exclude private prompt context and do not make another model call.
 An explicitly expired/not-found native resume receives one fresh-context retry,
 without appending the user message twice. Other failures remain visible.
 Moving back to Pi uses the shared messages; native hidden state is not imported.
+Native turns are replayed to Pi as text (`replay.ts`): the agent's words, each
+tool it used with bounded arguments, and bounded results, merged per turn,
+without reasoning. Replaying them as tool calls taught Pi the CLI's tool names
+and argument shapes; in a probe the text form made the next Pi turn call no
+foreign tools and cut the replayed history by about a third.
 
 ## Checkpoints, queues, and cancellation
 
