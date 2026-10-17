@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ApprovalRequestDetails } from "../../shared/agent-runtimes.js";
+import type {
+  ApprovalDecision,
+  ApprovalRequestDetails,
+} from "../../shared/agent-runtimes.js";
 import type {
   NativeDriver,
   NativeTurnInput,
@@ -54,7 +57,7 @@ export class ClaudeCodeDriver implements NativeDriver {
   #messageId?: string;
   #compacting?: { tokensBefore?: number };
   #disposed = false;
-  #hookDecisions = new Map<string, "allow" | "allow-session" | "deny">();
+  #hookDecisions = new Map<string, ApprovalDecision>();
 
   constructor(private readonly context: DriverContext) {
     this.#sessionId = context.resume;
@@ -528,42 +531,28 @@ export class ClaudeCodeDriver implements NativeDriver {
         throw new Error("Unknown hook callback");
       const input = record(request.input) ?? {};
       const turn = this.#turn;
-      let decision: "allow" | "allow-session" | "deny" = "deny";
       const tool = String(input.tool_name ?? "");
-      const args = record(input.tool_input) ?? {};
       const callId =
         typeof request.tool_use_id === "string"
           ? request.tool_use_id
           : undefined;
-      if (turn && !turn.signal.aborted) {
-        if (
-          turn.readOnly &&
-          !["Read", "Glob", "Grep", "LS", "ToolSearch"].includes(tool) &&
-          !tool.startsWith(`mcp__${BRIDGE_SERVER_NAME}__`)
-        )
-          decision = "deny";
-        else if (
-          tool.startsWith(`mcp__${BRIDGE_SERVER_NAME}__`) ||
-          tool === "ToolSearch"
-        )
-          decision = "allow";
-        else
-          decision = await decideApproval(
-            claudeApproval(tool, args, input, this.context.workspacePath),
-            this.context,
-            turn.sink,
-            { ...(callId ? { callId } : {}), signal: turn.signal },
-          );
-      }
+      const { decision, reason } =
+        turn && !turn.signal.aborted
+          ? await this.#judge(
+              turn,
+              tool,
+              record(input.tool_input) ?? {},
+              input,
+              callId,
+            )
+          : { decision: "deny" as const, reason: "No turn is running" };
       if (callId) this.#hookDecisions.set(callId, decision);
       return {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: decision === "deny" ? "deny" : "allow",
           permissionDecisionReason:
-            decision === "deny"
-              ? "OhMyGame denied this operation"
-              : "Approved by OhMyGame",
+            decision === "deny" ? reason : "Approved by OhMyGame",
         },
       };
     }
@@ -593,26 +582,49 @@ export class ClaudeCodeDriver implements NativeDriver {
           : undefined;
       const previous = toolId ? this.#hookDecisions.get(toolId) : undefined;
       if (toolId) this.#hookDecisions.delete(toolId);
-      const details = claudeApproval(
-        toolName,
-        input,
-        request,
-        this.context.workspacePath,
-      );
-      const decision =
-        previous ??
-        (await decideApproval(details, this.context, turn.sink, {
-          ...(typeof request.tool_use_id === "string"
-            ? { callId: request.tool_use_id }
-            : {}),
-          signal: turn.signal,
-        }));
+      const { decision, reason } = previous
+        ? { decision: previous, reason: "This operation was not allowed." }
+        : await this.#judge(turn, toolName, input, request, toolId);
       return decision === "deny"
-        ? { behavior: "deny", message: "The user did not allow this." }
+        ? { behavior: "deny", message: reason }
         : { behavior: "allow", updatedInput: input };
     }
     // Nothing else is asked of a host here; an empty success keeps the CLI going.
     return {};
+  }
+
+  /** The hook and the permission callback answer the same question the same way. */
+  async #judge(
+    turn: PendingTurn,
+    tool: string,
+    args: Record<string, unknown>,
+    request: Record<string, unknown>,
+    callId: string | undefined,
+  ): Promise<{ decision: ApprovalDecision; reason: string }> {
+    if (
+      tool.startsWith(`mcp__${BRIDGE_SERVER_NAME}__`) ||
+      CLAUDE_OWN_TOOLS.has(tool)
+    )
+      return { decision: "allow", reason: "Approved by OhMyGame" };
+    if (tool === "ExitPlanMode")
+      return {
+        decision: "deny",
+        reason:
+          "OhMyGame reviews plans itself: record the plan with update_plan and end your reply.",
+      };
+    if (turn.readOnly && !CLAUDE_READ_TOOLS.has(tool))
+      return {
+        decision: "deny",
+        reason:
+          "This is a planning turn: read files, but do not change anything.",
+      };
+    const decision = await decideApproval(
+      claudeApproval(tool, args, request, this.context.workspacePath),
+      this.context,
+      turn.sink,
+      { ...(callId ? { callId } : {}), signal: turn.signal },
+    );
+    return { decision, reason: "This operation was not allowed." };
   }
 
   #exited(
@@ -643,6 +655,30 @@ export class ClaudeCodeDriver implements NativeDriver {
 
 /** Claude Code's own bookkeeping, such as loading the schemas of deferred tools, which is not work to show. */
 const HIDDEN_TOOLS = new Set(["ToolSearch"]);
+
+/**
+ * Claude Code tools that touch no file and run no command: its task list,
+ * Skill loading, subagents (whose own tool calls come through this hook),
+ * background shell output, web research and its MCP resource readers.
+ * Asking about each would interrupt the person for the agent's bookkeeping.
+ */
+const CLAUDE_OWN_TOOLS = new Set([
+  "ToolSearch",
+  "TodoWrite",
+  "Skill",
+  "Task",
+  "Agent",
+  "BashOutput",
+  "KillShell",
+  "KillBash",
+  "WebSearch",
+  "WebFetch",
+  "ListMcpResourcesTool",
+  "ReadMcpResourceTool",
+]);
+
+/** File tools a planning turn may use; the shared policy still checks their paths. */
+const CLAUDE_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS"]);
 
 function userMessage(input: NativeTurnInput): Record<string, unknown> {
   return {

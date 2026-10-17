@@ -256,6 +256,81 @@ describe("Claude Code adapter", () => {
     expect(recorded.asked).toEqual([]);
   });
 
+  it("lets Claude Code's own bookkeeping tools run without asking and points planning at update_plan", async () => {
+    const hook = async (tool: string, readOnly: boolean) => {
+      let output: Record<string, unknown> | undefined;
+      fakeCli((message, cli) => {
+        if (message.type === "control_request")
+          cli.send({
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: message.request_id,
+              response: {},
+            },
+          });
+        if (message.type === "user")
+          cli.send({
+            type: "control_request",
+            request_id: "hook",
+            request: {
+              subtype: "hook_callback",
+              callback_id: "ohmygame-policy",
+              tool_use_id: `${tool}-1`,
+              input: {
+                hook_event_name: "PreToolUse",
+                tool_name: tool,
+                tool_input:
+                  tool === "Write" ? { file_path: "/tmp/workspace/a.txt" } : {},
+              },
+            },
+          });
+        if (
+          message.type === "control_response" &&
+          (message.response as Record<string, unknown>).request_id === "hook"
+        ) {
+          output = (
+            (message.response as Record<string, unknown>).response as Record<
+              string,
+              Record<string, unknown>
+            >
+          ).hookSpecificOutput;
+          cli.send({ type: "result", subtype: "success" });
+        }
+      });
+      const driver = new ClaudeCodeDriver(await context());
+      cleanup.push(() => driver.dispose());
+      const recorded = recordingSink(() => "allow");
+      await driver.runTurn(
+        { text: "work", images: [], readOnly },
+        recorded.sink,
+        new AbortController().signal,
+      );
+      return { output, asked: recorded.asked.length };
+    };
+    for (const tool of ["TodoWrite", "Skill", "Task", "WebSearch"])
+      for (const readOnly of [false, true])
+        expect(await hook(tool, readOnly)).toEqual({
+          output: expect.objectContaining({ permissionDecision: "allow" }),
+          asked: 0,
+        });
+    expect(await hook("ExitPlanMode", true)).toEqual({
+      output: expect.objectContaining({
+        permissionDecision: "deny",
+        permissionDecisionReason: expect.stringContaining("update_plan"),
+      }),
+      asked: 0,
+    });
+    expect(await hook("Write", true)).toEqual({
+      output: expect.objectContaining({ permissionDecision: "deny" }),
+      asked: 0,
+    });
+    expect(await hook("Write", false)).toEqual({
+      output: expect.objectContaining({ permissionDecision: "allow" }),
+      asked: 0,
+    });
+  });
+
   it("stops a native process when interrupt is acknowledged without a terminal result", async () => {
     let started!: () => void;
     const ready = new Promise<void>((resolve) => {
