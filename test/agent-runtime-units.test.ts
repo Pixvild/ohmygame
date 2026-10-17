@@ -345,8 +345,14 @@ describe("OhMyGame tool bridge", () => {
       type: "object",
       properties: { value: { type: "string" } },
     });
+    // Claude Code would otherwise hide them behind its tool search.
+    expect(bridge.list()[0]!._meta).toEqual({ "anthropic/alwaysLoad": true });
     bridge.setActive(["fail_tool"]);
     expect(bridge.list().map((tool) => tool.name)).toEqual(["fail_tool"]);
+    expect(bridge.list("all").map((tool) => tool.name)).toEqual([
+      "echo_tool",
+      "fail_tool",
+    ]);
   });
 
   it("answers MCP, validates arguments and keeps the tool's own result for the record", async () => {

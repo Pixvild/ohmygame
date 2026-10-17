@@ -257,7 +257,13 @@ describe("Claude Code adapter", () => {
   });
 
   it("lets Claude Code's own bookkeeping tools run without asking and points planning at update_plan", async () => {
-    const hook = async (tool: string, readOnly: boolean) => {
+    const hook = async (
+      tool: string,
+      readOnly: boolean,
+      toolInput: Record<string, unknown> = tool === "Write"
+        ? { file_path: "/tmp/workspace/a.txt" }
+        : {},
+    ) => {
       let output: Record<string, unknown> | undefined;
       fakeCli((message, cli) => {
         if (message.type === "control_request")
@@ -280,8 +286,7 @@ describe("Claude Code adapter", () => {
               input: {
                 hook_event_name: "PreToolUse",
                 tool_name: tool,
-                tool_input:
-                  tool === "Write" ? { file_path: "/tmp/workspace/a.txt" } : {},
+                tool_input: toolInput,
               },
             },
           });
@@ -325,10 +330,99 @@ describe("Claude Code adapter", () => {
       output: expect.objectContaining({ permissionDecision: "deny" }),
       asked: 0,
     });
+    // Current CLIs have no Glob/Grep: planning may run read commands the policy allows, and nothing else.
+    for (const [command, decision] of [
+      ["grep -rn player src", "allow"],
+      ["ls -la", "allow"],
+      ["touch a.txt", "deny"],
+      ["cat a.txt > b.txt", "deny"],
+    ] as const)
+      expect(await hook("Bash", true, { command })).toEqual({
+        output: expect.objectContaining({ permissionDecision: decision }),
+        asked: 0,
+      });
     expect(await hook("Write", false)).toEqual({
       output: expect.objectContaining({ permissionDecision: "allow" }),
       asked: 0,
     });
+  });
+
+  it("shows an allowed Claude tool as running until its result, whichever is reported first", async () => {
+    for (const hookFirst of [false, true]) {
+      const toolUse = {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          id: "m1",
+          content: [
+            {
+              type: "tool_use",
+              id: "t1",
+              name: "Bash",
+              input: { command: "ls" },
+            },
+          ],
+        },
+      };
+      fakeCli((message, cli) => {
+        if (message.type === "control_request")
+          cli.send({
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: message.request_id,
+              response: {},
+            },
+          });
+        if (message.type === "user") {
+          if (!hookFirst) cli.send(toolUse);
+          cli.send({
+            type: "control_request",
+            request_id: "hook",
+            request: {
+              subtype: "hook_callback",
+              callback_id: "ohmygame-policy",
+              tool_use_id: "t1",
+              input: {
+                hook_event_name: "PreToolUse",
+                tool_name: "Bash",
+                tool_input: { command: "ls" },
+              },
+            },
+          });
+        }
+        if (
+          message.type === "control_response" &&
+          (message.response as Record<string, unknown>).request_id === "hook"
+        ) {
+          if (hookFirst) cli.send(toolUse);
+          cli.send({
+            type: "user",
+            parent_tool_use_id: null,
+            message: {
+              content: [
+                { type: "tool_result", tool_use_id: "t1", content: "a.txt" },
+              ],
+            },
+          });
+          cli.send({ type: "result", subtype: "success" });
+        }
+      });
+      const driver = new ClaudeCodeDriver(await context());
+      cleanup.push(() => driver.dispose());
+      const recorded = recordingSink();
+      await driver.runTurn(
+        { text: "list", images: [], readOnly: false },
+        recorded.sink,
+        new AbortController().signal,
+      );
+      const tool = recorded.calls.filter((call) => call.includes(":t1"));
+      expect(tool.at(-1)).toBe("toolResult:t1:false");
+      // An early start for a call not yet reported is ignored by the recorder; the replay counts.
+      expect(tool.lastIndexOf("toolStarted:t1")).toBeGreaterThan(
+        tool.findIndex((call) => call.startsWith("toolCall:t1")),
+      );
+    }
   });
 
   it("stops a native process when interrupt is acknowledged without a terminal result", async () => {
@@ -654,6 +748,11 @@ describe("Claude Code adapter", () => {
       ]),
     );
     expect(args).toContain("--session-id");
+    // Work that reports after the turn's result would have no turn to land in.
+    expect(clis[0]!.env).toMatchObject({
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+      CLAUDE_CODE_DISABLE_CRON: "1",
+    });
     expect(recorded.sessionId()).toBe("claude-session-1");
     expect(recorded.calls).toEqual([
       "text:m1:0:Checking",
@@ -709,7 +808,7 @@ describe("Claude Code adapter", () => {
         "--resume",
         "earlier-session",
         "--permission-mode",
-        "plan",
+        "default",
       ]),
     );
     expect(clis[0]!.args).not.toContain("--strict-mcp-config");

@@ -23,9 +23,21 @@ import {
   type DriverContext,
 } from "./driver-context.js";
 import { stageSkills, stagedSkillsRoot } from "./skills.js";
+import { judgeApproval } from "./policy.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 
 const CONTROL_TIMEOUT_MS = 30_000;
+
+/**
+ * Claude Code can launch subagents and shells in the background, and
+ * schedule prompts, that report after its turn has ended. A turn here ends
+ * with Claude's result, so later reports would have no turn to land in:
+ * keep that work in the foreground.
+ */
+const FOREGROUND_ONLY = {
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+  CLAUDE_CODE_DISABLE_CRON: "1",
+};
 
 interface PendingTurn {
   sink: NativeTurnSink;
@@ -33,6 +45,8 @@ interface PendingTurn {
   signal: AbortSignal;
   blocks: Map<string, "text" | "thinking">;
   streamed: Set<string>;
+  /** Tool calls OhMyGame allowed, which Claude Code runs next; one may be allowed before its call is reported. */
+  started: Set<string>;
   readOnly: boolean;
   /** The latest model request's usage, which is what the context holds; the result's usage adds up every request. */
   requestUsage?: Record<string, unknown>;
@@ -88,7 +102,7 @@ export class ClaudeCodeDriver implements NativeDriver {
       throw cause;
     }
     if (signal.aborted) return { status: "aborted" };
-    await this.#setPermissionMode(input.readOnly ? "plan" : "acceptEdits");
+    await this.#setPermissionMode(input.readOnly ? "default" : "acceptEdits");
     if (signal.aborted) return { status: "aborted" };
     const outcome = await new Promise<NativeTurnOutcome>((resolve) => {
       this.#turn = {
@@ -97,6 +111,7 @@ export class ClaudeCodeDriver implements NativeDriver {
         signal,
         blocks: new Map(),
         streamed: new Set(),
+        started: new Set(),
         readOnly: input.readOnly,
       };
       try {
@@ -178,14 +193,14 @@ export class ClaudeCodeDriver implements NativeDriver {
           binaryPath: this.context.binaryPath,
           args,
           cwd: this.context.workspacePath,
-          env: this.context.env,
+          env: { ...this.context.env, ...FOREGROUND_ONLY },
           processDirectory: this.context.processDirectory,
           onLine: (line) => this.#receive(line),
           onExit: (code, signal, stderr) =>
             this.#exited(child, code, signal, stderr),
         });
         this.#process = child;
-        this.#permissionMode = readOnly ? "plan" : "acceptEdits";
+        this.#permissionMode = readOnly ? "default" : "acceptEdits";
         await this.#control({
           subtype: "initialize",
           sdkMcpServers: [BRIDGE_SERVER_NAME],
@@ -212,7 +227,7 @@ export class ClaudeCodeDriver implements NativeDriver {
       "--permission-prompt-tool",
       "stdio",
       "--permission-mode",
-      readOnly ? "plan" : "acceptEdits",
+      readOnly ? "default" : "acceptEdits",
       "--mcp-config",
       JSON.stringify({
         mcpServers: {
@@ -257,7 +272,13 @@ export class ClaudeCodeDriver implements NativeDriver {
     return args;
   }
 
-  async #setPermissionMode(mode: "plan" | "acceptEdits"): Promise<void> {
+  /**
+   * Planning runs in Claude's default mode, not its own plan mode: that mode
+   * steers Claude to write a plan file and call ExitPlanMode, while OhMyGame
+   * takes the plan through update_plan. The hook keeps the turn read-only,
+   * and default mode sends any edit the hook did not see to can_use_tool.
+   */
+  async #setPermissionMode(mode: "default" | "acceptEdits"): Promise<void> {
     if (this.#permissionMode === mode) return;
     await this.#control({ subtype: "set_permission_mode", mode });
     this.#permissionMode = mode;
@@ -424,6 +445,7 @@ export class ClaudeCodeDriver implements NativeDriver {
           record(block.input) ?? {},
         );
         turn.sink.toolCall(block.id, call.name, call.args);
+        if (turn.started.has(block.id)) turn.sink.toolStarted(block.id);
       }
     });
   }
@@ -549,6 +571,7 @@ export class ClaudeCodeDriver implements NativeDriver {
             )
           : { decision: "deny" as const, reason: "No turn is running" };
       if (callId) this.#hookDecisions.set(callId, decision);
+      if (turn && callId && decision !== "deny") this.#started(turn, callId);
       return {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -587,12 +610,23 @@ export class ClaudeCodeDriver implements NativeDriver {
       const { decision, reason } = previous
         ? { decision: previous, reason: "This operation was not allowed." }
         : await this.#judge(turn, toolName, input, request, toolId);
-      return decision === "deny"
-        ? { behavior: "deny", message: reason }
-        : { behavior: "allow", updatedInput: input };
+      if (decision === "deny") return { behavior: "deny", message: reason };
+      if (toolId) this.#started(turn, toolId);
+      return { behavior: "allow", updatedInput: input };
     }
     // Nothing else is asked of a host here; an empty success keeps the CLI going.
     return {};
+  }
+
+  /**
+   * Claude Code reports a tool call and then its result, with nothing when the
+   * tool begins. It runs a tool as soon as OhMyGame allows it, so that is when
+   * the call is shown as running: a long command or build is visible, and can
+   * be stopped, while it runs.
+   */
+  #started(turn: PendingTurn, callId: string): void {
+    turn.started.add(callId);
+    turn.sink.toolStarted(callId);
   }
 
   /** The hook and the permission callback answer the same question the same way. */
@@ -614,18 +648,30 @@ export class ClaudeCodeDriver implements NativeDriver {
         reason:
           "OhMyGame reviews plans itself: record the plan with update_plan and end your reply.",
       };
-    if (turn.readOnly && !CLAUDE_READ_TOOLS.has(tool))
-      return {
-        decision: "deny",
-        reason:
-          "This is a planning turn: read files, but do not change anything.",
-      };
-    const decision = await decideApproval(
-      claudeApproval(tool, args, request, this.context.workspacePath),
-      this.context,
-      turn.sink,
-      { ...(callId ? { callId } : {}), signal: turn.signal },
+    const details = claudeApproval(
+      tool,
+      args,
+      request,
+      this.context.workspacePath,
     );
+    if (turn.readOnly && !CLAUDE_READ_TOOLS.has(tool)) {
+      // Current CLIs search with Bash rather than Glob/Grep, so planning may
+      // run the read commands the policy allows without asking, and no other.
+      const readCommand =
+        tool === "Bash" &&
+        judgeApproval(details, this.context.policy) === "allow";
+      return readCommand
+        ? { decision: "allow", reason: "Approved by OhMyGame" }
+        : {
+            decision: "deny",
+            reason:
+              "This is a planning turn: do not change anything. Use Read, or one simple read command at a time (ls, cat, head, tail, wc, grep, rg) without pipes, &&, redirection or globs.",
+          };
+    }
+    const decision = await decideApproval(details, this.context, turn.sink, {
+      ...(callId ? { callId } : {}),
+      signal: turn.signal,
+    });
     return { decision, reason: "This operation was not allowed." };
   }
 
@@ -661,7 +707,8 @@ const HIDDEN_TOOLS = new Set(["ToolSearch"]);
 /**
  * Claude Code tools that touch no file and run no command: its task list,
  * Skill loading, subagents (whose own tool calls come through this hook),
- * background shell output, web research and its MCP resource readers.
+ * background shell output and stopping, web research and its MCP resource
+ * readers. Older and newer CLIs name some of these differently.
  * Asking about each would interrupt the person for the agent's bookkeeping.
  */
 const CLAUDE_OWN_TOOLS = new Set([
@@ -673,6 +720,8 @@ const CLAUDE_OWN_TOOLS = new Set([
   "BashOutput",
   "KillShell",
   "KillBash",
+  "TaskStop",
+  "ListAgents",
   "WebSearch",
   "WebFetch",
   "ListMcpResourcesTool",

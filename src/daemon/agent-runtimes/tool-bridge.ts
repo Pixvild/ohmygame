@@ -21,6 +21,7 @@ export interface BridgeTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
 }
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -67,6 +68,9 @@ export class ToolBridge {
         name: tool.name,
         description: tool.description,
         inputSchema: jsonSchema(tool.parameters),
+        // Claude Code otherwise defers MCP tools behind its tool search, where
+        // the model may never find update_plan or the media tools.
+        _meta: { "anthropic/alwaysLoad": true },
       }));
   }
 
