@@ -191,7 +191,11 @@ SDK later if it removes maintenance while preserving hooks, permissions, MCP,
 resume, and cancellation; no separate SDK architecture is needed.
 
 Claude's permission controls use both `PreToolUse` and `can_use_tool`; validate
-control callbacks, planning restrictions, and allowed MCP calls. Discover
+control callbacks, planning restrictions, and allowed MCP calls. Planning runs in
+Claude's default permission mode, not its plan mode, so Claude records the plan
+with `update_plan` rather than its own plan file. Background tasks and scheduled
+prompts are disabled, because their reports would arrive after the turn ends.
+Bridge tools are marked always loaded so tool search does not hide them. Discover
 models from `initialize` or `list_models` as supported; expose failed/empty
 catalogs as diagnostics. A sole callback path is not a sufficient assumption.
 
@@ -334,11 +338,19 @@ Validation recorded during review on macOS:
   approval tests passed; an extra real Codex browser approval click scenario
   did not complete and is not counted as passed.
 
-Claude real inference is pending because the local CLI is signed out; its
-protocol/discovery/permission fixtures passed. Review of the reverted
-implementation found that Claude's own bookkeeping tools would have needed
-approval on every call; this is fixed, and real Claude acceptance remains the
-gate for that adapter. Linux/Windows real CLI acceptance,
+Real Claude Code 2.1.302 / Sonnet 5.5 acceptance passed on macOS for the
+reintroduced implementation: the same workflow as above (cancellation in
+619 ms), loading a staged Skill without approval, and a planning turn that
+searched with read-only commands, recorded its plan with `update_plan` and left
+the workspace unchanged. OpenCode 1.18.33 / `mimo-v2.6-flash-free` passed the
+same extended workflow after its fixes. That acceptance found and fixed: tools never shown as
+running, subagents and shells that ran in the background past the turn, Claude's
+own plan-file workflow in place of `update_plan`, planning that could not
+search, OhMyGame tools deferred behind Claude's tool search, OpenCode
+subagents refused in planning, and bare OpenCode rejections that ended the
+planning loop. Codex was not
+re-run after the review fixes, which change its tool registration and usage
+reporting; its earlier real acceptance predates them. Linux/Windows real CLI acceptance,
 Electron-specific native lifecycle acceptance, paid media/game-playtest flows,
 and universal OS confinement are not established by these checks. On Windows,
 discovery finds `.exe` programs only: Node cannot start the `.cmd` shims npm

@@ -145,11 +145,24 @@ does. `judgeApproval` decides each request first:
   Codex makes to leave its sandbox always asks, because Codex only makes one
   when its sandbox would stop the command.
 
-Planning turns are read-only on every path. Claude's `ExitPlanMode` is
+OpenCode's subagents, todo list, Skill loading and web research are allowed in
+the same way. Planning turns are read-only on every path: they accept file reads
+and the simple read commands the policy allows, and refuse everything else with
+feedback naming what is allowed, so the agent adjusts instead of stopping; a
+bare OpenCode rejection would end its loop. Native agents are told that
+OhMyGame's tools, including `update_plan`, come from its `ohmygame` tool server
+under their CLI's MCP names. Claude's `ExitPlanMode` is
 declined with a pointer to `update_plan`, because OhMyGame reviews plans itself.
 Codex registers every OhMyGame tool when its thread starts, since a thread that
 begins in planning continues after the plan is approved; tools the current mode
 does not allow are refused when called.
+
+Claude Code runs with background tasks and scheduled prompts disabled
+(`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, `CLAUDE_CODE_DISABLE_CRON`): a
+background subagent or shell would report after the turn's result, with no turn
+to receive it. OhMyGame's tools are marked always loaded so Claude's tool search
+does not hide them. Planning uses Claude's default permission mode instead of
+its plan mode, which would write a plan file and call `ExitPlanMode`.
 
 A request the policy leaves to the person appears as an approval card above the
 composer: Allow, Allow for this conversation, or Deny. Answered requests stay
@@ -282,8 +295,16 @@ Choose a currently listed model with a working account. The script uses isolated
 app data and a disposable workspace, grants only scoped test requests, and saves
 evidence under ignored `.runtime/`. It checks writes, an OhMyGame tool call,
 continuation, daemon restart, compaction, editing a later message, checkpoint
-restore, denial of external dummy files, approval persistence, and cancellation
-during an executing shell tool. Keep a runtime opt-in until real acceptance
+restore, denial of external dummy files, approval persistence, cancellation
+during an executing shell tool, loading a staged Skill without approval, and a
+planning turn that records its plan with `update_plan` and changes no file.
+Claude Code refuses a standalone `sleep`, so its cancellation step runs an
+equivalent `node` command.
+
+Claude Code 2.1.302 with `sonnet` and OpenCode 1.18.33 with
+`opencode/mimo-v2.6-flash-free` passed this on macOS. In Claude's `-p` mode
+it has no `TodoWrite`, `Glob`, `Grep` or `LS` and searches with `Bash`, so
+planning turns accept the read commands the policy allows without asking. Keep a runtime opt-in until real acceptance
 passes on the target platform; fixture success alone is insufficient.
 
 An optional final argument selects an absolute executable path, for example
