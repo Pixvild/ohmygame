@@ -52,9 +52,17 @@ export class ToolBridge {
     this.#active = new Set(names);
   }
 
-  list(): BridgeTool[] {
+  /**
+   * The tools the current mode allows. `all` lists every tool for agents that
+   * register their tools once per native session; `call` still refuses the
+   * ones the current mode does not allow.
+   */
+  list(scope: "active" | "all" = "active"): BridgeTool[] {
     return [...this.#tools.values()]
-      .filter((tool) => !this.#active || this.#active.has(tool.name))
+      .filter(
+        (tool) =>
+          scope === "all" || !this.#active || this.#active.has(tool.name),
+      )
       .map((tool) => ({
         name: tool.name,
         description: tool.description,

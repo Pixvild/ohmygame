@@ -363,7 +363,9 @@ export class CodexDriver implements NativeDriver {
       developerInstructions: this.context.instructions,
       config: await this.#config(server),
     };
-    const tools = this.context.bridge.list().map((tool) => ({
+    // Dynamic tools are fixed when the thread starts, and a thread that starts
+    // in planning continues after the plan is approved.
+    const tools = this.context.bridge.list("all").map((tool) => ({
       type: "function",
       name: tool.name,
       description: tool.description,

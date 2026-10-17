@@ -736,6 +736,51 @@ describe("Codex adapter", () => {
     expect(methods).not.toContain("turn/start");
   });
 
+  it("registers every OhMyGame tool when a thread starts in planning, so later turns can use them", async () => {
+    const threads: Array<Record<string, unknown>> = [];
+    fakeCli((message, cli) => {
+      if (typeof message.method !== "string" || message.id === undefined)
+        return;
+      const params = message.params as Record<string, unknown>;
+      if (message.method === "thread/start") threads.push(params);
+      cli.send({
+        id: message.id,
+        result:
+          message.method === "thread/start" ||
+          message.method === "thread/resume"
+            ? {
+                thread: { id: "thread-1" },
+                activePermissionProfile: { id: params.permissions },
+              }
+            : {},
+      });
+      if (message.method === "turn/start")
+        setTimeout(() =>
+          cli.send({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          }),
+        );
+    });
+    const driverContext = await context();
+    // A planning turn offers only the read-only tools; echo_tool stands for a media tool here.
+    driverContext.bridge.setActive([]);
+    const driver = new CodexDriver(driverContext);
+    cleanup.push(() => driver.dispose());
+    for (const readOnly of [true, false])
+      expect(
+        await driver.runTurn(
+          { text: "plan, then build", images: [], readOnly },
+          recordingSink().sink,
+          new AbortController().signal,
+        ),
+      ).toEqual({ status: "completed" });
+    expect(threads).toHaveLength(1);
+    expect(threads[0]!.dynamicTools).toEqual([
+      expect.objectContaining({ name: "echo_tool" }),
+    ]);
+  });
+
   it("projects quota windows from initial limits and live updates", async () => {
     fakeCli((message, cli) => {
       if (typeof message.method !== "string" || message.id === undefined)
