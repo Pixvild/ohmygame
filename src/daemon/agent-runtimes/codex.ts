@@ -524,24 +524,22 @@ export class CodexDriver implements NativeDriver {
         // The whole output comes with the completed item; streamed output is not repeated in the record.
         return;
       case "thread/tokenUsage/updated": {
+        // `total` adds up the whole thread; `last` is the latest request,
+        // which is what the context holds and what a stored message records.
         const usage = record(params.tokenUsage);
         const last = record(usage?.last);
-        const total = record(usage?.total);
-        if (total) {
+        if (last) {
           sink.usage(
             {
-              input:
-                number(total.inputTokens) - number(total.cachedInputTokens),
-              output: number(total.outputTokens),
-              cacheRead: number(total.cachedInputTokens),
-              cacheWrite: number(total.cacheWriteInputTokens),
+              input: number(last.inputTokens) - number(last.cachedInputTokens),
+              output: number(last.outputTokens),
+              cacheRead: number(last.cachedInputTokens),
+              cacheWrite: number(last.cacheWriteInputTokens),
             },
             typeof usage?.modelContextWindow === "number"
               ? usage.modelContextWindow
               : undefined,
-            last
-              ? number(last.inputTokens) + number(last.outputTokens)
-              : undefined,
+            number(last.inputTokens) + number(last.outputTokens),
           );
         }
         return;

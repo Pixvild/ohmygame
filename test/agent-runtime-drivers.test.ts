@@ -603,16 +603,26 @@ describe("Claude Code adapter", () => {
       cli.send({
         type: "assistant",
         parent_tool_use_id: null,
-        message: { id: "m2", content: [{ type: "text", text: "Done" }] },
+        message: {
+          id: "m2",
+          content: [{ type: "text", text: "Done" }],
+          // The last request; the result below adds up both of the turn's requests.
+          usage: {
+            input_tokens: 4,
+            output_tokens: 5,
+            cache_read_input_tokens: 96,
+            cache_creation_input_tokens: 0,
+          },
+        },
       });
       cli.send({
         type: "result",
         subtype: "success",
         is_error: false,
         usage: {
-          input_tokens: 10,
-          output_tokens: 5,
-          cache_read_input_tokens: 90,
+          input_tokens: 14,
+          output_tokens: 9,
+          cache_read_input_tokens: 186,
           cache_creation_input_tokens: 0,
         },
         modelUsage: { sonnet: { contextWindow: 200_000 } },
@@ -653,7 +663,7 @@ describe("Claude Code adapter", () => {
       "toolResult:toolu_1:false",
       "toolResult:toolu_2:true",
       "textDone:m2:0:Done",
-      "usage:10:5:200000:100",
+      "usage:4:5:200000:100",
     ]);
     // The record keeps the tool's own result, with its artifact, rather than MCP's text.
     expect(recorded.results.get("toolu_1")?.result.details).toEqual({
@@ -1135,7 +1145,7 @@ describe("Codex adapter", () => {
         ...turn,
         tokenUsage: {
           total: { inputTokens: 50, cachedInputTokens: 10, outputTokens: 5 },
-          last: { inputTokens: 40, outputTokens: 5 },
+          last: { inputTokens: 30, cachedInputTokens: 20, outputTokens: 5 },
           modelContextWindow: 400_000,
         },
       });
@@ -1193,7 +1203,7 @@ describe("Codex adapter", () => {
       'toolCall:cmd-1:bash:{"command":"touch /tmp/workspace/a"}',
       "toolStarted:cmd-1",
       "toolResult:cmd-1:true",
-      "usage:40:5:400000:45",
+      "usage:10:5:400000:35",
     ]);
     expect(recorded.results.get("call-1")?.result.details).toEqual({
       artifact: { type: "image", path: "art.png", mediaType: "image/png" },

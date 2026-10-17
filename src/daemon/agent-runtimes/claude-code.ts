@@ -32,6 +32,8 @@ interface PendingTurn {
   blocks: Map<string, "text" | "thinking">;
   streamed: Set<string>;
   readOnly: boolean;
+  /** The latest model request's usage, which is what the context holds; the result's usage adds up every request. */
+  requestUsage?: Record<string, unknown>;
 }
 
 /**
@@ -394,6 +396,7 @@ export class ClaudeCodeDriver implements NativeDriver {
 
   #assistant(turn: PendingTurn, message: Record<string, unknown>): void {
     const id = String(message.id ?? this.#messageId ?? randomUUID());
+    turn.requestUsage = record(message.usage) ?? turn.requestUsage;
     const content = Array.isArray(message.content)
       ? (message.content as Array<Record<string, unknown>>)
       : [];
@@ -454,7 +457,7 @@ export class ClaudeCodeDriver implements NativeDriver {
     if (!turn) return;
     this.#turn = undefined;
     this.#hookDecisions.clear();
-    const usage = record(message.usage);
+    const usage = turn.requestUsage ?? record(message.usage);
     if (usage) {
       const models = record(message.modelUsage);
       const contextWindow = models
