@@ -199,6 +199,10 @@ export class AgentRuntimeService {
       !path.isAbsolute(request.binaryPath)
     )
       throw new Error("The executable path must be absolute");
+    if (request.binaryPath && /\.(?:cmd|bat)$/i.test(request.binaryPath))
+      throw new Error(
+        "Choose the program itself (.exe); Windows command scripts cannot be started directly",
+      );
     await this.settings.update(id, {
       ...(request.enabled !== undefined ? { enabled: request.enabled } : {}),
       ...(request.isolateUserConfig !== undefined

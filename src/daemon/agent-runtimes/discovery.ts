@@ -150,8 +150,9 @@ async function searchCandidates(names: readonly string[]): Promise<string[]> {
       ].filter(Boolean),
     ),
   ];
-  const extensions =
-    process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
+  // Node cannot start a .cmd or .bat script, such as an npm shim, without a
+  // shell, and the CLIs' long JSON arguments are not safe to pass through one.
+  const extensions = process.platform === "win32" ? [".exe"] : [""];
   return directories.flatMap((directory) =>
     names.flatMap((name) =>
       extensions.map((extension) =>

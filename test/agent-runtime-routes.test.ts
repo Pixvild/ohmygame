@@ -229,6 +229,14 @@ describe("coding agent routes", () => {
         })
       ).status,
     ).toBe(400);
+    // Node cannot start Windows command scripts, such as npm shims, without a shell.
+    expect(
+      (
+        await call("PATCH", "/agent-runtimes/claude-code-cli", {
+          binaryPath: path.join(tmpdir(), "claude.cmd"),
+        })
+      ).status,
+    ).toBe(400);
     expect(
       (await call("PATCH", "/agent-runtimes/unknown-cli", { enabled: false }))
         .status,
