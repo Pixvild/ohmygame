@@ -298,8 +298,12 @@ try {
   );
   const usage = await call("GET", base + "/context-usage");
   evidence.push({ usage });
-  const cancelText =
-    "For this cancellation test, run exactly the shell command sleep 30 (no cd needed; cwd is the workspace), then reply DONE. Do nothing else.";
+  // Claude Code refuses a standalone `sleep` in its shell tool, so it gets an equivalent long-running command.
+  const longCommand =
+    runtime === "claude-code-cli"
+      ? 'node -e "setTimeout(() => {}, 30000)"'
+      : "sleep 30";
+  const cancelText = `For this cancellation test, run exactly the shell command ${longCommand} (no cd needed; cwd is the workspace), then reply DONE. Do nothing else.`;
   const running = await call<{ turnId: string }>("POST", base + "/turns", {
     prompt: cancelText,
   });
@@ -314,7 +318,9 @@ try {
           item.type === "dynamicToolCall" &&
           item.tool === "bash" &&
           item.status === "inProgress" &&
-          JSON.stringify(item.arguments).includes("sleep 30"),
+          JSON.stringify(item.arguments).includes(
+            JSON.stringify(longCommand).slice(1, -1),
+          ),
       ),
     );
     if (!executing) await new Promise((resolve) => setTimeout(resolve, 100));
