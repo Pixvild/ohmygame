@@ -270,13 +270,19 @@ run without approval; their subagents' tool calls are still checked.
 Explicit permission grants must contain understood, concrete roots; reject
 root-filesystem grants, globs, unknown forms, and protected paths.
 
-This policy is not universal OS isolation. Codex command execution has a native
-OS sandbox with minimal runtime/workspace/private-temp/Skill access and
-explicit protected-root denials. Its parent process still uses native auth and
-configuration. Claude/OpenCode callback controls cannot guarantee confinement
-of arbitrary approved programs, plugins, or subprocesses. Shell text inspection
-alone is heuristic. Strong credential confidentiality across all runtimes
-requires a separate sandbox and isolated credentials; that is deferred work.
+This policy decides what to ask about; an OS sandbox is the boundary behind
+it. Codex command execution has a native OS sandbox with minimal
+runtime/workspace/private-temp/Skill access and explicit protected-root
+denials. Claude Code's commands run in its native sandbox (Seatbelt on macOS,
+bubblewrap on Linux), enabled through flag settings: protected roots are
+unreadable, the workspace and staged Skills stay readable, commands cannot opt
+out, and the network stays open for installs. Where it cannot start, Claude
+runs commands under the approvals alone. OpenCode has no command sandbox, and
+its status and settings say so. Each runtime reports `commandSandbox` as `os`
+or `none`; Windows is `none` until established. The CLI parent processes still
+use their native auth and configuration, and sandboxes do not cover every
+plugin or MCP server a person adds. Strong credential confidentiality across
+all runtimes needs isolated credentials as well; that is deferred work.
 
 Build the child environment from an allowlist: PATH, HOME, locale, temp,
 proxy/certificate settings, and the runtime's own configuration directories.

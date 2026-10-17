@@ -1193,6 +1193,8 @@ const zhCN: typeof en = {
     ownConfigHint: "{{name}} 会同时加载你自己的设置、hooks、MCP 服务器和指令，就像在你的终端里一样。",
     partialIsolation: "{{name}} 总会从它自己的文件夹加载 Skills、插件和 AGENTS.md。OhMyGame 会在运行时关闭你的 MCP 服务器和通知 hook。",
     permissions: "OhMyGame 会检查 CLI 提供的权限请求。项目内编辑和常规只读命令可自动执行；其他请求可能需要授权。这些控制并不为所有工具提供操作系统级沙箱。",
+    sandboxOs: "{{name}} 运行的命令受操作系统级沙箱限制：即使通过链接或通配符，也无法读取受保护文件夹、其他项目和 OhMyGame 的数据。",
+    sandboxNone: "{{name}} 运行的命令没有操作系统级沙箱，OhMyGame 的审批是唯一边界，请仔细审核命令审批。",
     codexReadBoundary: "Codex 需要支持命名文件系统权限配置。命令仅能访问项目和运行所需的文件；额外路径需要审批。受保护路径和不受限的沙箱提权会被拒绝。",
     executable: "可执行文件",
     executablePlaceholder: "自动查找",

@@ -182,11 +182,14 @@ search directory. Child-session permission requests are admitted only after
 verifying their ancestry through the native API; they cannot be dropped merely
 because their session ID differs from the parent.
 
-These are native permission controls, not a universal OS sandbox. CLIs run as
-the signed-in OS user; hooks and sandbox capabilities differ, and do not
-necessarily mediate every subprocess, plugin or read. Strong confidentiality
-isolation requires a separate process/container sandbox and isolated
-credentials. Shell syntax checks alone cannot provide it.
+Shell syntax checks cannot resolve globs, brace expansion or links, so a
+command a person allows could still name a protected file indirectly. Codex and
+Claude Code therefore also run commands in their own OS sandbox (Seatbelt on
+macOS, bubblewrap on Linux); the settings page says which agents have one.
+OpenCode has none, so its approvals are its only boundary. Each CLI's parent
+process runs as the signed-in OS user and is not confined. Strong
+confidentiality isolation requires a separate process/container sandbox and
+isolated credentials.
 
 Codex requires named permission profiles and checks that its app server actually
 activated the requested profile before delivering a prompt. The legacy
@@ -208,10 +211,14 @@ grants. The native `request_permissions` tool is enabled explicitly, with grants
 limited to the current turn. Shell snapshots are off and the shell environment
 is rebuilt from the same allowlist, without CLI authentication tokens.
 
-This enforces Codex command boundaries through its own OS sandbox. It does not
-isolate the CLI parent process, which still needs its sign-in and configuration.
-The callback controls for Claude Code and OpenCode do not offer the same OS
-boundary for arbitrary shell programs a person approves.
+Claude Code's sandbox is turned on through flag settings, which apply whether
+or not the person's own configuration loads. Protected roots are unreadable,
+the workspace and the session's staged Skills stay readable, commands cannot
+opt out of the sandbox, approvals still go through OhMyGame, and the network
+stays available for installs. Package caches live in the session's temporary
+folder, which commands may write. Where the sandbox cannot start (Windows, or
+Linux without bubblewrap and socat), Claude Code runs commands without it and
+the settings page says approvals are the boundary.
 
 ## Environment and isolation
 

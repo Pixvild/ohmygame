@@ -9,6 +9,7 @@ import {
   toolchainRoots,
 } from "../src/daemon/agent-runtimes/environment.js";
 import {
+  commandSandbox,
   parseVersion,
   compareVersions,
   versionAtLeast,
@@ -707,5 +708,23 @@ describe("sandboxed toolchains", () => {
     } finally {
       await rm(developer, { recursive: true, force: true });
     }
+  });
+});
+
+describe("command sandbox status", () => {
+  it("reports an OS sandbox only where the CLI confines its commands", () => {
+    expect(commandSandbox("claude-code-cli", "darwin")).toBe("os");
+    expect(commandSandbox("codex-cli", "linux")).toBe("os");
+    expect(commandSandbox("opencode-cli", "darwin")).toBe("none");
+    expect(commandSandbox("claude-code-cli", "win32")).toBe("none");
+    // Claude Code's Linux sandbox needs bubblewrap and socat.
+    expect(commandSandbox("claude-code-cli", "linux", () => true)).toBe("os");
+    expect(
+      commandSandbox(
+        "claude-code-cli",
+        "linux",
+        (program) => program !== "socat",
+      ),
+    ).toBe("none");
   });
 });

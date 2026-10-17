@@ -18,7 +18,11 @@ import {
 } from "../../shared/agent-runtimes.js";
 import type { SkillCatalogItem } from "../agent.js";
 import type { EffectiveMcpConfig, PluginMcpHost } from "../plugin-mcp-host.js";
-import { AGENT_RUNTIME_DEFINITIONS, versionAtLeast } from "./definitions.js";
+import {
+  AGENT_RUNTIME_DEFINITIONS,
+  commandSandbox,
+  versionAtLeast,
+} from "./definitions.js";
 import {
   privateFolder,
   probeAuth,
@@ -144,6 +148,7 @@ export class AgentRuntimeService {
       name: definition.name,
       enabled: settings.enabled,
       isolateUserConfig: settings.isolateUserConfig,
+      commandSandbox: commandSandbox(id),
       ...(id === "codex-cli" && settings.isolateUserConfig
         ? { partialIsolation: true }
         : {}),

@@ -722,7 +722,8 @@ describe("Claude Code adapter", () => {
         modelUsage: { sonnet: { contextWindow: 200_000 } },
       });
     });
-    const driver = new ClaudeCodeDriver(await context());
+    const driverContext = await context();
+    const driver = new ClaudeCodeDriver(driverContext);
     cleanup.push(() => driver.dispose());
     const recorded = recordingSink();
     const outcome = await driver.runTurn(
@@ -748,10 +749,31 @@ describe("Claude Code adapter", () => {
       ]),
     );
     expect(args).toContain("--session-id");
+    // Commands run in Claude's OS sandbox: protected roots unreadable, no opting out.
+    const settings = JSON.parse(args[args.indexOf("--settings") + 1]!);
+    const commandTemporary = canonicalPath(
+      path.join(driverContext.privateDirectory, "tmp"),
+    );
+    expect(settings.sandbox).toMatchObject({
+      enabled: true,
+      allowUnsandboxedCommands: false,
+      autoAllowBashIfSandboxed: false,
+      filesystem: {
+        denyRead: [canonicalPath("/tmp/secrets")],
+        allowRead: [canonicalPath("/tmp/workspace"), commandTemporary],
+        allowWrite: [commandTemporary],
+      },
+    });
     // Work that reports after the turn's result would have no turn to land in.
+    // Installs fill session caches, the home folder's being unwritable there.
     expect(clis[0]!.env).toMatchObject({
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
       CLAUDE_CODE_DISABLE_CRON: "1",
+      npm_config_cache: path.join(
+        driverContext.privateDirectory,
+        "tmp",
+        "npm-cache",
+      ),
     });
     expect(recorded.sessionId()).toBe("claude-session-1");
     expect(recorded.calls).toEqual([

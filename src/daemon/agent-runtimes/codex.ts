@@ -21,7 +21,7 @@ import {
 import { stageSkills, stagedSkillsRoot } from "./skills.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 import { canonicalPath, judgeApproval } from "./policy.js";
-import { sandboxedPath, toolchainRoots } from "./environment.js";
+import { sandboxedPath, sessionCaches, toolchainRoots } from "./environment.js";
 import type { AgentContextUsage } from "../../shared/contracts.js";
 
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -495,11 +495,7 @@ export class CodexDriver implements NativeDriver {
         TMPDIR: temporary,
         TMP: temporary,
         TEMP: temporary,
-        // Package caches in the home folder are not writable here; keep them with the session.
-        XDG_CACHE_HOME: path.join(temporary, "cache"),
-        npm_config_cache: path.join(temporary, "npm-cache"),
-        BUN_INSTALL_CACHE_DIR: path.join(temporary, "bun-cache"),
-        YARN_CACHE_FOLDER: path.join(temporary, "yarn-cache"),
+        ...sessionCaches(temporary),
         // ~/.gitconfig may hold credential helpers; commands get only the person's identity.
         GIT_CONFIG_GLOBAL: await privateGitConfig(temporary, this.context.env),
       },
