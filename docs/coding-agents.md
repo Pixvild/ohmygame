@@ -219,8 +219,11 @@ refreshes honor their TTL and discard results from a superseded configuration.
 By default each agent runs without the person's own configuration:
 
 - Claude Code: `--setting-sources ""` and `--strict-mcp-config`.
-- Codex: the person's MCP servers and notification hook are turned off for the
-  thread; a failure to inspect their configuration stops startup. Codex still loads Skills, plugins and AGENTS.md from its own folder;
+- Codex: the workspace is its own project root (`project_root_markers = []`),
+  so only the workspace's `AGENTS.md` is read, as for OhMyGame's own agent; a
+  parent folder's file describes whatever contains the game and is outside the
+  permission profile. The person's MCP servers and notification hook are turned
+  off for the thread; a failure to inspect their configuration stops startup. Codex still loads Skills, plugins and AGENTS.md from its own folder;
   the settings page says so.
 - OpenCode: a private configuration folder, `--pure` (external plugins off),
   external Skills disabled, and no project configuration.
@@ -301,8 +304,8 @@ planning turn that records its plan with `update_plan` and changes no file.
 Claude Code refuses a standalone `sleep`, so its cancellation step runs an
 equivalent `node` command.
 
-Claude Code 2.1.302 with `sonnet` and OpenCode 1.18.33 with
-`opencode/mimo-v2.6-flash-free` passed this on macOS. In Claude's `-p` mode
+Claude Code 2.1.302 with `sonnet`, Codex 0.163.0 with `gpt-6-luna` and
+OpenCode 1.18.33 with `opencode/mimo-v2.6-flash-free` passed this on macOS. In Claude's `-p` mode
 it has no `TodoWrite`, `Glob`, `Grep` or `LS` and searches with `Bash`, so
 planning turns accept the read commands the policy allows without asking. Keep a runtime opt-in until real acceptance
 passes on the target platform; fixture success alone is insufficient.

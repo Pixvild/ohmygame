@@ -348,9 +348,13 @@ running, subagents and shells that ran in the background past the turn, Claude's
 own plan-file workflow in place of `update_plan`, planning that could not
 search, OhMyGame tools deferred behind Claude's tool search, OpenCode
 subagents refused in planning, and bare OpenCode rejections that ended the
-planning loop. Codex was not
-re-run after the review fixes, which change its tool registration and usage
-reporting; its earlier real acceptance predates them. Linux/Windows real CLI acceptance,
+planning loop. Codex 0.163.0 (the first stable release with named
+permission profiles) / `gpt-6-luna` passed the same extended workflow after
+one more fix: it reads `AGENTS.md` from every folder between the Git root and
+the workspace through the permission profile, so a workspace inside another
+repository failed to start a thread. `project_root_markers = []` makes the
+workspace its own root, so only the workspace's `AGENTS.md` is read, as for
+OhMyGame's own agent. Linux/Windows real CLI acceptance,
 Electron-specific native lifecycle acceptance, paid media/game-playtest flows,
 and universal OS confinement are not established by these checks. On Windows,
 discovery finds `.exe` programs only: Node cannot start the `.cmd` shims npm

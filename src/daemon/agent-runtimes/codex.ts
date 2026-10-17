@@ -460,6 +460,10 @@ export class CodexDriver implements NativeDriver {
       default_permissions: this.#writeProfile,
       "features.request_permissions_tool": true,
       "features.shell_snapshot": false,
+      // Only the workspace's own AGENTS.md counts, as for OhMyGame's own agent:
+      // a parent folder's instructions describe whatever happens to contain
+      // the game, and its files are outside the permission profile.
+      project_root_markers: [],
       permissions: {
         [this.#writeProfile]: profile(false),
         [this.#readProfile]: profile(true),

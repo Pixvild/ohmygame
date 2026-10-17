@@ -1276,7 +1276,12 @@ describe("Codex adapter", () => {
       },
       permissions: expect.stringMatching(/^ohmygame-/),
       developerInstructions: "Project instructions",
-      config: { "mcp_servers.personal.enabled": false, notify: [] },
+      // Only the workspace's own AGENTS.md counts, as for OhMyGame's own agent.
+      config: {
+        "mcp_servers.personal.enabled": false,
+        notify: [],
+        project_root_markers: [],
+      },
     });
     expect(thread.dynamicTools).toEqual([
       expect.objectContaining({ type: "function", name: "echo_tool" }),
