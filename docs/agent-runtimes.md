@@ -280,7 +280,12 @@ A runtime whose commands all run in its OS sandbox (`sandboxedCommands`, Claude
 Code where its sandbox starts) asks only for commands that publish or escalate
 and for paths outside the workspace; planning keeps the strict rule. Codex's
 requests are escalations out of its sandbox and keep the strict rule too.
-`approvalScope` widens a conversation approval only to a repeatable publish
+A person may give an agent full access (`permissionMode: "full"`,
+`fullAccess` in the policy): every request the policy would ask about is
+allowed and the CLI runs without its sandbox (no Claude sandbox settings,
+Codex's `:danger-full-access` profile). Protected roots a request names are
+still denied, and planning uses `planningPolicy`, which is strict whatever the
+mode. `approvalScope` widens a conversation approval only to a repeatable publish
 (`git push`, `npm publish`) and to read folders, and only where writes stay
 confined.
 Globs, brace expansion, and recursive link-following options (`grep -R`,

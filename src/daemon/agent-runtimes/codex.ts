@@ -47,8 +47,10 @@ interface CodexTurn {
  */
 export class CodexDriver implements NativeDriver {
   #disposed = false;
-  readonly #writeProfile = `ohmygame-${randomUUID()}`;
-  readonly #readProfile = `${this.#writeProfile}-read`;
+  readonly #profile = `ohmygame-${randomUUID()}`;
+  readonly #readProfile = `${this.#profile}-read`;
+  /** Full access is Codex's own unsandboxed profile; planning keeps the read-only one. */
+  readonly #writeProfile: string;
   #limits: NonNullable<AgentContextUsage["limits"]> = [];
   #lease?: CodexServerLease;
   #starting?: Promise<CodexAppServer>;
@@ -58,6 +60,9 @@ export class CodexDriver implements NativeDriver {
 
   constructor(private readonly context: DriverContext) {
     this.#threadId = context.resume;
+    this.#writeProfile = context.policy.fullAccess
+      ? ":danger-full-access"
+      : this.#profile;
   }
 
   async runTurn(
@@ -176,7 +181,7 @@ export class CodexDriver implements NativeDriver {
         const lease = await acquireCodexServer(
           {
             // Without a shared identity the server is this session's alone.
-            key: shared?.key ?? `private-${this.#writeProfile}`,
+            key: shared?.key ?? `private-${this.#profile}`,
             directory: shared?.directory ?? this.context.privateDirectory,
             shared: Boolean(shared),
             binaryPath: this.context.binaryPath,
@@ -337,7 +342,7 @@ export class CodexDriver implements NativeDriver {
       // the game, and its files are outside the permission profile.
       project_root_markers: [],
       permissions: {
-        [this.#writeProfile]: profile(false),
+        [this.#profile]: profile(false),
         [this.#readProfile]: profile(true),
       },
       // A child must not inherit authentication tokens or proxy secrets from the CLI.

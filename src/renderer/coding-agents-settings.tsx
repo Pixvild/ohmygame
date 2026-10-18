@@ -9,6 +9,7 @@ import {
   Terminal,
 } from "./icons.js";
 import type {
+  AgentPermissionMode,
   AgentRuntimeDiagnostic,
   AgentRuntimeId,
   AgentRuntimeStatus,
@@ -23,7 +24,16 @@ import {
 } from "./api.js";
 import { PROVIDER_ICONS } from "./provider-icons.js";
 import { openModelAuthExternal } from "./use-model-provider-auth.js";
+import { SegmentedControl } from "./segmented-control.js";
 import { t } from "./i18n.js";
+
+const PERMISSION_OPTIONS: readonly {
+  value: AgentPermissionMode;
+  label: string;
+}[] = [
+  { value: "standard", label: t("codingAgents.permissionStandard") },
+  { value: "full", label: t("codingAgents.permissionFull") },
+];
 
 /**
  * The coding agent CLIs in Agents: those found on this computer, each with
@@ -368,9 +378,11 @@ export function CodingAgentDetail({
               {t("codingAgents.sandbox")}
             </span>
             <span className="settings-provider-setting-value">
-              {agent.commandSandbox === "os"
-                ? t("codingAgents.sandboxOs")
-                : t("codingAgents.sandboxNone")}
+              {agent.permissionMode === "full"
+                ? t("codingAgents.sandboxOff")
+                : agent.commandSandbox === "os"
+                  ? t("codingAgents.sandboxOs")
+                  : t("codingAgents.sandboxNone")}
             </span>
           </div>
         ) : null}
@@ -393,6 +405,23 @@ export function CodingAgentDetail({
       {agent.installed ? (
         <section className="settings-detail-section">
           <h4>{t("codingAgents.configuration")}</h4>
+          <div className="coding-agent-permission">
+            <span className="settings-search-field-label">
+              {t("codingAgents.permissions")}
+            </span>
+            <SegmentedControl
+              className="settings-chat-layout-control"
+              label={t("codingAgents.permissions")}
+              options={PERMISSION_OPTIONS}
+              value={agent.permissionMode}
+              onChange={(permissionMode) => void update({ permissionMode })}
+            />
+          </div>
+          {agent.permissionMode === "full" ? (
+            <p className="coding-agent-warning" role="note">
+              {t("codingAgents.permissionFullHint", { name: agent.name })}
+            </p>
+          ) : null}
           <label className="coding-agent-option">
             <span className="settings-toggle">
               <input

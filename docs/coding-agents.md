@@ -136,6 +136,20 @@ extensions do not reach coding agents.
 
 ## Approvals and limits
 
+Each agent's detail page has a **Permissions** setting:
+
+- **Standard** (default): the rules below. Commands run in the CLI's OS
+  sandbox where it has one.
+- **Full access**: no sandbox and no questions, as with OhMyGame's own agent.
+  Claude Code runs without its sandbox settings, Codex uses its own
+  `:danger-full-access` profile, and OpenCode's requests are all allowed.
+  Requests that name a protected root, such as a CLI sign-in folder, are
+  still refused, and planning stays read-only.
+
+Changing it, or **Use my own CLI configuration**, lets go of the agent's idle
+open conversations, so their next message restarts the CLI with the new
+setting and resumes its session; a running turn keeps its setting.
+
 In the project folder an agent works without asking, as OhMyGame's own agent
 does. `judgeApproval` decides each request first:
 
@@ -268,14 +282,15 @@ By default each agent runs without the person's own configuration:
 ## Settings and API
 
 `agent-runtimes.json` in the data directory stores, per agent, `enabled`
-(default off), `isolateUserConfig` (default on), an optional absolute
+(default off), `isolateUserConfig` (default on), `permissionMode` (`standard`
+or `full`, default `standard`), an optional absolute
 `binaryPath`, and an optional native model/effort `defaultModel`. A damaged file falls
 back to the defaults. Credentials remain in the CLI's own store.
 
 | Route                                                     | Purpose                                                                |
 | --------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `GET /agent-runtimes`                                     | Status of every agent; `?recheck=1` probes again                       |
-| `PATCH /agent-runtimes/:id`                               | `enabled`, `isolateUserConfig`, `binaryPath`                           |
+| `PATCH /agent-runtimes/:id`                               | `enabled`, `isolateUserConfig`, `permissionMode`, `binaryPath`         |
 | `POST /agent-runtimes/:id/recheck`                        | Probe one agent again                                                  |
 | `POST /agent-runtimes/:id/login`                          | Start the CLI's sign-in; returns a browser URL or a command            |
 | `PUT /projects/:p/conversations/:c/reasoning`             | Select a native effort/variant string                                  |

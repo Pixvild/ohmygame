@@ -1745,6 +1745,20 @@ body {
   font-size: 11px;
 }
 
+.coding-agent-permission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.coding-agent-warning {
+  margin: 0;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .coding-agent-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

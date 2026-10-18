@@ -584,6 +584,22 @@ export class AgentManager {
     await managed.session.setModel(compatibleRuntimeModel(model));
   }
 
+  /**
+   * Lets go of the idle sessions a coding agent runs after its settings
+   * change, so the next message in each starts it with them and resumes its
+   * native session. A busy one keeps its settings until it is next loaded.
+   */
+  releaseRuntimeSessions(runtime: AgentRuntimeId): void {
+    for (const [key, managed] of this.#sessions)
+      if (
+        managed.session.runtime === runtime &&
+        !this.#activeTurns.has(key) &&
+        !this.#revisions.has(key) &&
+        !this.#sessionLoads.has(key)
+      )
+        this.#forgetConversation(key);
+  }
+
   /** The coding agent running a conversation's loaded session, if any; undefined for OhMyGame's own agent. */
   sessionRuntime(projectId: string, conversationId: string): AgentRuntimeId | undefined {
     return this.#sessions.get(conversationKey(projectId, conversationId))?.session.runtime;

@@ -17,6 +17,18 @@ export interface AgentPolicyContext {
    * commands that publish or escalate, and paths outside the workspace.
    */
   sandboxedCommands?: boolean;
+  /**
+   * The person gave the agent full access: nothing is asked, as with
+   * OhMyGame's own agent. Protected roots a request names are still refused.
+   */
+  fullAccess?: boolean;
+}
+
+/** Planning only reads, whatever the agent's sandbox or permission mode. */
+export function planningPolicy(
+  context: AgentPolicyContext,
+): AgentPolicyContext {
+  return { ...context, sandboxedCommands: false, fullAccess: false };
 }
 
 /**
@@ -64,9 +76,17 @@ export function judgeApproval(
   details: ApprovalRequestDetails,
   context: AgentPolicyContext,
 ): PolicyVerdict {
+  const verdict = judgeRequest(details, context);
+  return verdict === "ask" && context.fullAccess ? "allow" : verdict;
+}
+
+function judgeRequest(
+  details: ApprovalRequestDetails,
+  context: AgentPolicyContext,
+): PolicyVerdict {
   if (details.paths?.length) {
     const verdicts = details.paths.map((entry) =>
-      judgeApproval(
+      judgeRequest(
         {
           ...details,
           kind: "file",

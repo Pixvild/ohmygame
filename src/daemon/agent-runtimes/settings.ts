@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  AGENT_PERMISSION_MODES,
   AGENT_RUNTIME_IDS,
   isAgentRuntimeId,
+  type AgentPermissionMode,
   type AgentRuntimeId,
 } from "../../shared/agent-runtimes.js";
 
@@ -16,12 +18,14 @@ export interface AgentRuntimeDefault {
 export interface AgentRuntimeSettings {
   enabled: boolean;
   isolateUserConfig: boolean;
+  permissionMode: AgentPermissionMode;
   binaryPath?: string;
 }
 
 const DEFAULTS: AgentRuntimeSettings = {
   enabled: false,
   isolateUserConfig: true,
+  permissionMode: "standard",
 };
 
 /**
@@ -74,6 +78,11 @@ export class AgentRuntimeSettingsStore {
           typeof stored.isolateUserConfig === "boolean"
             ? stored.isolateUserConfig
             : DEFAULTS.isolateUserConfig,
+        permissionMode: AGENT_PERMISSION_MODES.includes(
+          stored.permissionMode as AgentPermissionMode,
+        )
+          ? (stored.permissionMode as AgentPermissionMode)
+          : DEFAULTS.permissionMode,
         ...(typeof stored.binaryPath === "string" &&
         path.isAbsolute(stored.binaryPath)
           ? { binaryPath: stored.binaryPath }
