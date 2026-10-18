@@ -332,6 +332,12 @@ try {
     ).includes("left-pad"),
     `The toolchain did not run: ${JSON.stringify(toolchain.items).slice(0, 600)}`,
   );
+  // Claude Code runs its commands in its sandbox, so an install asks nobody.
+  if (runtime === "claude-code-cli" && status.commandSandbox === "os")
+    checkBoundary(
+      !toolchain.items.some((item) => item.type === "approvalRequest"),
+      "A sandboxed install asked for approval",
+    );
   if (status.commandSandbox === "os") {
     // The shell-text policy cannot resolve a glob, so the person is asked and
     // allows it; the OS sandbox must still refuse the protected target.

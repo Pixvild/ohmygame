@@ -151,7 +151,12 @@ does. `judgeApproval` decides each request first:
   checked like any other.
 - **Ask** the person for paths outside the workspace and other commands,
   including build scripts, interpreters, Git, compound commands, globs and
-  recursive link-following (`grep -R`, `rg -L`). A request
+  recursive link-following (`grep -R`, `rg -L`). Where Claude Code runs its
+  commands in its OS sandbox, which keeps their writes in the workspace and
+  protected folders unreadable, only commands that publish or escalate
+  (`git push`, `npm publish`, `sudo`, `curl … | sh`) and commands naming paths
+  outside the workspace are asked about; installs, builds, Git, pipes and
+  compound commands run. Planning still allows only the simple read commands. A request
   Codex makes to leave its sandbox always asks, because Codex only makes one
   when its sandbox would stop the command.
 
@@ -180,8 +185,12 @@ in the timeline. Stopping the turn denies every request still waiting.
 
 Explicit permission grants show all read/write roots and network access.
 Codex grants only understood concrete paths that were reviewed, for one turn.
-Conversation approvals are cached for the exact request; broad native prefix
-grants are not issued. OpenCode read/edit/search/shell requests are mediated,
+Allowing for the conversation covers the exact request, with two exceptions
+the card names: a sandboxed `git push` or package publish covers that command
+whatever its remote or package, and a read outside the workspace covers its
+folder (never the home folder or the disk root). A sandboxed command naming an
+outside path covers reads in that folder, since its sandbox keeps writes in the
+workspace. Escalations such as `sudo` and `curl … | sh` are asked each time. OpenCode read/edit/search/shell requests are mediated,
 with file patterns resolved from its reported Git root rather than assuming
 that it equals the application workspace. Search metadata identifies the actual
 search directory. Child-session permission requests are admitted only after

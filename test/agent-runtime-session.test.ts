@@ -646,6 +646,84 @@ describe("coding agent sessions", () => {
     ]);
   });
 
+  it("lets a conversation approval cover what its scope names, and nothing else", async () => {
+    const decisions: string[] = [];
+    const command = (text: string, commands: string[]) => ({
+      kind: "command" as const,
+      tool: "Bash",
+      command: text,
+      canAllowSession: true,
+      sessionScope: { commands },
+    });
+    const read = (file: string, folder: string) => ({
+      kind: "file" as const,
+      tool: "Read",
+      path: file,
+      canAllowSession: true,
+      sessionScope: { readFolders: [folder] },
+    });
+    const { manager, project, conversation, received } = setup([
+      async (_input, sink) => {
+        for (const request of [
+          command("git push origin main", ["git push"]),
+          command("git push upstream dev", ["git push"]),
+          command("npm publish", ["npm publish"]),
+          read("/notes/a.md", "/notes"),
+          read("/notes/drafts/b.md", "/notes/drafts"),
+          read("/other/c.md", "/other"),
+        ])
+          decisions.push(await sink.requestApproval(request));
+        return { status: "completed" };
+      },
+    ]);
+    received.length = 0;
+    const run = manager.prompt(project, conversation, "go");
+    const asked = new Set<string>();
+    const answer = async (decision: "allow-session" | "deny") => {
+      let item: Extract<ThreadItem, { type: "approvalRequest" }> | undefined;
+      await expect
+        .poll(() => {
+          item = received
+            .filter((event) => event.type === "item.started")
+            .map(
+              (event) =>
+                (event.data as { item: ThreadItem }).item as Extract<
+                  ThreadItem,
+                  { type: "approvalRequest" }
+                >,
+            )
+            .find(
+              (candidate) =>
+                candidate.type === "approvalRequest" &&
+                !asked.has(candidate.requestId),
+            );
+          return item;
+        })
+        .toBeTruthy();
+      asked.add(item!.requestId);
+      manager.answerApproval(
+        project.id,
+        conversation.summary.id,
+        item!.requestId,
+        decision,
+      );
+    };
+    await answer("allow-session"); // git push origin main
+    await answer("deny"); // npm publish: another command
+    await answer("allow-session"); // /notes/a.md
+    await answer("deny"); // /other/c.md: another folder
+    await run.result;
+    expect(decisions).toEqual([
+      "allow-session",
+      "allow",
+      "deny",
+      "allow-session",
+      "allow",
+      "deny",
+    ]);
+    expect(asked.size).toBe(4);
+  });
+
   it("denies requests that are still waiting when the turn is stopped", async () => {
     let decision: string | undefined;
     const { manager, project, conversation, received } = setup([

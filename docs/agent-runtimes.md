@@ -276,6 +276,13 @@ custom CLI credential roots, and denies direct requests for credential homes,
 OhMyGame data, other projects, or ancestors that expose them. Workspace file
 operations and a small set of simple read commands may proceed; external paths,
 builds, interpreters, Git, compound commands, and unknown scopes need approval.
+A runtime whose commands all run in its OS sandbox (`sandboxedCommands`, Claude
+Code where its sandbox starts) asks only for commands that publish or escalate
+and for paths outside the workspace; planning keeps the strict rule. Codex's
+requests are escalations out of its sandbox and keep the strict rule too.
+`approvalScope` widens a conversation approval only to a repeatable publish
+(`git push`, `npm publish`) and to read folders, and only where writes stay
+confined.
 Globs, brace expansion, and recursive link-following options (`grep -R`,
 `rg -L`, `ls -LR`) are unknown scopes: they reach paths the command text does
 not name. A native agent's own tools that touch no file and run no command,

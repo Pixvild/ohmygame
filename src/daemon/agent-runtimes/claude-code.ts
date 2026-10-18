@@ -668,7 +668,10 @@ export class ClaudeCodeDriver implements NativeDriver {
       // run the read commands the policy allows without asking, and no other.
       const readCommand =
         tool === "Bash" &&
-        judgeApproval(details, this.context.policy) === "allow";
+        judgeApproval(details, {
+          ...this.context.policy,
+          sandboxedCommands: false,
+        }) === "allow";
       return readCommand
         ? { decision: "allow", reason: "Approved by OhMyGame" }
         : {

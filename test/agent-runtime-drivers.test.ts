@@ -303,7 +303,13 @@ describe("Claude Code adapter", () => {
           cli.send({ type: "result", subtype: "success" });
         }
       });
-      const driver = new ClaudeCodeDriver(await context());
+      const driverContext = await context();
+      // Claude Code runs commands in its sandbox; planning still may not change anything.
+      driverContext.policy = {
+        ...driverContext.policy,
+        sandboxedCommands: true,
+      };
+      const driver = new ClaudeCodeDriver(driverContext);
       cleanup.push(() => driver.dispose());
       const recorded = recordingSink(() => "allow");
       await driver.runTurn(
@@ -341,6 +347,14 @@ describe("Claude Code adapter", () => {
         output: expect.objectContaining({ permissionDecision: decision }),
         asked: 0,
       });
+    expect(await hook("Bash", true, { command: "npm install" })).toEqual({
+      output: expect.objectContaining({ permissionDecision: "deny" }),
+      asked: 0,
+    });
+    expect(await hook("Bash", false, { command: "npm install" })).toEqual({
+      output: expect.objectContaining({ permissionDecision: "allow" }),
+      asked: 0,
+    });
     expect(await hook("Write", false)).toEqual({
       output: expect.objectContaining({ permissionDecision: "allow" }),
       asked: 0,
