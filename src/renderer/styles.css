@@ -12050,6 +12050,23 @@ button {
   background: var(--menu-surface);
 }
 
+/* One line under the commands; the menu's own item text rules do not apply. */
+.composer-context-menu-usage .agent-usage-inline {
+  flex-wrap: nowrap;
+  gap: 18px;
+}
+
+.composer-context-menu-usage small {
+  flex: none;
+  min-width: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer-context-menu-usage .agent-usage-meter {
+  width: 44px;
+}
+
 .composer-plan-mode,
 .composer-plan-mode button {
   display: flex;
