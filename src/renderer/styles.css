@@ -11990,6 +11990,7 @@ button {
 .composer-context-menu {
   box-sizing: border-box;
   max-height: 400px;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 6px;
   border: 1px solid var(--menu-border);
@@ -12050,10 +12051,10 @@ button {
   background: var(--menu-surface);
 }
 
-/* One line under the commands; the menu's own item text rules do not apply. */
+/* Under the commands; the menu's own item text rules do not apply. A narrow
+   menu wraps whole windows rather than scrolling sideways. */
 .composer-context-menu-usage .agent-usage-inline {
-  flex-wrap: nowrap;
-  gap: 18px;
+  gap: 4px 18px;
 }
 
 .composer-context-menu-usage small {
