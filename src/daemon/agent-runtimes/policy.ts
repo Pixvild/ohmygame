@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import type { ApprovalRequestDetails } from "../../shared/agent-runtimes.js";
 
 export type PolicyVerdict = "allow" | "deny" | "ask";
@@ -11,6 +11,12 @@ export interface AgentPolicyContext {
   neverTouch: readonly string[];
   /** Host-owned copies of this session's Skills; reading does not grant access to adjacent app data. */
   readablePaths?: readonly string[];
+  /**
+   * Commands run in an OS sandbox that keeps their writes in the workspace and
+   * protected roots unreadable, so only what it cannot judge is asked about:
+   * commands that publish or escalate, and paths outside the workspace.
+   */
+  sandboxedCommands?: boolean;
 }
 
 /**
@@ -128,6 +134,7 @@ export function judgeApproval(
       )
     )
       return "ask";
+    if (context.sandboxedCommands) return "allow";
     return SAFE_COMMAND.test(command.trim()) &&
       !SHELL_CONTROL.test(command) &&
       !UNSCOPED_ARGUMENT.test(command)
@@ -165,9 +172,98 @@ export function canonicalPath(value: string): string {
   }
 }
 
+/**
+ * What allowing a request for the rest of a conversation should cover, so a
+ * person is not asked again for each variation of the same thing: `git push`
+ * to any remote, or another file in a folder they let the agent read. Only
+ * reads widen, and a command's paths only when its sandbox keeps its writes
+ * in the workspace; escalations and everything else stay exact.
+ */
+export function approvalScope(
+  details: ApprovalRequestDetails,
+  context: AgentPolicyContext,
+): ApprovalRequestDetails["sessionScope"] {
+  const workspace = canonicalPath(context.workspacePath);
+  if (details.command !== undefined) {
+    if (!context.sandboxedCommands) return undefined;
+    const risky = [...details.command.matchAll(RISKY_COMMANDS)].map((match) =>
+      match[2]!.replace(/\s+/g, " "),
+    );
+    if (risky.some((command) => !REPEATABLE_COMMAND.test(command)))
+      return undefined;
+    const outside = commandPaths(details.command, workspace)
+      .map(canonicalPath)
+      .filter(
+        (target) =>
+          !inside(target, workspace) &&
+          !SAFE_OUTSIDE.some((root) => inside(target, root)),
+      );
+    return scope([...new Set(risky)], outside);
+  }
+  const reads = details.paths?.length
+    ? details.paths
+    : details.path
+      ? [
+          {
+            path: details.path,
+            access: readTool(details.tool) ? "read" : "write",
+          },
+        ]
+      : [];
+  if (!reads.length || reads.some((entry) => entry.access !== "read"))
+    return undefined;
+  return scope(
+    [],
+    reads.map((entry) =>
+      canonicalPath(path.resolve(workspace, expandHome(entry.path))),
+    ),
+  );
+}
+
+function scope(
+  commands: string[],
+  paths: string[],
+): ApprovalRequestDetails["sessionScope"] {
+  const folders: string[] = [];
+  for (const target of paths) {
+    const folder = isDirectory(target) ? target : path.dirname(target);
+    // Reading anywhere in the home folder or the disk is not a folder grant.
+    if (
+      folder === path.parse(folder).root ||
+      folder === canonicalPath(os.homedir())
+    )
+      return undefined;
+    if (!folders.includes(folder)) folders.push(folder);
+  }
+  if (!commands.length && !folders.length) return undefined;
+  return {
+    ...(commands.length ? { commands } : {}),
+    ...(folders.length ? { readFolders: folders } : {}),
+  };
+}
+
+function readTool(tool: string): boolean {
+  return ["read", "glob", "grep", "ls", "list", "external_directory"].includes(
+    tool.toLowerCase(),
+  );
+}
+
+function isDirectory(target: string): boolean {
+  try {
+    return statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Commands that act beyond this machine's project or with more rights than the agent was given. */
-const RISKY_COMMAND =
-  /(^|[\s;&|(])(sudo|su|doas|git\s+push|npm\s+publish|pnpm\s+publish|yarn\s+publish|security|launchctl|crontab|chmod\s+-R\s+777|curl[^|]*\|\s*(sh|bash|zsh)|wget[^|]*\|\s*(sh|bash|zsh))\b/;
+const RISKY_SOURCE =
+  /(^|[\s;&|(])(sudo|su|doas|git\s+push|npm\s+publish|pnpm\s+publish|yarn\s+publish|security|launchctl|crontab|chmod\s+-R\s+777|curl[^|]*\|\s*(sh|bash|zsh)|wget[^|]*\|\s*(sh|bash|zsh))\b/
+    .source;
+const RISKY_COMMAND = new RegExp(RISKY_SOURCE);
+const RISKY_COMMANDS = new RegExp(RISKY_SOURCE, "g");
+/** Publishing the person may allow once per conversation, whatever the remote or package; escalations are asked each time. */
+const REPEATABLE_COMMAND = /^(?:git push|(?:npm|pnpm|yarn) publish)$/;
 
 /** Places commands may name without the person being asked: temporary files and installed programs. */
 const SAFE_OUTSIDE = [
@@ -210,7 +306,7 @@ function expandHome(value: string): string {
       : value;
 }
 
-function inside(target: string, root: string): boolean {
+export function inside(target: string, root: string): boolean {
   const relative = path.relative(root, target);
   return (
     relative === "" ||

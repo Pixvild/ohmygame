@@ -1218,6 +1218,8 @@ const zhCN: typeof en = {
     waiting_other: "还有 {{count}} 个等待中",
     allow: "允许",
     allowSession: "在本对话中允许",
+    allowSessionCommands: "在本对话中允许 {{commands}}",
+    allowSessionFolders: "在本对话中允许读取 {{folders}}",
     deny: "拒绝",
     readAccess: "读取：",
     writeAccess: "写入：",

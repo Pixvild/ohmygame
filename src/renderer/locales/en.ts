@@ -1242,6 +1242,8 @@ const en = {
     waiting_other: "{{count}} more waiting",
     allow: "Allow",
     allowSession: "Allow for this conversation",
+    allowSessionCommands: "Allow {{commands}} for this conversation",
+    allowSessionFolders: "Allow reading {{folders}} for this conversation",
     deny: "Deny",
     readAccess: "Read:",
     writeAccess: "Write:",

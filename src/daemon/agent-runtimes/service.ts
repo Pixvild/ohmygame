@@ -404,6 +404,11 @@ export class AgentRuntimeService {
       bridge,
       policy: {
         ...request.policy,
+        // Claude Code runs every command in its sandbox. Codex asks only for
+        // what would leave its sandbox, so its requests are judged strictly.
+        sandboxedCommands:
+          request.runtime === "claude-code-cli" &&
+          commandSandbox(request.runtime) === "os",
         readablePaths: [
           stagedSkillsRoot(
             request.runtime,

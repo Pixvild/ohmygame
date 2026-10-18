@@ -114,6 +114,11 @@ export interface ApprovalRequestDetails {
   reason?: string;
   /** Whether "allow for this conversation" can be offered. */
   canAllowSession: boolean;
+  /**
+   * What "allow for this conversation" covers when that is broader than this
+   * exact request: every use of these commands, or reads in these folders.
+   */
+  sessionScope?: { commands?: string[]; readFolders?: string[] };
 }
 
 export interface AnswerApprovalRequest {
