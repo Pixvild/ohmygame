@@ -4,7 +4,10 @@ import type {
   SessionEntry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentContextUsage } from "../../shared/contracts.js";
+import type {
+  AgentContextUsage,
+  AgentUsageLimit,
+} from "../../shared/contracts.js";
 import type {
   AgentRuntimeId,
   ApprovalDecision,
@@ -69,7 +72,7 @@ export interface NativeUsage {
  * arguments, then started and finished by its call id.
  */
 export interface NativeTurnSink {
-  limits?(limits: NonNullable<AgentContextUsage["limits"]>): void;
+  limits?(limits: AgentUsageLimit[]): void;
   text(key: string, delta: string): void;
   textDone(key: string, text?: string): void;
   thinking(key: string, delta: string): void;
@@ -140,6 +143,10 @@ export interface NativeSessionOptions {
   toolNames: readonly string[];
   setActiveTools?(names: readonly string[]): void;
   skills?: () => SkillCatalogItem[];
+  /** The account's quota windows, whenever the CLI reports them. */
+  onLimits?(limits: AgentUsageLimit[]): void;
+  /** The account's quota windows as last reported by any conversation, or a check of the CLI. */
+  accountLimits?(): AgentUsageLimit[] | undefined;
   dispose?(): void | Promise<void>;
   /** Time allowed for a native interrupt before its process is stopped. */
   cancellationTimeoutMs?: number;
@@ -328,7 +335,16 @@ export class NativeCodingSession implements CodingSession {
   }
 
   getContextUsage(): AgentContextUsage | undefined {
-    return this.#usage;
+    // Quota windows belong to the account, not this conversation.
+    const limits = this.options.accountLimits?.();
+    if (!limits?.length) return this.#usage;
+    return {
+      tokens: null,
+      contextWindow: 0,
+      percent: null,
+      ...this.#usage,
+      limits,
+    };
   }
 
   async navigateTree(
@@ -419,14 +435,8 @@ export class NativeCodingSession implements CodingSession {
     };
   }
 
-  reportLimits(limits: NonNullable<AgentContextUsage["limits"]>): void {
-    this.#usage = {
-      tokens: null,
-      contextWindow: 0,
-      percent: null,
-      ...this.#usage,
-      limits,
-    };
+  reportLimits(limits: AgentUsageLimit[]): void {
+    this.options.onLimits?.(limits);
   }
 
   recordNativeSession(sessionId: string): void {

@@ -1738,6 +1738,40 @@ body {
 }
 
 /* Agents: OhMyGame's own agent and the coding agent CLIs */
+.agent-usage-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-usage-inline > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-usage-inline small {
+  font-size: 10px;
+}
+
+.agent-usage-inline .agent-usage-meter {
+  width: 56px;
+}
+
+.agent-usage-meter {
+  display: block;
+}
+
+.agent-usage-meter.is-warning > span {
+  background: var(--warning);
+}
+
+.agent-usage-meter.is-danger > span {
+  background: var(--danger);
+}
+
 .settings-agents-pointer {
   margin: 0;
   padding: 0 4px;
@@ -11819,15 +11853,6 @@ button {
   gap: 6px;
 }
 
-.composer-runtime-usage {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 4px 0;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
 .composer-context {
   display: inline-flex;
   max-width: 100%;
@@ -12013,6 +12038,16 @@ button {
   padding: 16px 10px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* The coding agent's quota under the slash commands, kept in view as they scroll. */
+.composer-context-menu-usage {
+  position: sticky;
+  bottom: -6px;
+  margin: 4px -6px -6px;
+  padding: 8px 16px 9px;
+  border-top: 1px solid var(--menu-border);
+  background: var(--menu-surface);
 }
 
 .composer-plan-mode,

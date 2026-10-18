@@ -10,7 +10,7 @@ import type {
   NativeTurnOutcome,
   NativeTurnSink,
 } from "./native-session.js";
-import { CodexAppServer } from "./codex-app-server.js";
+import { CodexAppServer, codexLimits } from "./codex-app-server.js";
 import {
   BridgeResults,
   number,
@@ -832,33 +832,4 @@ async function privateGitConfig(
     { mode: 0o600 },
   );
   return file;
-}
-
-/** The account's quota windows from a rate-limit read or update. */
-export function codexLimits(
-  value: unknown,
-): NonNullable<AgentContextUsage["limits"]> {
-  const data = record(value);
-  const buckets = record(data?.rateLimitsByLimitId) ?? {
-    codex: data?.rateLimits,
-  };
-  const limits: NonNullable<AgentContextUsage["limits"]> = [];
-  for (const [bucket, raw] of Object.entries(buckets)) {
-    const windows = record(raw);
-    for (const window of ["primary", "secondary"]) {
-      const item = record(windows?.[window]);
-      if (typeof item?.usedPercent !== "number") continue;
-      limits.push({
-        id: `${bucket}/${window}`,
-        usedPercent: Math.max(0, Math.min(100, item.usedPercent)),
-        ...(typeof item.windowDurationMins === "number"
-          ? { windowMinutes: item.windowDurationMins }
-          : {}),
-        ...(typeof item.resetsAt === "number"
-          ? { resetsAt: item.resetsAt }
-          : {}),
-      });
-    }
-  }
-  return limits;
 }

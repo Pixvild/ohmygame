@@ -108,3 +108,28 @@ require("node:readline").createInterface({input:process.stdin}).on("line", line 
   );
   expect(result.models.map((model) => model.id)).toEqual(["first", "second"]);
 });
+
+it("keeps the last reported usage limits across a restart", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ohmygame-limits-"));
+  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(root, "agent-runtimes"), { recursive: true });
+  const fiveHour = {
+    id: "claude/five_hour",
+    usedPercent: 13,
+    windowMinutes: 300,
+    resetsAt: 1792326600,
+  };
+  await writeFile(
+    path.join(root, "agent-runtimes", "limits.json"),
+    JSON.stringify({
+      "claude-code-cli": [fiveHour, { id: 3 }],
+      "unknown-cli": [fiveHour],
+    }),
+  );
+  const service = new AgentRuntimeService(root, () => undefined);
+  await service.load();
+  cleanup.push(() => service.close());
+  expect((await service.status("claude-code-cli")).limits).toEqual([fiveHour]);
+  expect((await service.status("codex-cli")).limits).toBeUndefined();
+});

@@ -296,6 +296,7 @@ export function Composer({
     onChange: changePrompt,
     onSelectionChange: setMentionCursor,
     contextPercent,
+    usageLimits: isAgentRuntimeId(model?.provider) ? runtimeUsage?.limits : undefined,
   });
 
   useEffect(() => {
@@ -311,7 +312,7 @@ export function Composer({
       if (!disposed) setRuntimeUsage(undefined);
     });
     return () => { disposed = true; };
-  }, [showCompactCommand, running, model?.provider, model?.id, conversationId]);
+  }, [showCompactCommand, running, model?.provider, model?.id, conversationId, contextMenu.open]);
 
   useEffect(() => {
     if (planMode === "planning") updateDraft({ planning: true });
@@ -413,10 +414,6 @@ export function Composer({
           sendLabel={running ? t("composer.queue") : t("composer.send")}
         />}
         content={<>
-          {isAgentRuntimeId(model?.provider) && (runtimeUsage?.percent != null || runtimeUsage?.limits?.length) ? <div className="composer-runtime-usage" role="status">
-            {runtimeUsage.percent != null ? <span>{t("composer.nativeContext", { percent: Math.round(runtimeUsage.percent) })}</span> : null}
-            {runtimeUsage.limits?.map((limit) => <span key={limit.id} title={limit.resetsAt ? t("composer.limitResets", { time: new Date(limit.resetsAt * 1000).toLocaleString() }) : undefined}>{t("composer.nativeLimit", { percent: Math.round(limit.usedPercent), minutes: limit.windowMinutes ?? "—" })}</span>)}
-          </div> : null}
           {contexts.length ? <div className="composer-contexts" aria-label={t("composer.contexts")}>
             {contexts.map((context) => <div className={`composer-context is-${context.kind}`} key={context.key} title={context.detail ?? context.label}>
               <PromptContextIcon kind={context.kind} />

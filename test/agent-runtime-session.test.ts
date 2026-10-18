@@ -15,6 +15,7 @@ import {
   type NativeTurnSink,
 } from "../src/daemon/agent-runtimes/native-session.js";
 import type {
+  AgentUsageLimit,
   ProjectState,
   RuntimeEvent,
   ThreadItem,
@@ -56,6 +57,7 @@ function setup(
   options: {
     snapshot?: () => Promise<string>;
     sessionManager?: SessionManager;
+    accountLimits?: () => AgentUsageLimit[];
   } = {},
 ) {
   const events = new RuntimeEventBus();
@@ -93,6 +95,9 @@ function setup(
         return driver;
       },
       ...(options.snapshot ? { snapshotBeforeMessage: options.snapshot } : {}),
+      ...(options.accountLimits
+        ? { accountLimits: options.accountLimits }
+        : {}),
       requestApproval: (details, toolCallId, signal) =>
         manager.askApproval(
           project.id,
@@ -498,6 +503,21 @@ describe("coding agent sessions", () => {
       tokens: 400,
       contextWindow: 1_000,
       percent: 40,
+    });
+  });
+
+  it("reports the account's latest quota before the conversation's first turn", async () => {
+    const limits = [
+      { id: "claude/five_hour", usedPercent: 18, windowMinutes: 300 },
+    ];
+    const { manager, project, conversation } = setup([], {
+      accountLimits: () => limits,
+    });
+    await expect(manager.contextUsage(project, conversation)).resolves.toEqual({
+      tokens: null,
+      contextWindow: 0,
+      percent: null,
+      limits,
     });
   });
 

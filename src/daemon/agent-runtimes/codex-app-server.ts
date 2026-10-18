@@ -1,4 +1,5 @@
 import { AgentProcess, processFailure } from "./process.js";
+import type { AgentUsageLimit } from "../../shared/contracts.js";
 import { record } from "./driver-context.js";
 
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -150,4 +151,31 @@ export class CodexAppServer {
       );
     else pending.resolve(message.result);
   }
+}
+
+/** The account's quota windows from a rate-limit read or update. */
+export function codexLimits(value: unknown): AgentUsageLimit[] {
+  const data = record(value);
+  const buckets = record(data?.rateLimitsByLimitId) ?? {
+    codex: data?.rateLimits,
+  };
+  const limits: AgentUsageLimit[] = [];
+  for (const [bucket, raw] of Object.entries(buckets)) {
+    const windows = record(raw);
+    for (const window of ["primary", "secondary"]) {
+      const item = record(windows?.[window]);
+      if (typeof item?.usedPercent !== "number") continue;
+      limits.push({
+        id: `${bucket}/${window}`,
+        usedPercent: Math.max(0, Math.min(100, item.usedPercent)),
+        ...(typeof item.windowDurationMins === "number"
+          ? { windowMinutes: item.windowDurationMins }
+          : {}),
+        ...(typeof item.resetsAt === "number"
+          ? { resetsAt: item.resetsAt }
+          : {}),
+      });
+    }
+  }
+  return limits;
 }
