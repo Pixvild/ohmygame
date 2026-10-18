@@ -88,6 +88,7 @@ const en = {
   settings: {
     nav: {
       providers: "Providers & Models",
+      agents: "Agents",
       account: "Account",
       appearance: "Appearance",
       webSearch: "Web Search",
@@ -1177,9 +1178,18 @@ const en = {
     refine: "No, and tell OhMyGame what to do differently",
     refinePlaceholder: "Tell OhMyGame what to do differently",
   },
+  agents: {
+    title: "Agents",
+    builtIn: "Built in",
+    ohmygameNoModels: "No models yet. Connect a provider in Providers & Models.",
+    manageModels: "Manage models",
+    default: "Default",
+    rescan: "Rescan",
+    providersPointer: "Claude Code, Codex and OpenCode are set up in Agents.",
+    open: "Open Agents",
+  },
   codingAgents: {
-    title: "Coding agents",
-    description: "Run conversations with a coding agent you already use. It signs in with its own account, and its models appear in the model picker.",
+    title: "Coding agent CLIs on this computer",
     checking: "Checking coding agents…",
     manage: "Manage {{name}}",
     setUp: "Set up {{name}}",

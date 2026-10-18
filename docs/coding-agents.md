@@ -10,8 +10,14 @@ accepted tradeoffs, and validation limits.
 
 ## Using one
 
-Providers & Models lists the coding agents under **Coding agents**. Each row
-shows whether the CLI was found, its version, and how its requests are billed.
+**Settings → Agents** lists who can work in a conversation. OhMyGame's own
+agent comes first: it uses the models set up in Providers & Models, and its row
+links there. The coding agent CLIs follow, under **Coding agent CLIs on this
+computer**; **Rescan** checks for them again. Each row shows whether the CLI
+was found and its version; the detail page shows its account and how its
+requests are billed. The agent whose model new conversations start with is
+marked **Default**. Providers & Models points to Agents when it is filtered to
+language models or searched for a coding agent.
 Agents are off by default. Enabling the switch offers their models in the conversation model picker; the
 detail page signs in, checks again, chooses the executable, and decides whether
 the person's own CLI configuration applies.

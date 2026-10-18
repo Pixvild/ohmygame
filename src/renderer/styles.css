@@ -1737,10 +1737,12 @@ body {
   margin-left: 84px;
 }
 
-/* Coding agents in Providers & Models */
-.coding-agents-group > .settings-detail-hint {
+/* Agents: OhMyGame's own agent and the coding agent CLIs */
+.settings-agents-pointer {
   margin: 0;
-  padding: 0 4px 8px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .coding-agent-option {
@@ -15206,6 +15208,10 @@ button {
 
 :root[data-appearance="light"] .settings-provider-mark {
   background: var(--surface-hover);
+}
+
+:root[data-appearance="light"] .settings-provider-mark.is-brand img {
+  filter: brightness(0) saturate(100%);
 }
 
 :root[data-appearance="light"] .settings-provider-mark.is-monochrome {

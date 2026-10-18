@@ -88,6 +88,7 @@ const zhCN: typeof en = {
   settings: {
     nav: {
       providers: "服务商与模型",
+      agents: "智能体",
       account: "账户",
       appearance: "外观",
       webSearch: "联网搜索",
@@ -1153,9 +1154,18 @@ const zhCN: typeof en = {
     refine: "否，告诉 OhMyGame 要怎么改",
     refinePlaceholder: "告诉 OhMyGame 要怎么改",
   },
+  agents: {
+    title: "智能体",
+    builtIn: "内置",
+    ohmygameNoModels: "还没有可用模型，请先在「服务商与模型」中连接服务商。",
+    manageModels: "管理模型",
+    default: "默认",
+    rescan: "重新检测",
+    providersPointer: "Claude Code、Codex 和 OpenCode 在「智能体」中设置。",
+    open: "前往智能体",
+  },
   codingAgents: {
-    title: "编程智能体",
-    description: "用你已经在用的编程智能体来进行对话。它使用自己的账号登录，它的模型会出现在模型选择器中。",
+    title: "本机编程 CLI",
     checking: "正在检查编程智能体…",
     manage: "管理 {{name}}",
     setUp: "设置 {{name}}",
