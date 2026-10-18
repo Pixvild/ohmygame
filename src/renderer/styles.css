@@ -1760,10 +1760,6 @@ body {
   width: 56px;
 }
 
-.agent-usage-meter {
-  display: block;
-}
-
 .agent-usage-meter.is-warning > span {
   background: var(--warning);
 }
@@ -11990,7 +11986,6 @@ button {
 .composer-context-menu {
   box-sizing: border-box;
   max-height: 400px;
-  overflow-x: hidden;
   overflow-y: auto;
   padding: 6px;
   border: 1px solid var(--menu-border);
@@ -12051,21 +12046,26 @@ button {
   background: var(--menu-surface);
 }
 
-/* Under the commands; the menu's own item text rules do not apply. A narrow
-   menu wraps whole windows rather than scrolling sideways. */
+/* One line under the commands; the menu's own item text rules do not apply.
+   In a narrow menu the bars shrink rather than the line wrapping. */
 .composer-context-menu-usage .agent-usage-inline {
-  gap: 4px 18px;
+  flex-wrap: nowrap;
+  gap: 18px;
+}
+
+.composer-context-menu-usage .agent-usage-inline > span {
+  min-width: 0;
 }
 
 .composer-context-menu-usage small {
   flex: none;
-  min-width: auto;
   color: var(--text-secondary);
   font-size: 12px;
 }
 
 .composer-context-menu-usage .agent-usage-meter {
-  width: 44px;
+  flex: 0 1 44px;
+  min-width: 12px;
 }
 
 .composer-plan-mode,
