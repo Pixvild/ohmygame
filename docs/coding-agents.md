@@ -196,7 +196,8 @@ granted. Package caches (npm, Bun, Yarn, XDG) live in the session's temporary
 folder, Git reads a private configuration holding only the person's name and
 email (`~/.gitconfig` may name credential helpers), commands run without a
 login shell, and the workspace's `.git` stays read-only. Credential roots, app
-data and other projects are denied. Unlisted
+data, other projects and the shared `/tmp` and `/var/tmp` folders (which
+Codex's minimal access would otherwise read) are denied. Unlisted
 paths require a scoped permission request. Unrestricted command/patch sandbox
 escapes are refused. Planning uses a read-only profile and cannot accept write
 grants. The native `request_permissions` tool is enabled explicitly, with grants

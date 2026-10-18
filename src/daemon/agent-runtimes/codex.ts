@@ -448,6 +448,12 @@ export class CodexDriver implements NativeDriver {
       // The app may own the workspace's parent; its narrower workspace grant wins.
       if (target !== workspace) filesystem[target] = "deny";
     }
+    // Codex's minimal access reads the shared temporary folders, where other
+    // programs and people leave files; commands get their own temporary
+    // folder instead. A workspace inside one keeps its narrower grant.
+    if (process.platform !== "win32")
+      for (const shared of ["/tmp", "/var/tmp"])
+        filesystem[canonicalPath(shared)] ??= "deny";
     const profile = (readOnly: boolean) => ({
       filesystem: {
         ...filesystem,

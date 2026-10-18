@@ -890,6 +890,51 @@ describe("Codex adapter", () => {
     ]);
   });
 
+  it("denies the shared temporary folders Codex's minimal access would read", async () => {
+    let config: Record<string, unknown> = {};
+    fakeCli((message, cli) => {
+      if (typeof message.method !== "string" || message.id === undefined)
+        return;
+      const params = message.params as Record<string, unknown>;
+      if (message.method === "thread/start")
+        config = params.config as Record<string, unknown>;
+      cli.send({
+        id: message.id,
+        result:
+          message.method === "thread/start"
+            ? {
+                thread: { id: "thread-1" },
+                activePermissionProfile: { id: params.permissions },
+              }
+            : {},
+      });
+      if (message.method === "turn/start")
+        setTimeout(() =>
+          cli.send({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          }),
+        );
+    });
+    const driver = new CodexDriver(await context());
+    cleanup.push(() => driver.dispose());
+    await driver.runTurn(
+      { text: "hi", images: [], readOnly: false },
+      recordingSink().sink,
+      new AbortController().signal,
+    );
+    const profiles = config.permissions as Record<
+      string,
+      { filesystem: Record<string, unknown> }
+    >;
+    expect(Object.keys(profiles)).toHaveLength(2);
+    for (const { filesystem } of Object.values(profiles))
+      for (const shared of ["/tmp", "/var/tmp"])
+        expect(filesystem[canonicalPath(shared)]).toBe(
+          process.platform === "win32" ? undefined : "deny",
+        );
+  });
+
   it("projects quota windows from initial limits and live updates", async () => {
     fakeCli((message, cli) => {
       if (typeof message.method !== "string" || message.id === undefined)

@@ -360,7 +360,9 @@ could not start inside Codex's sandbox. Profiles now grant the folders on the
 commands' PATH and their installations (never the home folder), the macOS
 command-line tools, session-private package caches, and a Git configuration
 with only the person's identity; the live acceptance runs `npm install` and Git
-for every runtime. Linux/Windows real CLI acceptance,
+for every runtime. Codex's minimal access also reads `/tmp` and `/var/tmp`,
+which a run with its workspace there showed; profiles deny both, and a
+workspace inside one keeps its narrower grant. Linux/Windows real CLI acceptance,
 Electron-specific native lifecycle acceptance, paid media/game-playtest flows,
 and universal OS confinement are not established by these checks. On Windows,
 discovery finds `.exe` programs only: Node cannot start the `.cmd` shims npm
