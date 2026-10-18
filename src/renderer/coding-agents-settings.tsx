@@ -276,7 +276,6 @@ export function CodingAgentDetail({
         <AgentMark id={agent.id} />
         <span className="settings-provider-heading">
           <h3>{agent.name}</h3>
-          <small>{t("codingAgents.detailDescription")}</small>
         </span>
         {agent.installed ? (
           <div className="settings-provider-enable-control">
@@ -363,6 +362,18 @@ export function CodingAgentDetail({
             </span>
           </div>
         ) : null}
+        {agent.installed ? (
+          <div className="settings-provider-setting-row">
+            <span className="settings-search-field-label">
+              {t("codingAgents.sandbox")}
+            </span>
+            <span className="settings-provider-setting-value">
+              {agent.commandSandbox === "os"
+                ? t("codingAgents.sandboxOs")
+                : t("codingAgents.sandboxNone")}
+            </span>
+          </div>
+        ) : null}
       </div>
       {login ? <LoginHint login={login} /> : null}
       {problems.length ? (
@@ -397,11 +408,7 @@ export function CodingAgentDetail({
             </span>
             <span>
               <strong>{t("codingAgents.useOwnConfig")}</strong>
-              <small>
-                {agent.isolateUserConfig
-                  ? t("codingAgents.isolatedHint", { name: agent.name })
-                  : t("codingAgents.ownConfigHint", { name: agent.name })}
-              </small>
+              <small>{t("codingAgents.useOwnConfigHint")}</small>
               {agent.partialIsolation ? (
                 <small>
                   {t("codingAgents.partialIsolation", { name: agent.name })}
@@ -409,19 +416,6 @@ export function CodingAgentDetail({
               ) : null}
             </span>
           </label>
-          <p className="settings-detail-hint">
-            {t("codingAgents.permissions")}
-          </p>
-          <p className="settings-detail-hint">
-            {agent.commandSandbox === "os"
-              ? t("codingAgents.sandboxOs", { name: agent.name })
-              : t("codingAgents.sandboxNone", { name: agent.name })}
-          </p>
-          {agent.id === "codex-cli" ? (
-            <p className="settings-detail-hint">
-              {t("codingAgents.codexReadBoundary")}
-            </p>
-          ) : null}
         </section>
       ) : null}
       <section className="settings-detail-section">
@@ -453,9 +447,6 @@ export function CodingAgentDetail({
             </button>
           </div>
         </form>
-        <p className="settings-detail-hint">
-          {t("codingAgents.executableHint")}
-        </p>
       </section>
       {error ? (
         <p className="settings-error" role="alert">

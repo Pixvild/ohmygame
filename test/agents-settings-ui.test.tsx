@@ -152,3 +152,20 @@ it("asks for a provider when OhMyGame has no models", async () => {
     "No models yet. Connect a provider in Providers & Models.",
   );
 });
+
+it("shows a CLI's command sandbox as one row on its detail page", async () => {
+  await act(async () =>
+    root.render(
+      <AgentsSettings
+        view={{ page: "agent", id: "claude-code-cli" }}
+        onViewChange={vi.fn()}
+        onOpenProviders={vi.fn()}
+      />,
+    ),
+  );
+  const rows = [...host.querySelectorAll(".settings-provider-setting-row")].map(
+    (item) => item.textContent,
+  );
+  expect(rows).toContain("Command sandboxOperating system");
+  expect(host.querySelectorAll(".settings-detail-hint")).toHaveLength(0);
+});
