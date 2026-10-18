@@ -81,6 +81,8 @@ async function detail() {
   return call<ConversationDetail>("GET", base);
 }
 const answered = new Set<string>();
+// The sandbox checks approve every request, as a person might, to test the OS boundary behind it.
+let approveAll = false;
 async function answerWaiting(turns: Turn[]) {
   for (const item of turns.flatMap((turn) => turn.items)) {
     if (
@@ -105,7 +107,7 @@ async function answerWaiting(turns: Turn[]) {
           path.resolve(workspace, file) !== workspace,
       ) &&
       !/(curl|wget|sudo|git push|npm|pnpm|yarn|\/Users\/|~\/)/.test(command);
-    const decision = scoped ? "allow" : "deny";
+    const decision = scoped || approveAll ? "allow" : "deny";
     evidence.push({ approval: request, decision });
     await call("POST", base + "/approvals/" + item.requestId, { decision });
   }
@@ -159,7 +161,8 @@ async function waitTurn(
   await call("POST", base + "/turns/" + turnId + "/cancel").catch(() => {});
   throw new Error("Timed out waiting for native turn");
 }
-async function prompt(text: string, mode?: "planning") {
+async function prompt(text: string, mode?: "planning", allowAll = false) {
+  approveAll = allowAll;
   const result = await call<{ turnId: string }>("POST", base + "/turns", {
     prompt: text,
     ...(mode ? { mode } : {}),
@@ -305,6 +308,21 @@ try {
       (item) => item.type === "approvalRequest" && item.decision === "deny",
     ),
     "External read did not ask",
+  );
+  // A game needs its toolchain: Node, a package install over the network and Git.
+  const toolchain = await prompt(
+    "Run exactly this shell command once and reply with its raw output only: node --version && npm init -y >/dev/null && npm install left-pad@1.3.0 --no-audit --no-fund && git --version",
+    undefined,
+    true,
+  );
+  assert(
+    (
+      await readFile(
+        path.join(workspace, "node_modules", "left-pad", "package.json"),
+        "utf8",
+      ).catch(() => "")
+    ).includes("left-pad"),
+    `The toolchain did not run: ${JSON.stringify(toolchain.items).slice(0, 600)}`,
   );
   const usage = await call("GET", base + "/context-usage");
   evidence.push({ usage });

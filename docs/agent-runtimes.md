@@ -354,7 +354,13 @@ one more fix: it reads `AGENTS.md` from every folder between the Git root and
 the workspace through the permission profile, so a workspace inside another
 repository failed to start a thread. `project_root_markers = []` makes the
 workspace its own root, so only the workspace's `AGENTS.md` is read, as for
-OhMyGame's own agent. Linux/Windows real CLI acceptance,
+OhMyGame's own agent. The same run showed that the profile's minimal system
+access left the person's toolchains unreadable, so Node, npm, Git and Python
+could not start inside Codex's sandbox. Profiles now grant the folders on the
+commands' PATH and their installations (never the home folder), the macOS
+command-line tools, session-private package caches, and a Git configuration
+with only the person's identity; the live acceptance runs `npm install` and Git
+for every runtime. Linux/Windows real CLI acceptance,
 Electron-specific native lifecycle acceptance, paid media/game-playtest flows,
 and universal OS confinement are not established by these checks. On Windows,
 discovery finds `.exe` programs only: Node cannot start the `.cmd` shims npm

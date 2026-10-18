@@ -1,6 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
 import type { ApprovalRequestDetails } from "../../shared/agent-runtimes.js";
 import type {
   NativeDriver,
@@ -20,6 +21,7 @@ import {
 import { stageSkills, stagedSkillsRoot } from "./skills.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 import { canonicalPath, judgeApproval } from "./policy.js";
+import { sandboxedPath, toolchainRoots } from "./environment.js";
 import type { AgentContextUsage } from "../../shared/contracts.js";
 
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -431,6 +433,9 @@ export class CodexDriver implements NativeDriver {
     await mkdir(temporary, { recursive: true, mode: 0o700 });
     filesystem[canonicalPath(temporary)] = "write";
     const workspace = canonicalPath(this.context.workspacePath);
+    // The person's toolchains run, as for OhMyGame's own agent; protected roots below stay denied.
+    for (const root of toolchainRoots(this.context.env.PATH ?? ""))
+      filesystem[canonicalPath(root)] ??= "read";
     // Private staged Skills remain readable; the rest of app data stays denied.
     if (this.context.skillDirectories.length)
       filesystem[
@@ -460,6 +465,10 @@ export class CodexDriver implements NativeDriver {
       default_permissions: this.#writeProfile,
       "features.request_permissions_tool": true,
       "features.shell_snapshot": false,
+      // A login shell would rebuild PATH with macOS's path_helper and read
+      // startup files the profile denies; the PATH given here already holds
+      // the login shell's folders.
+      allow_login_shell: false,
       // Only the workspace's own AGENTS.md counts, as for OhMyGame's own agent:
       // a parent folder's instructions describe whatever happens to contain
       // the game, and its files are outside the permission profile.
@@ -476,9 +485,17 @@ export class CodexDriver implements NativeDriver {
             ([name]) => name !== "CLAUDE_CODE_OAUTH_TOKEN",
           ),
         ),
+        PATH: sandboxedPath(this.context.env.PATH ?? ""),
         TMPDIR: temporary,
         TMP: temporary,
         TEMP: temporary,
+        // Package caches in the home folder are not writable here; keep them with the session.
+        XDG_CACHE_HOME: path.join(temporary, "cache"),
+        npm_config_cache: path.join(temporary, "npm-cache"),
+        BUN_INSTALL_CACHE_DIR: path.join(temporary, "bun-cache"),
+        YARN_CACHE_FOLDER: path.join(temporary, "yarn-cache"),
+        // ~/.gitconfig may hold credential helpers; commands get only the person's identity.
+        GIT_CONFIG_GLOBAL: await privateGitConfig(temporary, this.context.env),
       },
     };
     if (!this.context.isolateUserConfig) return config;
@@ -946,4 +963,35 @@ function codexError(message: unknown): string {
     /* plain text */
   }
   return message;
+}
+
+/**
+ * A Git configuration for sandboxed commands with the person's name and email
+ * and nothing else from ~/.gitconfig, which may name credential helpers and
+ * is outside the permission profile.
+ */
+async function privateGitConfig(
+  directory: string,
+  env: Record<string, string>,
+): Promise<string> {
+  const file = path.join(directory, "gitconfig");
+  const identity: string[] = [];
+  for (const key of ["user.name", "user.email"]) {
+    const value = await new Promise<string>((resolve) =>
+      execFile(
+        "git",
+        ["config", "--global", "--get", key],
+        { env, timeout: 3_000, encoding: "utf8" },
+        (error, stdout) => resolve(error ? "" : stdout.trim()),
+      ),
+    );
+    if (value && !/[\r\n"\\]/.test(value))
+      identity.push(`\t${key.slice(5)} = "${value}"`);
+  }
+  await writeFile(
+    file,
+    identity.length ? `[user]\n${identity.join("\n")}\n` : "",
+    { mode: 0o600 },
+  );
+  return file;
 }

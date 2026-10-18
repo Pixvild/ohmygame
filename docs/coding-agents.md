@@ -188,7 +188,15 @@ Codex requires named permission profiles and checks that its app server actually
 activated the requested profile before delivering a prompt. The legacy
 `workspaceWrite` policy is not a fallback: it permits reads outside the project.
 The profiles allow runtime files, this workspace and private temporary/Skill
-folders; credential roots, app data and other projects are denied. Unlisted
+folders, plus the person's toolchains: each folder on the commands' PATH and
+the installation it belongs to (an fnm or nvm Node, Homebrew, Bun) and, on
+macOS, the command-line developer tools, whose own programs come before the
+`/usr/bin` shims. The home folder itself and `~/.local` as a whole are never
+granted. Package caches (npm, Bun, Yarn, XDG) live in the session's temporary
+folder, Git reads a private configuration holding only the person's name and
+email (`~/.gitconfig` may name credential helpers), commands run without a
+login shell, and the workspace's `.git` stays read-only. Credential roots, app
+data and other projects are denied. Unlisted
 paths require a scoped permission request. Unrestricted command/patch sandbox
 escapes are refused. Planning uses a read-only profile and cannot accept write
 grants. The native `request_permissions` tool is enabled explicitly, with grants
@@ -299,7 +307,8 @@ app data and a disposable workspace, grants only scoped test requests, and saves
 evidence under ignored `.runtime/`. It checks writes, an OhMyGame tool call,
 continuation, daemon restart, compaction, editing a later message, checkpoint
 restore, denial of external dummy files, approval persistence, cancellation
-during an executing shell tool, loading a staged Skill without approval, and a
+during an executing shell tool, running the toolchain (Node, `npm install` over
+the network and Git), loading a staged Skill without approval, and a
 planning turn that records its plan with `update_plan` and changes no file.
 Claude Code refuses a standalone `sleep`, so its cancellation step runs an
 equivalent `node` command.

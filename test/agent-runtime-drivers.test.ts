@@ -1281,6 +1281,8 @@ describe("Codex adapter", () => {
         "mcp_servers.personal.enabled": false,
         notify: [],
         project_root_markers: [],
+        // Commands keep the given PATH rather than a login shell's.
+        allow_login_shell: false,
       },
     });
     expect(thread.dynamicTools).toEqual([

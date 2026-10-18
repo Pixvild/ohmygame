@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { agentEnvironment } from "../src/daemon/agent-runtimes/environment.js";
+import {
+  agentEnvironment,
+  sandboxedPath,
+  toolchainRoots,
+} from "../src/daemon/agent-runtimes/environment.js";
 import {
   parseVersion,
   compareVersions,
@@ -13,7 +17,15 @@ import {
   parseOpenCodeModels,
   resolveBinary,
 } from "../src/daemon/agent-runtimes/discovery.js";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { handoffSummary } from "../src/daemon/agent-runtimes/handoff.js";
 import {
   judgeApproval,
@@ -634,5 +646,66 @@ describe("coding agent discovery", () => {
     expect(env).not.toHaveProperty("OHMYGAME_DAEMON_TOKEN");
     // Another CLI's own folder is not this one's to see.
     expect(env).not.toHaveProperty("CODEX_HOME");
+  });
+});
+
+describe("sandboxed toolchains", () => {
+  it("grants the toolchains on PATH without the home folder or ~/.local", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ohmygame-toolchain-"));
+    try {
+      const home = path.join(root, "home");
+      const opt = path.join(root, "opt");
+      const tool = path.join(home, ".local", "share", "tool", "bin");
+      await mkdir(path.join(opt, "bin"), { recursive: true });
+      await mkdir(tool, { recursive: true });
+      await mkdir(path.join(home, ".local", "bin"), { recursive: true });
+      await writeFile(path.join(tool, "tool"), "");
+      await symlink(
+        path.join(tool, "tool"),
+        path.join(home, ".local", "bin", "tool"),
+      );
+      const real = toolchainRoots(
+        [
+          path.join(opt, "bin"),
+          path.join(home, ".local", "bin"),
+          home,
+          "relative/bin",
+        ].join(path.delimiter),
+        realpathSync(home),
+        "linux",
+      );
+      expect(real).toEqual(
+        expect.arrayContaining([
+          realpathSync(path.join(opt, "bin")),
+          realpathSync(opt),
+          realpathSync(path.join(home, ".local", "bin")),
+          realpathSync(path.join(home, ".local", "share", "tool")),
+        ]),
+      );
+      expect(real).not.toContain(realpathSync(home));
+      expect(real).not.toContain(realpathSync(path.join(home, ".local")));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("puts the macOS developer tools' own programs just before the /usr/bin shims", async () => {
+    const developer = await mkdtemp(path.join(os.tmpdir(), "ohmygame-clt-"));
+    try {
+      expect(
+        sandboxedPath(
+          ["/opt/homebrew/bin", "/usr/bin", "/bin"].join(path.delimiter),
+          "darwin",
+          developer,
+        ),
+      ).toBe(
+        ["/opt/homebrew/bin", developer, "/usr/bin", "/bin"].join(
+          path.delimiter,
+        ),
+      );
+      expect(sandboxedPath("/usr/bin", "linux", developer)).toBe("/usr/bin");
+    } finally {
+      await rm(developer, { recursive: true, force: true });
+    }
   });
 });
