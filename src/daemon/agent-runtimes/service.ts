@@ -44,7 +44,9 @@ import type { AgentPolicyContext } from "./policy.js";
 import { AgentRuntimeSettingsStore } from "./settings.js";
 import { stagedSkillsRoot } from "./skills.js";
 import { ClaudeCodeDriver } from "./claude-code.js";
-import { CodexAppServer, CodexDriver } from "./codex.js";
+import { CodexAppServer } from "./codex-app-server.js";
+import { CodexDriver } from "./codex.js";
+import { codexServerIdentity } from "./codex-server-pool.js";
 import { OpenCodeDriver } from "./opencode.js";
 
 const STATUS_TTL_MS = 60_000;
@@ -376,6 +378,16 @@ export class AgentRuntimeService {
       ...(pluginTool ? [pluginTool.tool] : []),
     ]);
     const env = await this.#environment(request.runtime, binary.path);
+    // Codex conversations with the same executable, environment and Skills share one app server.
+    const codexServer =
+      request.runtime === "codex-cli"
+        ? await codexServerIdentity(
+            this.#root,
+            binary.path,
+            env,
+            request.skillDirectories,
+          )
+        : undefined;
     const revoke = new Set<() => void>();
     const context = (
       resume: string | undefined,
@@ -392,8 +404,14 @@ export class AgentRuntimeService {
       bridge,
       policy: {
         ...request.policy,
-        readablePaths: [stagedSkillsRoot(request.runtime, folder.path)],
+        readablePaths: [
+          stagedSkillsRoot(
+            request.runtime,
+            codexServer?.directory ?? folder.path,
+          ),
+        ],
       },
+      ...(codexServer ? { codexServer } : {}),
       skillDirectories: request.skillDirectories,
       httpBridge: async (handlers) => {
         const registered = this.#registerBridge(bridge, handlers);

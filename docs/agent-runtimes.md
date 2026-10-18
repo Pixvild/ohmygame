@@ -169,7 +169,14 @@ of claiming steering parity across CLIs.
 
 A CLI idle for ten minutes is stopped and its replacement resumes the ready
 native session with the next message, so open conversations do not each keep
-a process. Check abort before spawning and again before delivery. Interrupt waits are
+a process. Codex conversations with the same executable, environment and
+staged Skills share one app server, routed by thread: thread configuration,
+permission profiles, dynamic tools and turns are per thread, and Skill roots
+are the one server-wide setting. A conversation that leaves interrupts its
+own turn and releases the server, which stops with the last. OpenCode keeps
+one server per conversation: it registers MCP servers for the whole instance,
+so a shared server would offer every conversation the others' OhMyGame tools,
+and its configuration is per process. Check abort before spawning and again before delivery. Interrupt waits are
 bounded and fall back to stopping the process group. A turn must settle on
 spawn failure, close, transport loss, timeout, and cancellation, including
 startup races. Ignore late callbacks/results after settlement.

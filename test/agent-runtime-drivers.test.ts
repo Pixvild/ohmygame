@@ -1,12 +1,12 @@
 import { defineTool, SessionManager } from "@earendil-works/pi-coding-agent";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import readline from "node:readline";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRequestDetails } from "../src/shared/agent-runtimes.js";
 import { ClaudeCodeDriver } from "../src/daemon/agent-runtimes/claude-code.js";
 import { CodexDriver } from "../src/daemon/agent-runtimes/codex.js";
@@ -955,6 +955,107 @@ describe("Codex adapter", () => {
         expect(filesystem[canonicalPath(shared)]).toBe(
           process.platform === "win32" ? undefined : "deny",
         );
+  });
+
+  it("shares one app server between conversations and keeps their threads apart", async () => {
+    let threads = 0;
+    const turns: string[] = [];
+    let toolAnswer: unknown;
+    const clis = fakeCli((message, cli) => {
+      if (message.id === 900 && "result" in message)
+        toolAnswer = message.result;
+      if (typeof message.method !== "string" || message.id === undefined)
+        return;
+      const params = message.params as Record<string, unknown>;
+      if (message.method === "thread/start") {
+        const id = `thread-${++threads}`;
+        return cli.send({
+          id: message.id,
+          result: {
+            thread: { id },
+            activePermissionProfile: { id: params.permissions },
+          },
+        });
+      }
+      if (message.method === "turn/start") {
+        turns.push(String(params.threadId));
+        return cli.send({
+          id: message.id,
+          result: { turn: { id: `turn-${String(params.threadId)}` } },
+        });
+      }
+      cli.send({ id: message.id, result: {} });
+    });
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "ohmygame-codex-shared-"),
+    );
+    const codexServer = { key: `test-${directory}`, directory };
+    const first = new CodexDriver(await context({ codexServer }));
+    // The second conversation has no tools: a call routed to it would fail.
+    const second = new CodexDriver(
+      await context({ codexServer, bridge: new ToolBridge([]) }),
+    );
+    const one = recordingSink();
+    const two = recordingSink();
+    const firstTurn = first.runTurn(
+      { text: "one", images: [], readOnly: false },
+      one.sink,
+      new AbortController().signal,
+    );
+    const secondTurn = second.runTurn(
+      { text: "two", images: [], readOnly: false },
+      two.sink,
+      new AbortController().signal,
+    );
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    expect(clis).toHaveLength(1);
+    const cli = clis[0]!;
+    // Threads are numbered in the order the conversations asked for them.
+    const firstThread = one.sessionId()!;
+    const secondThread = two.sessionId()!;
+    expect(new Set([firstThread, secondThread]).size).toBe(2);
+    // A tool call on the first thread runs with the first conversation's bridge.
+    cli.send({
+      id: 900,
+      method: "item/tool/call",
+      params: {
+        threadId: firstThread,
+        turnId: `turn-${firstThread}`,
+        callId: "call-1",
+        tool: "echo_tool",
+        arguments: { value: "first" },
+      },
+    });
+    await vi.waitFor(() => expect(toolAnswer).toBeDefined());
+    expect(toolAnswer).toEqual({
+      contentItems: [{ type: "inputText", text: "echo first" }],
+      success: true,
+    });
+    cli.send({
+      method: "turn/completed",
+      params: {
+        threadId: secondThread,
+        turn: { id: `turn-${secondThread}`, status: "completed" },
+      },
+    });
+    expect(await secondTurn).toEqual({ status: "completed" });
+    let firstSettled = false;
+    void firstTurn.then(() => (firstSettled = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(firstSettled).toBe(false);
+    cli.send({
+      method: "turn/completed",
+      params: {
+        threadId: firstThread,
+        turn: { id: `turn-${firstThread}`, status: "completed" },
+      },
+    });
+    expect(await firstTurn).toEqual({ status: "completed" });
+    await second.dispose();
+    expect(cli.exited).toBeFalsy();
+    await first.dispose();
+    expect(cli.exited).toBe(true);
+    await expect(stat(directory)).rejects.toThrow();
   });
 
   it("projects quota windows from initial limits and live updates", async () => {

@@ -38,6 +38,8 @@ export interface DriverContext {
   contextWindow?: number;
   /** The native session to continue, if the conversation has one. */
   resume?: string;
+  /** The pooled Codex app server this conversation shares with others of the same configuration. */
+  codexServer?: { key: string; directory: string };
 }
 
 export interface HttpBridgeHandlers {

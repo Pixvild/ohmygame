@@ -4,6 +4,7 @@
  * Uses isolated app data/workspace. Requires normal provider access and may consume quota.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -441,6 +442,24 @@ try {
     !skillTurn.items.some((item) => item.type === "approvalRequest"),
     "Loading a staged Skill asked for approval",
   );
+  if (runtime === "codex-cli") {
+    // Both conversations are open; Codex threads of one project share a server.
+    const servers = execFileSync("ps", ["-A", "-o", "ppid=,command="], {
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter(
+        (line) =>
+          line.trim().startsWith(`${process.pid} `) &&
+          line.includes("app-server"),
+      );
+    evidence.push({ codexAppServers: servers.length });
+    assert.equal(
+      servers.length,
+      1,
+      "Codex conversations did not share a server",
+    );
+  }
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(
     path.join(workspace, "src", "player.ts"),

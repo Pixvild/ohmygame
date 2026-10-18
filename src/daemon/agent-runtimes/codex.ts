@@ -10,7 +10,7 @@ import type {
   NativeTurnOutcome,
   NativeTurnSink,
 } from "./native-session.js";
-import { AgentProcess, processFailure } from "./process.js";
+import { CodexAppServer } from "./codex-app-server.js";
 import {
   BridgeResults,
   number,
@@ -18,162 +18,17 @@ import {
   textResult,
   type DriverContext,
 } from "./driver-context.js";
-import { stageSkills, stagedSkillsRoot } from "./skills.js";
+import {
+  acquireCodexServer,
+  type CodexServerLease,
+} from "./codex-server-pool.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 import { canonicalPath, judgeApproval } from "./policy.js";
 import { sandboxedPath, sessionCaches, toolchainRoots } from "./environment.js";
 import type { AgentContextUsage } from "../../shared/contracts.js";
 
-const REQUEST_TIMEOUT_MS = 60_000;
-export const CODEX_CLIENT = {
-  name: "ohmygame",
-  title: "OhMyGame",
-  version: "1",
-};
-
-/** A JSON-RPC connection to `codex app-server` over its stdio, one message per line each way. */
-export class CodexAppServer {
-  readonly process: AgentProcess;
-  #next = 1;
-  #pending = new Map<
-    number,
-    {
-      resolve: (value: unknown) => void;
-      reject: (cause: Error) => void;
-      timer: NodeJS.Timeout;
-    }
-  >();
-  #closed?: Error;
-
-  constructor(
-    binaryPath: string,
-    cwd: string,
-    env: Record<string, string>,
-    private readonly handlers: {
-      processDirectory?: string;
-      notification?: (method: string, params: Record<string, unknown>) => void;
-      request?: (
-        method: string,
-        params: Record<string, unknown>,
-      ) => Promise<unknown>;
-      exit?: (failure: string) => void;
-    } = {},
-  ) {
-    this.process = new AgentProcess({
-      binaryPath,
-      args: ["app-server"],
-      cwd,
-      env,
-      processDirectory: handlers.processDirectory,
-      onLine: (line) => this.#receive(line),
-      onExit: (code, signal, stderr) => {
-        this.#closed = new Error(processFailure("Codex", code, signal, stderr));
-        for (const pending of this.#pending.values()) {
-          clearTimeout(pending.timer);
-          pending.reject(this.#closed);
-        }
-        this.#pending.clear();
-        handlers.exit?.(this.#closed.message);
-      },
-    });
-  }
-
-  async initialize(): Promise<void> {
-    await this.request("initialize", {
-      clientInfo: CODEX_CLIENT,
-      capabilities: { experimentalApi: true },
-    });
-    this.notify("initialized");
-  }
-
-  request<T = Record<string, unknown>>(
-    method: string,
-    params: unknown,
-    timeoutMs = REQUEST_TIMEOUT_MS,
-  ): Promise<T> {
-    if (this.#closed) return Promise.reject(this.#closed);
-    const id = this.#next++;
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pending.delete(id);
-        reject(new Error(`Codex did not answer ${method}`));
-      }, timeoutMs);
-      this.#pending.set(id, {
-        resolve: resolve as (value: unknown) => void,
-        reject,
-        timer,
-      });
-      try {
-        this.process.write({ jsonrpc: "2.0", id, method, params });
-      } catch (cause) {
-        clearTimeout(timer);
-        this.#pending.delete(id);
-        reject(cause instanceof Error ? cause : new Error(String(cause)));
-      }
-    });
-  }
-
-  notify(method: string, params?: unknown): void {
-    this.process.write({
-      jsonrpc: "2.0",
-      method,
-      ...(params === undefined ? {} : { params }),
-    });
-  }
-
-  stop(): Promise<void> {
-    return this.process.stop();
-  }
-
-  #receive(line: string): void {
-    let message: Record<string, unknown>;
-    try {
-      message = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      return;
-    }
-    const id = message.id;
-    if (typeof message.method === "string") {
-      const params = record(message.params) ?? {};
-      if (id === undefined || id === null) {
-        this.handlers.notification?.(message.method, params);
-        return;
-      }
-      void (
-        this.handlers.request?.(message.method, params) ??
-        Promise.reject(new Error(`Unsupported request ${message.method}`))
-      ).then(
-        (result) => {
-          if (this.process.running)
-            this.process.write({ jsonrpc: "2.0", id, result });
-        },
-        (cause) => {
-          if (this.process.running)
-            this.process.write({
-              jsonrpc: "2.0",
-              id,
-              error: {
-                code: -32000,
-                message: cause instanceof Error ? cause.message : String(cause),
-              },
-            });
-        },
-      );
-      return;
-    }
-    if (typeof id !== "number") return;
-    const pending = this.#pending.get(id);
-    if (!pending) return;
-    this.#pending.delete(id);
-    clearTimeout(pending.timer);
-    const error = record(message.error);
-    if (error)
-      pending.reject(
-        new Error(String(error.message ?? "Codex request failed")),
-      );
-    else pending.resolve(message.result);
-  }
-}
+/** A turn on a shared server must stop on its own: the process outlives the conversation. */
+const INTERRUPT_TIMEOUT_MS = 5_000;
 
 interface CodexTurn {
   sink: NativeTurnSink;
@@ -195,7 +50,7 @@ export class CodexDriver implements NativeDriver {
   readonly #writeProfile = `ohmygame-${randomUUID()}`;
   readonly #readProfile = `${this.#writeProfile}-read`;
   #limits: NonNullable<AgentContextUsage["limits"]> = [];
-  #server?: CodexAppServer;
+  #lease?: CodexServerLease;
   #starting?: Promise<CodexAppServer>;
   #threadId?: string;
   #turn?: CodexTurn;
@@ -263,12 +118,13 @@ export class CodexDriver implements NativeDriver {
 
   async interrupt(): Promise<void> {
     const turn = this.#turn;
-    if (!turn?.turnId || !this.#server || !this.#threadId) return;
-    await this.#server
-      .request("turn/interrupt", {
-        threadId: this.#threadId,
-        turnId: turn.turnId,
-      })
+    if (!turn?.turnId || !this.#lease || !this.#threadId) return;
+    await this.#lease.server
+      .request(
+        "turn/interrupt",
+        { threadId: this.#threadId, turnId: turn.turnId },
+        INTERRUPT_TIMEOUT_MS,
+      )
       .catch(() => {});
   }
 
@@ -295,31 +151,45 @@ export class CodexDriver implements NativeDriver {
     if (outcome.status === "failed") throw new Error(outcome.error);
   }
 
+  /**
+   * Lets go of the shared server. Other conversations may still use it, so a
+   * turn of this thread is interrupted rather than ended with the process;
+   * the server stops with its last conversation.
+   */
   async dispose(): Promise<void> {
     this.#disposed = true;
+    await this.interrupt();
     const turn = this.#turn;
     this.#turn = undefined;
-    await this.#server?.stop();
+    const lease = this.#lease;
+    this.#lease = undefined;
+    await lease?.release();
     turn?.resolve({ status: "aborted" });
-    this.#server = undefined;
   }
 
   async #start(): Promise<CodexAppServer> {
     if (this.#disposed) throw new Error("The agent session was closed");
-    if (this.#server?.process.running) return this.#server;
+    if (this.#lease?.server.process.running) return this.#lease.server;
     return (this.#starting ??= (async () => {
       try {
-        const server = new CodexAppServer(
-          this.context.binaryPath,
-          this.context.workspacePath,
-          this.context.env,
+        const shared = this.context.codexServer;
+        const lease = await acquireCodexServer(
           {
+            // Without a shared identity the server is this session's alone.
+            key: shared?.key ?? `private-${this.#writeProfile}`,
+            directory: shared?.directory ?? this.context.privateDirectory,
+            shared: Boolean(shared),
+            binaryPath: this.context.binaryPath,
+            env: this.context.env,
             processDirectory: this.context.processDirectory,
+            skillDirectories: this.context.skillDirectories,
+          },
+          {
             notification: (method, params) =>
               this.#notification(method, params),
             request: (method, params) => this.#request(method, params),
             exit: (failure) => {
-              if (this.#server === server) this.#server = undefined;
+              this.#lease = undefined;
               const turn = this.#turn;
               this.#turn = undefined;
               turn?.resolve(
@@ -329,26 +199,15 @@ export class CodexDriver implements NativeDriver {
               );
             },
           },
+          codexLimits,
         );
-        this.#server = server;
-        await server.initialize();
-        if (this.#disposed) throw new Error("The agent session was closed");
-        await server
-          .request("account/rateLimits/read", {}, 5_000)
-          .then((value) => this.#readLimits(value))
-          .catch(() => {});
-        if (this.context.skillDirectories.length) {
-          const root = stagedSkillsRoot(
-            "codex-cli",
-            this.context.privateDirectory,
-          );
-          if ((await stageSkills(this.context.skillDirectories, root)).length) {
-            await server
-              .request("skills/extraRoots/set", { extraRoots: [root] })
-              .catch(() => {});
-          }
+        if (this.#disposed) {
+          await lease.release();
+          throw new Error("The agent session was closed");
         }
-        return server;
+        this.#lease = lease;
+        this.#limits = lease.limits;
+        return lease.server;
       } finally {
         this.#starting = undefined;
       }
@@ -391,6 +250,7 @@ export class CodexDriver implements NativeDriver {
         this.#requireProfile(resumed);
         const id = resumed.thread?.id ?? this.#threadId;
         this.#threadId = id;
+        this.#lease?.bind(id);
         sink.nativeSession(id);
         return id;
       } catch (cause) {
@@ -411,6 +271,7 @@ export class CodexDriver implements NativeDriver {
     const id = started.thread?.id;
     if (!id) throw new Error("Codex did not start a thread");
     this.#threadId = id;
+    this.#lease?.bind(id);
     sink.nativeSession(id);
     return id;
   }
@@ -437,12 +298,8 @@ export class CodexDriver implements NativeDriver {
     for (const root of toolchainRoots(this.context.env.PATH ?? ""))
       filesystem[canonicalPath(root)] ??= "read";
     // Private staged Skills remain readable; the rest of app data stays denied.
-    if (this.context.skillDirectories.length)
-      filesystem[
-        canonicalPath(
-          stagedSkillsRoot("codex-cli", this.context.privateDirectory),
-        )
-      ] = "read";
+    if (this.#lease?.skillsRoot)
+      filesystem[canonicalPath(this.#lease.skillsRoot)] = "read";
     for (const protectedPath of this.context.policy.neverTouch) {
       const target = canonicalPath(protectedPath);
       // The app may own the workspace's parent; its narrower workspace grant wins.
@@ -521,7 +378,7 @@ export class CodexDriver implements NativeDriver {
 
   #notification(method: string, params: Record<string, unknown>): void {
     if (method === "account/rateLimits/updated") {
-      this.#readLimits(params);
+      this.#limits = codexLimits(params);
       this.#turn?.sink.limits?.(this.#limits);
       return;
     }
@@ -607,32 +464,6 @@ export class CodexDriver implements NativeDriver {
       default:
         return;
     }
-  }
-
-  #readLimits(value: unknown): void {
-    const data = record(value);
-    const buckets = record(data?.rateLimitsByLimitId) ?? {
-      codex: data?.rateLimits,
-    };
-    const limits: NonNullable<AgentContextUsage["limits"]> = [];
-    for (const [bucket, raw] of Object.entries(buckets)) {
-      const windows = record(raw);
-      for (const window of ["primary", "secondary"]) {
-        const item = record(windows?.[window]);
-        if (typeof item?.usedPercent !== "number") continue;
-        limits.push({
-          id: `${bucket}/${window}`,
-          usedPercent: Math.max(0, Math.min(100, item.usedPercent)),
-          ...(typeof item.windowDurationMins === "number"
-            ? { windowMinutes: item.windowDurationMins }
-            : {}),
-          ...(typeof item.resetsAt === "number"
-            ? { resetsAt: item.resetsAt }
-            : {}),
-        });
-      }
-    }
-    this.#limits = limits;
   }
 
   #itemStarted(sink: NativeTurnSink, item: Record<string, unknown>): void {
@@ -996,4 +827,33 @@ async function privateGitConfig(
     { mode: 0o600 },
   );
   return file;
+}
+
+/** The account's quota windows from a rate-limit read or update. */
+export function codexLimits(
+  value: unknown,
+): NonNullable<AgentContextUsage["limits"]> {
+  const data = record(value);
+  const buckets = record(data?.rateLimitsByLimitId) ?? {
+    codex: data?.rateLimits,
+  };
+  const limits: NonNullable<AgentContextUsage["limits"]> = [];
+  for (const [bucket, raw] of Object.entries(buckets)) {
+    const windows = record(raw);
+    for (const window of ["primary", "secondary"]) {
+      const item = record(windows?.[window]);
+      if (typeof item?.usedPercent !== "number") continue;
+      limits.push({
+        id: `${bucket}/${window}`,
+        usedPercent: Math.max(0, Math.min(100, item.usedPercent)),
+        ...(typeof item.windowDurationMins === "number"
+          ? { windowMinutes: item.windowDurationMins }
+          : {}),
+        ...(typeof item.resetsAt === "number"
+          ? { resetsAt: item.resetsAt }
+          : {}),
+      });
+    }
+  }
+  return limits;
 }
