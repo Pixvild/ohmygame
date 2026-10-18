@@ -293,8 +293,10 @@ release. Claude discovery accepts catalogs from either `initialize` or
 Being signed in and seeing a model does not guarantee account entitlement.
 
 The direct adapters preserve the installed executable and shared host services.
-Adopting an SDK is useful when it removes transport maintenance while retaining
-hooks, MCP, resume and cancellation; it does not require replacing orchestration.
+The Claude Agent SDK was evaluated and not adopted: it bundles its own Claude
+Code binary (about 268 MB per platform) and each release targets one CLI
+release, while OhMyGame drives the CLI the person installed. See
+[agent-runtimes.md](agent-runtimes.md#runtime-transports-and-compatibility).
 Claude's direct control protocol and Codex's experimental dynamic tools need
 compatibility tests when their CLIs change. A generic Basic CLI adapter is not
 implemented; each new CLI needs discovery, a driver, and acceptance tests.

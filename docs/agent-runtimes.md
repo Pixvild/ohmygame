@@ -191,9 +191,13 @@ group; it is not an OS-wide process supervisor or resource scheduler.
 
 These are tested capability floors, not certification of all later releases.
 Check required capabilities and refuse unsafe fallbacks. Direct protocols keep
-the installed executable and avoid introducing SDK dependencies now. Prefer an
-SDK later if it removes maintenance while preserving hooks, permissions, MCP,
-resume, and cancellation; no separate SDK architecture is needed.
+the installed executable. The Claude Agent SDK was evaluated (0.3.302) and not
+adopted: its platform package bundles a full Claude Code binary of about
+268 MB per platform, it adds three peer dependencies, and each SDK release is
+built for one CLI release, while OhMyGame drives whichever supported CLI the
+person installed. Reconsider when the SDK can drive an installed CLI across a
+version range without its bundled binary; a driver's transport can change
+without changing orchestration or persistence.
 
 Claude's permission controls use both `PreToolUse` and `can_use_tool`; validate
 control callbacks, planning restrictions, and allowed MCP calls. Planning runs in
