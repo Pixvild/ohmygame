@@ -43,6 +43,10 @@ import { isTextEntry } from "./editor-canvas.js";
 import { t } from "./i18n.js";
 import { PlaytestControls, type PlaytestAction, type PlaytestStart } from "./playable-playtest.js";
 import { VideoTimeline, type TimelineMedia } from "./playable-video-timeline.js";
+import { playableBackdropDetails, type PlayableBackdropDetails } from "../shared/playable-backdrop.js";
+import type { PlayableVideoClip } from "../shared/playable-video-clip.js";
+import { PlayableVideoTrimDialog } from "./playable-video-trim-dialog.js";
+import { readPlayableVideoTrimSource, type PlayableVideoTrimSource } from "./playable-video-trim-source.js";
 
 const ASSET_UPLOAD_ACCEPT = ".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm";
 const TOAST_LIMIT = 3;
@@ -107,6 +111,7 @@ export function PlayableNodeWorkbench({
   onAddAsset,
   onSetBackdrop,
   onRemoveBackdrop,
+  onWriteVideoClip,
   backdrop,
   onPlayFromHere,
   onPlaytestAction,
@@ -143,6 +148,7 @@ export function PlayableNodeWorkbench({
   onRemoveBackdrop?: () => Promise<boolean>;
   /** Whether the Scene's background shows anything yet; unset when the editor cannot set it. */
   backdrop?: "missing" | "set";
+  onWriteVideoClip?: (expected: PlayableBackdropDetails, source: string, clip?: PlayableVideoClip) => Promise<void>;
   /** Opens a Playtest that starts at this Scene. */
   onPlayFromHere?: (start: PlaytestStart) => void;
   onPlaytestAction?: (action: PlaytestAction) => void;
@@ -162,6 +168,8 @@ export function PlayableNodeWorkbench({
   const [media, setMedia] = useState<PlayableMediaAttachment[]>([]);
   const [video, setVideo] = useState<TimelineMedia>();
   const [moment, setMoment] = useState<PlayableMoment>();
+  const [trimming, setTrimming] = useState<{ details: PlayableBackdropDetails; source: string; blob: Blob }>();
+  const [webTrimSource, setWebTrimSource] = useState<{ definition: NodePlayerDefinition; nodeId: string; value: PlayableVideoTrimSource }>();
   const mediaControl = useRef<((command: PlayableMediaCommand) => void) | null>(null);
   const videoWaiters = useRef(new Set<(media: PlayableMediaState | undefined) => void>());
   const [storage] = useState(createMemoryStorage);
@@ -181,7 +189,23 @@ export function PlayableNodeWorkbench({
     setStrokes([]);
     setMedia([]);
     setMoment(undefined);
+    setTrimming(undefined);
   }, [node.id]);
+
+  // Web previews load their files themselves. Only fetch this Scene's video
+  // for the trim dialog; do not force all project assets into the preview.
+  useEffect(() => {
+    let disposed = false;
+    setWebTrimSource(undefined);
+    const definition = runtime.definition;
+    if (!runtime.page || !definition || !onWriteVideoClip) return;
+    void readPlayableVideoTrimSource(projectId, node, graph).then((value) => {
+      if (!disposed && value) setWebTrimSource({ definition, nodeId: node.id, value });
+    }).catch(() => {
+      // Missing/invalid media must not prevent the Scene's normal preview.
+    });
+    return () => { disposed = true; };
+  }, [projectId, node.id, node.source.html, graph.assets, revision, runtime.page, runtime.definition, Boolean(onWriteVideoClip)]);
 
   // Esc puts the pointer back to playing. The preview frame reports its own Esc.
   useEffect(() => {
@@ -340,6 +364,11 @@ export function PlayableNodeWorkbench({
   const canSetBackdrop = Boolean(backdrop && onSetBackdrop);
   const canRemoveBackdrop = Boolean(backdrop === "set" && onRemoveBackdrop);
   const chooser = useMediaChooser((asset, target) => void addMedia(asset, target), (text) => showToast({ tone: "error", text }));
+  let videoBackground: PlayableBackdropDetails | undefined;
+  try { videoBackground = playableBackdropDetails(runtime.definition?.compiled.nodes[node.id]?.html ?? ""); } catch { /* Compiler reports invalid ranges. */ }
+  const webTrim = webTrimSource && webTrimSource.definition === runtime.definition && webTrimSource.nodeId === node.id ? webTrimSource.value : undefined;
+  if (runtime.page) videoBackground = webTrim?.details;
+  const trimBlob = runtime.page ? webTrim?.blob : videoBackground?.type === "video" ? runtime.assets?.[videoBackground.assetId] : undefined;
 
   // In the header, where the canvas has Playtest.
   const actions = <div className="story-node-editor-actions">
@@ -373,6 +402,10 @@ export function PlayableNodeWorkbench({
           canRemoveBackdrop={canRemoveBackdrop}
           onChoose={chooser.choose}
           onRemoveBackdrop={() => void removeBackdrop()}
+          {...(trimBlob && videoBackground && onWriteVideoClip ? { onTrim: () => {
+            controlVideo({ action: "pause" });
+            setTrimming({ details: videoBackground!, source: webTrim?.source ?? JSON.stringify(graph.assets[videoBackground!.assetId]), blob: trimBlob });
+          } } : {})}
         />}
       />
       <PreviewToasts
@@ -419,6 +452,10 @@ export function PlayableNodeWorkbench({
       <WorkbenchBreadcrumb label={node.title} onClose={onClose} onRename={onRename} />
       {actions}
     </header>
+    {trimming && onWriteVideoClip ? <PlayableVideoTrimDialog blob={trimming.blob} clip={trimming.details.clip} onClose={() => setTrimming(undefined)} onApply={async (clip) => {
+      await onWriteVideoClip(trimming.details, trimming.source, clip);
+      setMoment(undefined);
+    }} /> : null}
     <div className="story-node-workbench playable-node-workbench">
       <div className="story-node-workbench-stage">
         <div className="story-node-workbench-preview">{previewPane}</div>
@@ -584,13 +621,14 @@ function useMediaChooser(onAsset: (asset: PlayableAssetRequest, target: MediaTar
 }
 
 /** The toolbar's Media action: as the Scene's background, or into the chat, or taking the background off. */
-function MediaMenu({ disabled, uploading, canSetBackdrop, canRemoveBackdrop, onChoose, onRemoveBackdrop }: {
+function MediaMenu({ disabled, uploading, canSetBackdrop, canRemoveBackdrop, onChoose, onRemoveBackdrop, onTrim }: {
   disabled: boolean;
   uploading: boolean;
   canSetBackdrop: boolean;
   canRemoveBackdrop: boolean;
   onChoose: (to: MediaTarget) => void;
   onRemoveBackdrop: () => void;
+  onTrim?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
@@ -604,6 +642,7 @@ function MediaMenu({ disabled, uploading, canSetBackdrop, canRemoveBackdrop, onC
     </button>
     {open ? <div ref={menu} className="playable-preview-popover is-media" role="menu" aria-label={t("sceneWorkbench.media")}>
       <button type="button" role="menuitem" disabled={!canSetBackdrop} title={canSetBackdrop ? t("sceneWorkbench.showBehind") : t("sceneWorkbench.noBackdrop")} onClick={choose("backdrop")}><Image size={13} /><span>{t("sceneWorkbench.asBackground")}</span></button>
+      {onTrim ? <button type="button" role="menuitem" onClick={() => { setOpen(false); onTrim(); }}><Play size={13} /><span>{t("sceneWorkbench.trim.action")}</span></button> : null}
       <button type="button" role="menuitem" onClick={choose("chat")}><MessageSquarePlus size={13} /><span>{t("sceneWorkbench.addToChat")}</span></button>
       {canRemoveBackdrop ? <button type="button" role="menuitem" title={t("sceneWorkbench.takeOff")} onClick={() => { setOpen(false); onRemoveBackdrop(); }}><ImageOff size={13} /><span>{t("sceneWorkbench.removeBackground")}</span></button> : null}
     </div> : null}

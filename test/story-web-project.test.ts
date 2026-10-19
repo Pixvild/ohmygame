@@ -57,6 +57,8 @@ describe("story runtime install", () => {
     // Saves follow this ID rather than the page's address.
     expect(await read(root, "index.html")).toMatch(/<meta name="ohmygame-story" content="[0-9a-f-]{36}" \/>/);
     const modules = await storyWebRuntimeModules();
+    expect(modules["story/shared/playable-video-clip.js"]).toContain("installPlayableVideoClips");
+    expect(modules["story/shared/playable-sandbox.js"]).toContain("./playable-video-clip.js");
     for (const [relative, content] of Object.entries(modules)) expect(await read(root, relative)).toBe(content);
     expect((await manifest(root)).files).toEqual(Object.fromEntries(Object.entries(modules).map(([relative, content]) => [relative, sha(content)])));
     // The runtime keeps its comments, so whoever changes it can read it.
@@ -168,8 +170,8 @@ describe("project guides", () => {
   it("records the guides that ship now, so changing them keeps earlier copies upgradable", () => {
     // When this fails because a guide changed, add the old hash to PROJECT_GUIDE_UPGRADES, then record the new one here.
     expect({ agents: sha(AGENT_INSTRUCTIONS), readme: sha(PROJECT_DOCUMENTATION) }).toEqual({
-      agents: "bad327183e1b955b2b1f24a5fc0dbd9b691f0b5fc006773fef2a86e8ced475d5",
-      readme: "547ed93bccfae4980075bfb76e8586971acb71de10ce4896def59d0a0ead4a6c",
+      agents: "8619c00f6a6ec09d6dfdaf99a2f84bc79fbd1214da156776701306fe9ba585ed",
+      readme: "0e99e5862388f7a8e3e3139f7d948f801b0fd843a8568a95e5635cffa4c0bbd4",
     });
     expect(PROJECT_GUIDE_UPGRADES["AGENTS.md"]).not.toContain(sha(AGENT_INSTRUCTIONS));
     expect(PROJECT_GUIDE_UPGRADES["README.md"]).not.toContain(sha(PROJECT_DOCUMENTATION));

@@ -45,10 +45,12 @@ export const PROJECT_GUIDE_UPGRADES: Record<"AGENTS.md" | "README.md", readonly 
   "AGENTS.md": [
     "2466f982c14b84abb66f1521664644b687eb21c10f27f72bc6eedd807d9171d1",
     "78bab6b86ae039e0b63d14da74e6f5f3fb3eca4ffbd2399de845a643d7ed699e",
+    "bad327183e1b955b2b1f24a5fc0dbd9b691f0b5fc006773fef2a86e8ced475d5",
   ],
   "README.md": [
     "311594a64abc80d5b1c8270e064375268f8bb3eff44e58f634c3d275208c65e2",
     "781d2b099d3acc5d87555668f8d935acbbbbccbddb39e052471367224275dc6f",
+    "547ed93bccfae4980075bfb76e8586971acb71de10ce4896def59d0a0ead4a6c",
   ],
 };
 
@@ -95,6 +97,14 @@ A project with \`index.html\` and \`story/\` is a web story: it plays as its own
 
 ## Words the editor uses
 
+To trim a background video, set \`data-clip-start\` and/or \`data-clip-end\` on its
+single \`data-media="backdrop"\` element with \`data-type="video"\`. Times are
+non-negative seconds in the original file; end must be after start. Missing
+start means zero, missing end means the natural end. Remove both when changing
+the background. The shared runtime enforces the range and emits the video's normal
+\`ended\` event at an early end; keep navigation in the Scene's code. Do not
+rewrite shared helpers or modify the original Asset for a trim.
+
 The user sees the editor, not this contract. Talk to them in its words: say "the \`trust\` Variable" and "the Exit is taken if trust is 3 or more", not keys, values, and code.
 
 | Editor | Contract |
@@ -125,6 +135,13 @@ This project is made of one graph plus ordinary browser source files. Every Node
 - \`.ohmygame/\` is editor cache, such as Node thumbnails. It is never published; leave it alone.
 
 ## Node API
+
+Background videos support optional \`data-clip-start\` / \`data-clip-end\`
+attributes on their \`data-media="backdrop"\` element. Values are non-negative
+seconds in the original video, end greater than start; omitted values mean
+zero and the natural end. Trimming is per Scene, does not modify the original
+Asset, and does not reduce its published size. The shared runtime plays this range
+and emits \`ended\` at its end. Remove the attributes to restore the full video.
 
 Each Node module exports \`mount(context)\`. The Runtime supplies:
 
@@ -299,6 +316,15 @@ async function writeCodebase(
     editorLayout: update.editorLayout,
   };
   const sources = validateSourceUpdates(codebase.graph, update.sources);
+  const preconditions = validateSourceUpdates(codebase.graph, update.sourcePreconditions);
+  for (const [relative, expected] of Object.entries(preconditions)) {
+    const file = await resolveWorkspaceMutationPath(workspacePath, relative);
+    const actual = await readFile(file, "utf8").catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code === "ENOENT") return undefined;
+      throw cause;
+    });
+    if (actual !== expected) throw new NodeCodebaseConflictError(`Source changed: ${relative}. Reload before saving.`);
+  }
   const sourceDeletions = await validateSourceDeletions(
     workspacePath,
     codebase.graph,

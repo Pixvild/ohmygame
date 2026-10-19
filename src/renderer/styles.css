@@ -16039,6 +16039,21 @@ button {
 
 /* Playable Node Workbench: the shared preview with tools, toasts, and
    popovers floating over it. */
+.playable-trim-backdrop { z-index: 1000; }
+.playable-trim-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.playable-trim-dialog > header { height: auto; padding: 18px 20px 0; align-items: start; gap: 16px; }
+.playable-trim-dialog header p { max-width: 58ch; margin: 8px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.playable-trim-dialog form { gap: 10px; padding: 16px 20px; }
+.playable-trim-dialog .video-trimmer > video { height: auto; max-height: min(36dvh, 340px); min-height: 120px; aspect-ratio: 16 / 9; }
+.playable-trim-dialog .video-trimmer-bar { padding: 0; }
+.playable-trim-times { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.playable-trim-times label { display: grid; gap: 6px; flex: 1; min-width: 120px; font-size: 12px; }
+.playable-trim-times input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); font: inherit; font-variant-numeric: tabular-nums; }
+.playable-trim-times p { flex-basis: 100%; margin: 4px 0; font-size: 12px; }
+.playable-trim-error { color: var(--danger, #e78080); font-size: 12px; }
+.playable-trim-dialog footer { display: flex; flex-wrap: wrap; gap: 8px; }
+.playable-trim-dialog footer > span { flex: 1; }
+
 .playable-workbench-stage > .playable-player {
   width: 100%;
   height: 100%;

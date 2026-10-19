@@ -70,7 +70,7 @@ async function startSession(
     }
     const saveStore = new ParentSaveStore(message.instanceId, message.save, message.slots);
     const audio = message.preview?.silent ? undefined : new DocumentPlayableAudio(document);
-    const host = new DocumentPlayableSurfaceHost(document, loadPlayableModule, audio && ((root) => audio.watchNode(root)));
+    const host = new DocumentPlayableSurfaceHost(document, loadPlayableModule, audio && ((root) => audio.watchNode(root)), undefined, (error) => post({ kind: "ohmygame:playable:diagnostic", instanceId: message.instanceId, error }));
     const { silent: _silent, ...preview } = message.preview ?? {};
     const runtime = new NodeRuntime({
       graph: message.definition.graph,

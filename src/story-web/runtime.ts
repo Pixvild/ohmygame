@@ -88,7 +88,8 @@ async function start(): Promise<void> {
   if (params.get("ohmygame-new-game") === "1") forget(key);
   if (params.get("ohmygame-forget-seen") === "1") forget(`${key}:seen`);
   const audio = params.get("ohmygame-silent") === "1" ? undefined : new DocumentPlayableAudio(document);
-  const host = new DocumentPlayableSurfaceHost(document, undefined, audio && ((root) => audio.watchNode(root)), { base });
+  const host = new DocumentPlayableSurfaceHost(document, undefined, audio && ((root) => audio.watchNode(root)), { base },
+    (message) => window.dispatchEvent(new CustomEvent(STORY_ERROR_EVENT, { detail: { message } })));
   fitStage(graph.viewport);
   const runtime = new NodeRuntime({
     graph,
