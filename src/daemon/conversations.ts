@@ -203,7 +203,8 @@ function summary(projectId: string, session: ConversationInfo): ConversationSumm
   };
 }
 
-function sessionDirectory(project: ProjectState): string {
+/** The folder that holds the session files of a project's conversations. */
+export function sessionDirectory(project: ProjectState): string {
   return path.join(project.storagePath ?? path.dirname(project.workspacePath), "session");
 }
 
