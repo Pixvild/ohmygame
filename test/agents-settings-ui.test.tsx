@@ -207,3 +207,64 @@ it("switches a CLI to full access and says what that means", async () => {
     ),
   ).toContain("Command sandboxOff, full access");
 });
+
+it("refreshes account limits when the model probe finishes after the first status read", async () => {
+  catalog = { models: [gpt], defaultReasoningLevel: "medium" };
+  let finish!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  api.listModels.mockImplementationOnce(async () => {
+    await waiting;
+    return catalog;
+  });
+  api.listAgentRuntimes
+    .mockResolvedValueOnce([agent("codex-cli", "Codex", true)])
+    .mockResolvedValueOnce([
+      {
+        ...agent("codex-cli", "Codex", true),
+        limits: [{ id: "codex/primary", usedPercent: 42, windowMinutes: 300 }],
+      },
+    ]);
+  await render();
+  expect(row("Codex")!.querySelector(".agent-usage-inline")).toBeNull();
+  await act(async () => finish());
+  expect(row("Codex")!.querySelector(".agent-usage-inline")?.textContent).toBe(
+    "5-hour42%",
+  );
+});
+
+it("shows each CLI's usage limits in its row and on its detail page", async () => {
+  const limits = [
+    { id: "claude/five_hour", usedPercent: 13, windowMinutes: 300 },
+    { id: "claude/seven_day", usedPercent: 33, windowMinutes: 10080 },
+  ];
+  api.listAgentRuntimes.mockResolvedValue([
+    { ...agent("claude-code-cli", "Claude Code", true), limits },
+    agent("codex-cli", "Codex", false),
+    agent("opencode-cli", "OpenCode", true),
+  ]);
+  catalog = { models: [gpt], defaultReasoningLevel: "medium" };
+  await render();
+  expect(
+    row("Claude Code")!.querySelector(".agent-usage-inline")?.textContent,
+  ).toBe("5-hour13%Weekly33%");
+  expect(row("Codex")!.querySelector(".agent-usage-inline")).toBeNull();
+  const detail = async (id: "claude-code-cli" | "codex-cli" | "opencode-cli") =>
+    act(async () =>
+      root.render(
+        <AgentsSettings
+          view={{ page: "agent", id }}
+          onViewChange={vi.fn()}
+          onOpenProviders={vi.fn()}
+        />,
+      ),
+    );
+  await detail("claude-code-cli");
+  expect(host.textContent).toContain("Usage limits");
+  expect(host.textContent).toContain("33% used");
+  await detail("codex-cli");
+  expect(host.textContent).toContain("Shown after a conversation with Codex.");
+  await detail("opencode-cli");
+  expect(host.textContent).not.toContain("Usage limits");
+});

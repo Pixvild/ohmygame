@@ -15,11 +15,20 @@ export type PreviewViewport = (typeof PREVIEW_VIEWPORTS)[number];
 export const PROJECT_FILE_OPEN_MODES = ["default", "reveal", "vscode", "zed", "text-editor"] as const;
 export type ProjectFileOpenMode = (typeof PROJECT_FILE_OPEN_MODES)[number];
 
+/** One quota window of a coding agent's account, such as its 5-hour or weekly limit. */
+export interface AgentUsageLimit {
+  id: string;
+  usedPercent: number;
+  windowMinutes?: number;
+  /** Unix seconds. */
+  resetsAt?: number;
+}
+
 export interface AgentContextUsage {
   tokens: number | null;
   contextWindow: number;
   percent: number | null;
-  limits?: Array<{ id: string; usedPercent: number; windowMinutes?: number; resetsAt?: number }>;
+  limits?: AgentUsageLimit[];
 }
 
 export interface ModelRef {

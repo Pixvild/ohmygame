@@ -1,3 +1,4 @@
+import type { AgentUsageLimit } from "./contracts.js";
 /**
  * Coding agents: native CLIs (Claude Code, Codex, OpenCode) that run a
  * conversation's agent loop in place of OhMyGame's built-in Pi agent. A
@@ -89,6 +90,8 @@ export interface AgentRuntimeStatus {
    */
   commandSandbox: "os" | "none";
   permissionMode: AgentPermissionMode;
+  /** The account's quota windows as last reported, by a conversation or a check of the CLI. */
+  limits?: AgentUsageLimit[];
   diagnostics: AgentRuntimeDiagnostic[];
   checkedAt?: string;
 }

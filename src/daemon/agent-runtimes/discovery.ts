@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentModel } from "../../shared/contracts.js";
+import type { AgentModel, AgentUsageLimit } from "../../shared/contracts.js";
 import type {
   AgentRuntimeAuthStatus,
   AgentRuntimeBilling,
@@ -29,7 +29,7 @@ import {
 } from "./environment.js";
 import { leaseAgentDirectory } from "./process-recovery.js";
 import { AgentProcess } from "./process.js";
-import { CodexAppServer } from "./codex-app-server.js";
+import { CodexAppServer, codexLimits } from "./codex-app-server.js";
 
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -268,7 +268,11 @@ export async function probeModels(
   env: Record<string, string>,
   privateDirectory: string,
   isolate: boolean,
-): Promise<{ models: AgentModel[]; account?: string }> {
+): Promise<{
+  models: AgentModel[];
+  account?: string;
+  limits?: AgentUsageLimit[];
+}> {
   const name = AGENT_RUNTIME_DEFINITIONS[id].name;
   const model = (
     modelId: string,
@@ -298,7 +302,7 @@ export async function probeModels(
     const server = new CodexAppServer(binaryPath, privateDirectory, env);
     try {
       await server.initialize();
-      const [list, account] = await Promise.all([
+      const [list, account, limits] = await Promise.all([
         codexModels(server),
         server
           .request<{ account?: { email?: unknown } | null }>(
@@ -306,6 +310,10 @@ export async function probeModels(
             {},
             PROBE_TIMEOUT_MS,
           )
+          .catch(() => undefined),
+        server
+          .request("account/rateLimits/read", {}, PROBE_TIMEOUT_MS)
+          .then(codexLimits)
           .catch(() => undefined),
       ]);
       const models = list
@@ -332,6 +340,7 @@ export async function probeModels(
         ...(typeof account?.account?.email === "string"
           ? { account: account.account.email }
           : {}),
+        ...(limits?.length ? { limits } : {}),
       };
     } finally {
       await server.stop();

@@ -361,6 +361,67 @@ describe("Claude Code adapter", () => {
     });
   });
 
+  it("reports Claude's subscription windows, keeping each until it is reported again", async () => {
+    fakeCli((message, cli) => {
+      if (message.type === "control_request")
+        cli.send({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: message.request_id,
+            response: {},
+          },
+        });
+      if (message.type !== "user") return;
+      cli.send({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed",
+          unifiedWindows: {
+            five_hour: { utilization: 0.13, resetsAt: 100 },
+            seven_day: { utilization: 0.33, resetsAt: 200 },
+          },
+        },
+      });
+      // An older CLI reports only the window that limits it now.
+      cli.send({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed_warning",
+          rateLimitType: "five_hour",
+          utilization: 1.2,
+          resetsAt: 100,
+        },
+      });
+      cli.send({ type: "result", subtype: "success" });
+    });
+    const driver = new ClaudeCodeDriver(await context());
+    cleanup.push(() => driver.dispose());
+    const recorded = recordingSink();
+    await driver.runTurn(
+      { text: "work", images: [], readOnly: false },
+      recorded.sink,
+      new AbortController().signal,
+    );
+    const reports = recorded.calls
+      .filter((call) => call.startsWith("limits:"))
+      .map((call) => JSON.parse(call.slice("limits:".length)));
+    expect(reports.at(-1)).toEqual([
+      {
+        id: "claude/five_hour",
+        usedPercent: 100,
+        windowMinutes: 300,
+        resetsAt: 100,
+      },
+      {
+        id: "claude/seven_day",
+        usedPercent: 33,
+        windowMinutes: 10080,
+        resetsAt: 200,
+      },
+    ]);
+  });
+
   it("runs without its sandbox or session caches in full access", async () => {
     const clis = fakeCli((message, cli) => {
       if (message.type === "control_request")

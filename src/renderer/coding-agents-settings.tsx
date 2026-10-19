@@ -14,6 +14,7 @@ import type {
   AgentRuntimeId,
   AgentRuntimeStatus,
 } from "../shared/agent-runtimes.js";
+import type { AgentModel } from "../shared/contracts.js";
 import {
   listAgentRuntimes,
   loginAgentRuntime,
@@ -25,6 +26,7 @@ import {
 import { PROVIDER_ICONS } from "./provider-icons.js";
 import { openModelAuthExternal } from "./use-model-provider-auth.js";
 import { SegmentedControl } from "./segmented-control.js";
+import { AgentUsageDetails, AgentUsageInline } from "./agent-usage.js";
 import { t } from "./i18n.js";
 
 const PERMISSION_OPTIONS: readonly {
@@ -40,9 +42,12 @@ const PERMISSION_OPTIONS: readonly {
  * its sign-in and a switch that offers its models in the model picker.
  */
 export function CodingAgentsGroup({
+  models,
   defaultAgent,
   onOpen,
 }: {
+  /** Model probes can also report fresh account limits; reload status when they finish. */
+  models?: readonly AgentModel[];
   /** The agent whose model new conversations start with, if it is a CLI. */
   defaultAgent?: AgentRuntimeId;
   onOpen: (id: AgentRuntimeId) => void;
@@ -71,7 +76,7 @@ export function CodingAgentsGroup({
       window.removeEventListener(MODELS_CHANGED_EVENT, load);
       window.removeEventListener("focus", load);
     };
-  }, []);
+  }, [models]);
   async function toggle(
     agent: AgentRuntimeStatus,
     enabled: boolean,
@@ -132,6 +137,9 @@ export function CodingAgentsGroup({
                   {agentSummary(agent)}
                 </span>
               </span>
+              {agent.limits?.length ? (
+                <AgentUsageInline limits={agent.limits} />
+              ) : null}
             </span>
             {agent.installed ? (
               <label
@@ -388,6 +396,19 @@ export function CodingAgentDetail({
         ) : null}
       </div>
       {login ? <LoginHint login={login} /> : null}
+      {agent.installed && agent.id !== "opencode-cli" ? (
+        // OpenCode bills each model provider; its account has no quota of its own.
+        <section className="settings-detail-section">
+          <h4>{t("agentUsage.title")}</h4>
+          {agent.limits?.length ? (
+            <AgentUsageDetails limits={agent.limits} />
+          ) : (
+            <p className="cloud-quota-note">
+              {t("agentUsage.empty", { name: agent.name })}
+            </p>
+          )}
+        </section>
+      ) : null}
       {problems.length ? (
         <section
           className="settings-detail-section"

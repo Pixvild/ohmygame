@@ -45,9 +45,19 @@ An explicitly chosen different model does not inherit an incompatible effort.
 Context usage uses the native context window when reported. Stored assistant
 messages record the latest model request's usage, as Pi's own messages do,
 rather than a turn's or thread's running total, so a conversation that moves
-back to Pi does not look larger than it is. Codex quota windows and reset times
-are displayed separately; missing measurements remain unknown rather than being
-inferred from token totals.
+back to Pi does not look larger than it is. Missing measurements remain unknown
+rather than being inferred from token totals.
+
+An account's quota windows show in **Settings → Agents**: a bar per window in
+each agent's row (5-hour, weekly), and the share used and reset time on its
+detail page. In a conversation they stay out of the composer and appear only
+under the commands when `/` is typed. A conversation shows the account's latest
+report, so it has them before its own first turn. Codex reports them whenever its
+models are checked and while it works; Claude Code reports them during a
+conversation (its `rate_limit_event`), so they appear after its first one.
+The latest report is kept in `agent-runtimes/limits.json`, and a window whose
+reset time has passed shows as empty. OpenCode bills each model provider and
+has no quota of its own.
 
 ![Codex conversation with a denied read, a cancelled turn, and Medium effort selected](assets/coding-agent-native-effort.png)
 

@@ -341,9 +341,11 @@ examples include `agent.*`, `item.*`, `plan.mode.changed`, and `prompt.*`.
 Do not introduce a parallel native SSE/event family or untyped metadata bags.
 Unknown tool output or measurements remain unknown rather than invented.
 
-Show native model/effort, approvals, compaction, and context/usage in the existing
-controls. Use native context windows when reported; keep Codex quota windows
-and reset times separate from context occupancy. Add UI text in both English
+Show native model/effort, approvals, compaction, and context usage in the existing
+controls. Use native context windows when reported. Account quota windows
+(Codex's rate limits, Claude Code's subscription windows) belong to the agent,
+not a conversation: they are cached per runtime, persisted, and shown in
+Settings → Agents rather than in the composer. Add UI text in both English
 and Chinese; prompts sent to agents remain English.
 
 ## Delivery status and release gate

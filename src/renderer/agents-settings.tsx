@@ -135,7 +135,11 @@ function AgentList({
             </button>
           </div>
         </section>
-        <CodingAgentsGroup defaultAgent={defaultAgent} onOpen={onOpen} />
+        <CodingAgentsGroup
+          models={catalog.models}
+          defaultAgent={defaultAgent}
+          onOpen={onOpen}
+        />
         {error ? (
           <p className="settings-error" role="alert">
             {error}

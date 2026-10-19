@@ -1,13 +1,14 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   SessionManager,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentModel } from "../../shared/contracts.js";
+import type { AgentModel, AgentUsageLimit } from "../../shared/contracts.js";
 import {
   AGENT_RUNTIME_IDS,
+  isAgentRuntimeId,
   type AgentRuntimeDiagnostic,
   type AgentRuntimeId,
   type AgentRuntimeLoginResponse,
@@ -116,6 +117,9 @@ export class AgentRuntimeService {
     { bridge: ToolBridge; handlers: HttpBridgeHandlers }
   >();
   #modelErrors = new Map<AgentRuntimeId, string>();
+  /** Each account's quota windows as last reported; they outlive the conversation that reported them. */
+  #limits = new Map<AgentRuntimeId, AgentUsageLimit[]>();
+  #limitWrites: Promise<void> = Promise.resolve();
   readonly #root: string;
 
   constructor(
@@ -131,6 +135,30 @@ export class AgentRuntimeService {
     await recoverAgentProcesses(path.join(this.#root, "processes"));
     await recoverAgentDirectories(path.join(this.#root, "sessions"));
     await recoverAgentDirectories(path.join(this.#root, "probes"));
+    try {
+      const stored = JSON.parse(
+        await readFile(path.join(this.#root, "limits.json"), "utf8"),
+      ) as Record<string, unknown>;
+      for (const [id, limits] of Object.entries(stored))
+        if (isAgentRuntimeId(id) && Array.isArray(limits))
+          this.#limits.set(id, limits.filter(isUsageLimit));
+    } catch {
+      // No limits reported yet, or a damaged file: they arrive with the next report.
+    }
+  }
+
+  /** Keeps the latest quota windows across restarts, since Claude Code reports them only during a conversation. */
+  #recordLimits(id: AgentRuntimeId, limits: AgentUsageLimit[]): void {
+    this.#limits.set(id, limits);
+    this.#limitWrites = this.#limitWrites
+      .then(async () => {
+        await mkdir(this.#root, { recursive: true, mode: 0o700 });
+        await writeFile(
+          path.join(this.#root, "limits.json"),
+          `${JSON.stringify(Object.fromEntries(this.#limits))}\n`,
+        );
+      })
+      .catch(() => {});
   }
 
   async statuses(recheck = false): Promise<AgentRuntimeStatus[]> {
@@ -145,6 +173,7 @@ export class AgentRuntimeService {
     const definition = AGENT_RUNTIME_DEFINITIONS[id];
     const settings = this.settings.get(id);
     const binary = await resolveBinary(id, settings.binaryPath, recheck);
+    const limits = this.#limits.get(id);
     const base = {
       id,
       name: definition.name,
@@ -152,6 +181,7 @@ export class AgentRuntimeService {
       isolateUserConfig: settings.isolateUserConfig,
       commandSandbox: commandSandbox(id),
       permissionMode: settings.permissionMode,
+      ...(limits?.length ? { limits } : {}),
       ...(id === "codex-cli" && settings.isolateUserConfig
         ? { partialIsolation: true }
         : {}),
@@ -473,6 +503,8 @@ export class AgentRuntimeService {
       requestApproval: request.requestApproval,
       toolNames: bridge.names,
       setActiveTools: (names) => bridge.setActive(names),
+      onLimits: (limits) => this.#recordLimits(request.runtime, limits),
+      accountLimits: () => this.#limits.get(request.runtime),
       ...(request.skills ? { skills: request.skills } : {}),
       dispose: async () => {
         for (const stop of revoke) stop();
@@ -679,7 +711,7 @@ export class AgentRuntimeService {
       });
       const folder = await privateFolder(path.join(this.#root, "probes"), id);
       try {
-        const { models, account } = await probeModels(
+        const { models, account, limits } = await probeModels(
           binary.path,
           id,
           env,
@@ -698,6 +730,7 @@ export class AgentRuntimeService {
             id,
             `${AGENT_RUNTIME_DEFINITIONS[id].name} returned an empty model catalog. Check sign-in and CLI protocol support.`,
           );
+        if (limits) this.#recordLimits(id, limits);
         const probe = this.#probes.get(id);
         if (account && probe && !probe.auth.account)
           probe.auth = { ...probe.auth, account };
@@ -718,4 +751,16 @@ export class AgentRuntimeService {
     this.#modelLoads.set(id, work);
     return work;
   }
+}
+
+function isUsageLimit(value: unknown): value is AgentUsageLimit {
+  const limit = value as AgentUsageLimit | null;
+  return (
+    !!limit &&
+    typeof limit.id === "string" &&
+    typeof limit.usedPercent === "number" &&
+    (limit.windowMinutes === undefined ||
+      typeof limit.windowMinutes === "number") &&
+    (limit.resetsAt === undefined || typeof limit.resetsAt === "number")
+  );
 }

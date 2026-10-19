@@ -5,6 +5,7 @@ import type {
   ApprovalDecision,
   ApprovalRequestDetails,
 } from "../../shared/agent-runtimes.js";
+import type { AgentUsageLimit } from "../../shared/contracts.js";
 import type {
   NativeDriver,
   NativeTurnInput,
@@ -65,6 +66,7 @@ export class ClaudeCodeDriver implements NativeDriver {
   #starting?: Promise<AgentProcess>;
   #turn?: PendingTurn;
   #sessionId?: string;
+  #limits: AgentUsageLimit[] = [];
   #permissionMode?: string;
   #controls = new Map<
     string,
@@ -392,6 +394,18 @@ export class ClaudeCodeDriver implements NativeDriver {
       case "result":
         this.#result(message);
         return;
+      case "rate_limit_event": {
+        // An event may carry one window; the others keep their last value.
+        const reported = claudeLimits(record(message.rate_limit_info));
+        if (!reported.length) return;
+        const ids = new Set(reported.map((limit) => limit.id));
+        this.#limits = [
+          ...this.#limits.filter((limit) => !ids.has(limit.id)),
+          ...reported,
+        ].sort((a, b) => (a.windowMinutes ?? 0) - (b.windowMinutes ?? 0));
+        turn?.sink.limits?.(this.#limits);
+        return;
+      }
       default:
         return;
     }
@@ -870,4 +884,42 @@ function claudeApproval(
 
 function stripAnsi(value: string): string {
   return value.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
+const CLAUDE_WINDOWS: Record<string, number> = {
+  five_hour: 300,
+  seven_day: 7 * 24 * 60,
+};
+
+/**
+ * Claude Code's subscription windows from a `rate_limit_event`: every window
+ * it tracks when it reports them, otherwise the one currently limiting.
+ * Utilization is a fraction of the window, and may pass 1.
+ */
+export function claudeLimits(
+  info: Record<string, unknown> | undefined,
+): AgentUsageLimit[] {
+  const limit = (
+    name: string,
+    utilization: unknown,
+    resetsAt: unknown,
+  ): AgentUsageLimit[] =>
+    typeof utilization === "number" && CLAUDE_WINDOWS[name]
+      ? [
+          {
+            id: `claude/${name}`,
+            usedPercent: Math.max(0, Math.min(100, utilization * 100)),
+            windowMinutes: CLAUDE_WINDOWS[name],
+            ...(typeof resetsAt === "number" ? { resetsAt } : {}),
+          },
+        ]
+      : [];
+  const windows = record(info?.unifiedWindows);
+  const tracked = Object.keys(CLAUDE_WINDOWS).flatMap((name) => {
+    const window = record(windows?.[name]);
+    return limit(name, window?.utilization, window?.resetsAt);
+  });
+  return tracked.length
+    ? tracked
+    : limit(String(info?.rateLimitType), info?.utilization, info?.resetsAt);
 }
