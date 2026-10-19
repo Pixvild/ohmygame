@@ -143,6 +143,24 @@ it("protects custom CLI credential roots", () => {
     else process.env.CODEX_HOME = before;
   }
 });
+it("asks before reading shared temporary files outside the workspace", async () => {
+  const root = await folder();
+  const workspace = path.join(root, "workspace");
+  await mkdir(workspace);
+  const policy = { workspacePath: workspace, neverTouch: [] };
+  for (const command of [
+    "cat ../notes.txt",
+    `cat ${path.join(root, "notes.txt")}`,
+    "cat /tmp/ohmygame-unrelated.txt",
+  ]) {
+    expect(
+      judgeApproval(
+        { kind: "command", tool: "Bash", command, canAllowSession: true },
+        policy,
+      ),
+    ).toBe("ask");
+  }
+});
 it("keeps runtimes opt-in and persists native defaults independently of Pi", async () => {
   const root = await folder();
   const store = new AgentRuntimeSettingsStore(root);
