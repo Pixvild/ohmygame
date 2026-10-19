@@ -24,7 +24,7 @@ import {
   type DriverContext,
 } from "./driver-context.js";
 import { stageSkills, stagedSkillsRoot } from "./skills.js";
-import { judgeApproval } from "./policy.js";
+import { judgeApproval, planningPolicy } from "./policy.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 
 const START_TIMEOUT_MS = 30_000;
@@ -782,7 +782,8 @@ export class OpenCodeDriver implements NativeDriver {
       else if (turn.readOnly && !OPENCODE_READ_PERMISSIONS.has(permission)) {
         decision =
           permission === "bash" &&
-          judgeApproval(details, this.context.policy) === "allow"
+          judgeApproval(details, planningPolicy(this.context.policy)) ===
+            "allow"
             ? "allow"
             : "deny";
         if (decision === "deny") feedback = PLANNING_DENIAL;

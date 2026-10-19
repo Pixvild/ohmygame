@@ -56,6 +56,15 @@ export interface AgentRuntimeDiagnostic {
   command?: string;
 }
 
+/**
+ * How freely a coding agent works. "standard" runs its commands in the CLI's
+ * sandbox where it has one and asks about anything the policy cannot clear;
+ * "full" turns the sandbox off and asks nothing, as OhMyGame's own agent does.
+ * Planning is read-only either way.
+ */
+export const AGENT_PERMISSION_MODES = ["standard", "full"] as const;
+export type AgentPermissionMode = (typeof AGENT_PERMISSION_MODES)[number];
+
 export interface AgentRuntimeStatus {
   id: AgentRuntimeId;
   name: string;
@@ -79,6 +88,7 @@ export interface AgentRuntimeStatus {
    * sandbox, beyond OhMyGame's approvals. "none" means approvals alone.
    */
   commandSandbox: "os" | "none";
+  permissionMode: AgentPermissionMode;
   diagnostics: AgentRuntimeDiagnostic[];
   checkedAt?: string;
 }
@@ -86,6 +96,7 @@ export interface AgentRuntimeStatus {
 export interface UpdateAgentRuntimeRequest {
   enabled?: boolean;
   isolateUserConfig?: boolean;
+  permissionMode?: AgentPermissionMode;
   /** An executable to use instead of the one found on PATH; empty clears it. */
   binaryPath?: string;
 }

@@ -361,6 +361,33 @@ describe("Claude Code adapter", () => {
     });
   });
 
+  it("runs without its sandbox or session caches in full access", async () => {
+    const clis = fakeCli((message, cli) => {
+      if (message.type === "control_request")
+        cli.send({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: message.request_id,
+            response: {},
+          },
+        });
+      if (message.type === "user")
+        cli.send({ type: "result", subtype: "success" });
+    });
+    const full = await context();
+    full.policy = { ...full.policy, fullAccess: true };
+    const driver = new ClaudeCodeDriver(full);
+    cleanup.push(() => driver.dispose());
+    await driver.runTurn(
+      { text: "work", images: [], readOnly: false },
+      recordingSink().sink,
+      new AbortController().signal,
+    );
+    expect(clis[0]!.args).not.toContain("--settings");
+    expect(clis[0]!.env).not.toHaveProperty("npm_config_cache");
+  });
+
   it("shows an allowed Claude tool as running until its result, whichever is reported first", async () => {
     for (const hookFirst of [false, true]) {
       const toolUse = {
@@ -924,6 +951,55 @@ describe("Codex adapter", () => {
     expect(threads[0]!.dynamicTools).toEqual([
       expect.objectContaining({ name: "echo_tool" }),
     ]);
+  });
+
+  it("uses Codex's own full-access profile for work and keeps planning read-only", async () => {
+    const profiles: unknown[] = [];
+    fakeCli((message, cli) => {
+      if (typeof message.method !== "string" || message.id === undefined)
+        return;
+      const params = message.params as Record<string, unknown>;
+      if (
+        ["thread/start", "thread/resume", "turn/start"].includes(message.method)
+      )
+        profiles.push(params.permissions);
+      cli.send({
+        id: message.id,
+        result:
+          message.method === "thread/start" ||
+          message.method === "thread/resume"
+            ? {
+                thread: { id: "thread-1" },
+                activePermissionProfile: { id: params.permissions },
+              }
+            : {},
+      });
+      if (message.method === "turn/start")
+        setTimeout(() =>
+          cli.send({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          }),
+        );
+    });
+    const full = await context();
+    full.policy = { ...full.policy, fullAccess: true };
+    const driver = new CodexDriver(full);
+    cleanup.push(() => driver.dispose());
+    for (const readOnly of [false, true])
+      expect(
+        await driver.runTurn(
+          { text: "go", images: [], readOnly },
+          recordingSink().sink,
+          new AbortController().signal,
+        ),
+      ).toEqual({ status: "completed" });
+    // Work runs unsandboxed; the planning turn names the read-only profile.
+    expect(profiles.slice(0, 2)).toEqual([
+      ":danger-full-access",
+      ":danger-full-access",
+    ]);
+    expect(profiles.at(-1)).toMatch(/^ohmygame-.*-read$/);
   });
 
   it("denies the shared temporary folders Codex's minimal access would read", async () => {

@@ -19,12 +19,22 @@ const agent = (
   auth: { status: "signed-in", billing: "subscription" },
   isolateUserConfig: true,
   commandSandbox: "os",
+  permissionMode: "standard",
   diagnostics: [],
 });
 let catalog: AgentModelCatalog;
 const api = {
   listModels: vi.fn(async () => catalog),
   waitForRuntime: vi.fn(async () => {}),
+  updateAgentRuntime: vi.fn(
+    async (
+      id: AgentRuntimeStatus["id"],
+      change: Partial<AgentRuntimeStatus>,
+    ) => ({
+      ...agent(id, "Claude Code", true),
+      ...change,
+    }),
+  ),
   listAgentRuntimes: vi.fn(async () => [
     agent("claude-code-cli", "Claude Code", true),
     agent("codex-cli", "Codex", false),
@@ -168,4 +178,32 @@ it("shows a CLI's command sandbox as one row on its detail page", async () => {
   );
   expect(rows).toContain("Command sandboxOperating system");
   expect(host.querySelectorAll(".settings-detail-hint")).toHaveLength(0);
+});
+
+it("switches a CLI to full access and says what that means", async () => {
+  await act(async () =>
+    root.render(
+      <AgentsSettings
+        view={{ page: "agent", id: "claude-code-cli" }}
+        onViewChange={vi.fn()}
+        onOpenProviders={vi.fn()}
+      />,
+    ),
+  );
+  expect(host.querySelector(".coding-agent-warning")).toBeNull();
+  const full = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "Full access",
+  )!;
+  await act(async () => full.click());
+  expect(api.updateAgentRuntime).toHaveBeenCalledWith("claude-code-cli", {
+    permissionMode: "full",
+  });
+  expect(host.querySelector(".coding-agent-warning")?.textContent).toContain(
+    "without a sandbox or asking",
+  );
+  expect(
+    [...host.querySelectorAll(".settings-provider-setting-row")].map(
+      (row) => row.textContent,
+    ),
+  ).toContain("Command sandboxOff, full access");
 });

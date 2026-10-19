@@ -17,6 +17,7 @@ import {
   canonicalPath,
   judgeApproval,
   neverTouchPaths,
+  planningPolicy,
 } from "../src/daemon/agent-runtimes/policy.js";
 import { AgentRuntimeSettingsStore } from "../src/daemon/agent-runtimes/settings.js";
 import {
@@ -166,7 +167,8 @@ it("keeps runtimes opt-in and persists native defaults independently of Pi", asy
   const store = new AgentRuntimeSettingsStore(root);
   await store.load();
   expect(store.get("codex-cli").enabled).toBe(false);
-  await store.update("codex-cli", { enabled: true });
+  expect(store.get("codex-cli").permissionMode).toBe("standard");
+  await store.update("codex-cli", { enabled: true, permissionMode: "full" });
   await store.setDefaultModel({
     model: { provider: "codex-cli", id: "test" },
     nativeReasoningLevel: "custom-effort",
@@ -175,6 +177,7 @@ it("keeps runtimes opt-in and persists native defaults independently of Pi", asy
   await restarted.load();
   expect(restarted.defaultModel()?.nativeReasoningLevel).toBe("custom-effort");
   expect(restarted.get("codex-cli").enabled).toBe(true);
+  expect(restarted.get("codex-cli").permissionMode).toBe("full");
   expect(restarted.get("opencode-cli").enabled).toBe(false);
 });
 it("reclaims a verified orphan, preserving a live daemon and unrelated PID identities", async () => {
@@ -315,6 +318,46 @@ it("lets sandboxed commands run without asking, except escalations and paths out
   expect(
     judgeApproval(command(`cat ${path.join(root, "data", "x")}`), sandboxed),
   ).toBe("deny");
+});
+
+it("asks nothing in full access but still refuses protected roots, and plans strictly", async () => {
+  const root = await folder();
+  const workspace = path.join(root, "workspace");
+  await mkdir(workspace);
+  const full = {
+    workspacePath: workspace,
+    neverTouch: [path.join(root, "data")],
+    fullAccess: true,
+  };
+  const command = (text: string) => ({
+    kind: "command" as const,
+    tool: "Bash",
+    command: text,
+    canAllowSession: true,
+  });
+  for (const text of [
+    "git push origin main",
+    "cat ../notes.txt",
+    "npm install",
+  ])
+    expect(judgeApproval(command(text), full)).toBe("allow");
+  expect(
+    judgeApproval(
+      {
+        kind: "file",
+        tool: "Write",
+        path: "/etc/hosts",
+        canAllowSession: false,
+      },
+      full,
+    ),
+  ).toBe("allow");
+  expect(
+    judgeApproval(command(`cat ${path.join(root, "data", "x")}`), full),
+  ).toBe("deny");
+  expect(judgeApproval(command("npm install"), planningPolicy(full))).toBe(
+    "ask",
+  );
 });
 
 it("widens a conversation approval only to repeatable commands and read folders", async () => {

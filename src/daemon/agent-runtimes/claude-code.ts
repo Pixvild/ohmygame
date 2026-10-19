@@ -24,7 +24,7 @@ import {
   type DriverContext,
 } from "./driver-context.js";
 import { stageSkills, stagedSkillsRoot } from "./skills.js";
-import { canonicalPath, judgeApproval } from "./policy.js";
+import { canonicalPath, judgeApproval, planningPolicy } from "./policy.js";
 import { sessionCaches } from "./environment.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 
@@ -198,7 +198,10 @@ export class ClaudeCodeDriver implements NativeDriver {
           env: {
             ...this.context.env,
             ...FOREGROUND_ONLY,
-            ...sessionCaches(commandTemporary(this.context)),
+            // Sandboxed installs cannot write the home folder's caches.
+            ...(this.context.policy.fullAccess
+              ? {}
+              : sessionCaches(commandTemporary(this.context))),
           },
           processDirectory: this.context.processDirectory,
           onLine: (line) => this.#receive(line),
@@ -248,9 +251,12 @@ export class ClaudeCodeDriver implements NativeDriver {
     if (context.reasoningLevel) args.push("--effort", context.reasoningLevel);
     if (context.isolateUserConfig)
       args.push("--setting-sources", "", "--strict-mcp-config");
-    // Flag settings apply whichever sources load, so the sandbox holds with the person's own configuration too.
-    await mkdir(commandTemporary(context), { recursive: true, mode: 0o700 });
-    args.push("--settings", JSON.stringify(claudeSandboxSettings(context)));
+    // Flag settings apply whichever sources load, so the sandbox holds with
+    // the person's own configuration too. Full access runs without it.
+    if (!context.policy.fullAccess) {
+      await mkdir(commandTemporary(context), { recursive: true, mode: 0o700 });
+      args.push("--settings", JSON.stringify(claudeSandboxSettings(context)));
+    }
     if (context.skillDirectories.length) {
       // Skills reach Claude Code as a plugin of this session's own.
       const skills = stagedSkillsRoot(
@@ -668,10 +674,7 @@ export class ClaudeCodeDriver implements NativeDriver {
       // run the read commands the policy allows without asking, and no other.
       const readCommand =
         tool === "Bash" &&
-        judgeApproval(details, {
-          ...this.context.policy,
-          sandboxedCommands: false,
-        }) === "allow";
+        judgeApproval(details, planningPolicy(this.context.policy)) === "allow";
       return readCommand
         ? { decision: "allow", reason: "Approved by OhMyGame" }
         : {

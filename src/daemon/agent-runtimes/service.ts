@@ -151,6 +151,7 @@ export class AgentRuntimeService {
       enabled: settings.enabled,
       isolateUserConfig: settings.isolateUserConfig,
       commandSandbox: commandSandbox(id),
+      permissionMode: settings.permissionMode,
       ...(id === "codex-cli" && settings.isolateUserConfig
         ? { partialIsolation: true }
         : {}),
@@ -220,6 +221,9 @@ export class AgentRuntimeService {
       ...(request.enabled !== undefined ? { enabled: request.enabled } : {}),
       ...(request.isolateUserConfig !== undefined
         ? { isolateUserConfig: request.isolateUserConfig }
+        : {}),
+      ...(request.permissionMode !== undefined
+        ? { permissionMode: request.permissionMode }
         : {}),
       ...(request.binaryPath !== undefined
         ? { binaryPath: request.binaryPath }
@@ -404,9 +408,11 @@ export class AgentRuntimeService {
       bridge,
       policy: {
         ...request.policy,
+        fullAccess: settings.permissionMode === "full",
         // Claude Code runs every command in its sandbox. Codex asks only for
         // what would leave its sandbox, so its requests are judged strictly.
         sandboxedCommands:
+          settings.permissionMode === "standard" &&
           request.runtime === "claude-code-cli" &&
           commandSandbox(request.runtime) === "os",
         readablePaths: [

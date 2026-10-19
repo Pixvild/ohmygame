@@ -387,6 +387,7 @@ const updateAgentRuntimeSchema = {
     properties: {
       enabled: { type: "boolean" },
       isolateUserConfig: { type: "boolean" },
+      permissionMode: { enum: ["standard", "full"] },
       binaryPath: { type: "string", maxLength: 4_096 },
     },
   },
@@ -3267,7 +3268,10 @@ export function createApp(options: AppOptions = {}) {
   app.patch<{ Params: { runtimeId: string }; Body: UpdateAgentRuntimeRequest }>("/agent-runtimes/:runtimeId", { schema: updateAgentRuntimeSchema }, async (request, reply) => {
     if (!isAgentRuntimeId(request.params.runtimeId)) return reply.code(404).send({ error: "Coding agent not found" });
     try {
-      return await agentRuntimes.update(request.params.runtimeId, request.body);
+      const status = await agentRuntimes.update(request.params.runtimeId, request.body);
+      // Open conversations pick up how the agent runs with their next message.
+      if (request.body.permissionMode !== undefined || request.body.isolateUserConfig !== undefined || request.body.binaryPath !== undefined) agents.releaseRuntimeSessions(request.params.runtimeId);
+      return status;
     } catch (cause) {
       return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) });
     }
