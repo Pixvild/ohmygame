@@ -34,7 +34,11 @@ import {
 } from "../src/daemon/agent-runtimes/policy.js";
 import { ToolBridge } from "../src/daemon/agent-runtimes/tool-bridge.js";
 import { piToolCall } from "../src/daemon/agent-runtimes/driver-context.js";
-import { claudeToolCall } from "../src/daemon/agent-runtimes/claude-code.js";
+import {
+  claudeSandboxSettings,
+  claudeToolCall,
+} from "../src/daemon/agent-runtimes/claude-code.js";
+import type { DriverContext } from "../src/daemon/agent-runtimes/driver-context.js";
 import {
   openCodeToolCall,
   splitModel,
@@ -53,6 +57,19 @@ const policy = {
   workspacePath: workspace,
   neverTouch: neverTouchPaths(path.join(home, "OhMyGame", "data")),
 };
+
+it("requires Claude's sandbox when the policy automatically allows confined commands", () => {
+  for (const sandboxedCommands of [true, false]) {
+    const context = {
+      workspacePath: workspace,
+      privateDirectory: path.join(os.tmpdir(), "ohmygame-session"),
+      policy: { ...policy, sandboxedCommands },
+    } as DriverContext;
+    expect(claudeSandboxSettings(context).sandbox.failIfUnavailable).toBe(
+      sandboxedCommands,
+    );
+  }
+});
 
 describe("coding agent approval policy", () => {
   it("lets an agent work in its workspace, even inside OhMyGame's data folder", () => {

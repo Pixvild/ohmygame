@@ -156,9 +156,10 @@ Each agent's detail page has a **Permissions** setting:
   Requests that name a protected root, such as a CLI sign-in folder, are
   still refused, and planning stays read-only.
 
-Changing it, or **Use my own CLI configuration**, lets go of the agent's idle
-open conversations, so their next message restarts the CLI with the new
-setting and resumes its session; a running turn keeps its setting.
+Changing it, **Use my own CLI configuration**, or the executable path lets go
+of the agent's idle open conversations. A running turn keeps its setting and
+is released when its run closes. The next run restarts the CLI with the new
+settings and resumes its session, including when settings change during startup.
 
 In the project folder an agent works without asking, as OhMyGame's own agent
 does. `judgeApproval` decides each request first:
@@ -225,6 +226,10 @@ Shell syntax checks cannot resolve globs, brace expansion or links, so a
 command a person allows could still name a protected file indirectly. Codex and
 Claude Code therefore also run commands in their own OS sandbox (Seatbelt on
 macOS, bubblewrap on Linux); the settings page says which agents have one.
+When the approval policy relies on that sandbox, Claude Code must stop at
+startup if it cannot enable it; it cannot silently fall back to unconfined
+commands. This requires Claude Code 2.1.83 or newer. Where the required
+dependencies are absent, the strict command approval policy applies instead.
 OpenCode has none, so its approvals are its only boundary. Each CLI's parent
 process runs as the signed-in OS user and is not confined. Strong
 confidentiality isolation requires a separate process/container sandbox and
@@ -326,7 +331,7 @@ The Provider, media, canvas, checkpoint and plugin code does not change.
 
 ## Compatibility and real acceptance
 
-The tested compatibility floors are Claude Code 2.1.76, Codex
+The tested compatibility floors are Claude Code 2.1.83, Codex
 0.163.0-alpha.10.2 (named permission profiles) and OpenCode 1.18.33. Version checks are protocol floors, not certification of every newer
 release. Claude discovery accepts catalogs from either `initialize` or
 `list_models`; failed/empty catalogs produce a `models-unavailable` diagnostic.

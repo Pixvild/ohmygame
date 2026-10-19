@@ -416,6 +416,7 @@ interface ManagedSession {
   session: CodingSession;
   unsubscribe: () => void;
   designContext?: string;
+  runtimeRevision?: number;
 }
 
 interface ActiveTurn {
@@ -497,6 +498,7 @@ export class AgentManager {
   /** Approvals a coding agent is waiting for, by conversation and then request. */
   readonly #approvals = new Map<string, Map<string, PendingApproval>>();
   readonly #invalidatedProjects = new Set<string>();
+  readonly #runtimeRevisions = new Map<AgentRuntimeId, number>();
   #closing = false;
 
   constructor(
@@ -587,9 +589,10 @@ export class AgentManager {
   /**
    * Lets go of the idle sessions a coding agent runs after its settings
    * change, so the next message in each starts it with them and resumes its
-   * native session. A busy one keeps its settings until it is next loaded.
+   * native session. A busy one is released once its current run closes.
    */
   releaseRuntimeSessions(runtime: AgentRuntimeId): void {
+    this.#runtimeRevisions.set(runtime, (this.#runtimeRevisions.get(runtime) ?? 0) + 1);
     for (const [key, managed] of this.#sessions)
       if (
         managed.session.runtime === runtime &&
@@ -1713,7 +1716,10 @@ export class AgentManager {
     const existing = this.#sessions.get(key);
     if (existing) return existing;
     const loading = this.#sessionLoads.get(key);
-    if (loading) return loading;
+    if (loading) {
+      await loading;
+      return this.#getSession(project, conversation);
+    }
     const promise = this.#loadSession(project, conversation);
     this.#sessionLoads.set(key, promise);
     let managed: ManagedSession;
@@ -1723,12 +1729,14 @@ export class AgentManager {
       if (this.#sessionLoads.get(key) === promise) this.#sessionLoads.delete(key);
       this.#flushInvalidatedProject(project.id);
     }
+    // Settings may change while discovery or session creation is still pending.
+    if (this.#sessions.get(key) === managed && this.#runtimeChanged(managed)) this.#forgetConversation(key);
     return this.#sessions.get(key) === managed ? managed : this.#getSession(project, conversation);
   }
 
   async #loadSession(project: ProjectState, conversation: StoredConversation): Promise<ManagedSession> {
     const key = conversationKey(project.id, conversation.summary.id);
-
+    const runtimeRevisions = new Map(this.#runtimeRevisions);
     const session = await (this.options.createSession ?? ((state, stored) => createPiSession(
       state,
       SessionManager.open(stored.sessionPath, sessionDirectory(state), state.workspacePath),
@@ -1739,7 +1747,7 @@ export class AgentManager {
       throw new Error("Agent manager is closing");
     }
     const unsubscribe = session.subscribe((event) => this.#forwardEvent(project.id, conversation.summary.id, event));
-    const managed = { session, unsubscribe };
+    const managed: ManagedSession = { session, unsubscribe, ...(session.runtime ? { runtimeRevision: runtimeRevisions.get(session.runtime) ?? 0 } : {}) };
     this.#sessions.set(key, managed);
     const entry = session.sessionManager?.getBranch().findLast((candidate) => candidate.type === "custom" && candidate.customType === "ohmygame-plan");
     if (!this.#planStates.has(key) && entry?.type === "custom" && entry.data && typeof entry.data === "object") {
@@ -2221,11 +2229,19 @@ export class AgentManager {
 
   #flushInvalidatedProject(projectId: string): void {
     const prefix = `${projectId}:`;
+    for (const [key, managed] of this.#sessions) {
+      if (key.startsWith(prefix) && this.#runtimeChanged(managed) && !this.#activeTurns.has(key) && !this.#revisions.has(key) && !this.#sessionLoads.has(key)) this.#forgetConversation(key);
+    }
     if (!this.#invalidatedProjects.has(projectId) || this.isProjectBusy(projectId) || [...this.#sessionLoads.keys()].some((key) => key.startsWith(prefix))) return;
     this.#invalidatedProjects.delete(projectId);
     for (const key of this.#sessions.keys()) {
       if (key.startsWith(prefix)) this.#forgetConversation(key);
     }
+  }
+
+  #runtimeChanged(managed: ManagedSession): boolean {
+    const runtime = managed.session.runtime;
+    return !!runtime && managed.runtimeRevision !== (this.#runtimeRevisions.get(runtime) ?? 0);
   }
 
   #forgetConversation(key: string): void {

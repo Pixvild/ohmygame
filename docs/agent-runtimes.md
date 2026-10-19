@@ -49,9 +49,9 @@ AgentManager: turns, queues, checkpoints, errors, cancellation
             └── ToolBridge → existing tools, canvas/media/preview, plugin MCP
 ```
 
-The implementation lives in `src/daemon/agent-runtimes/`, with public types in
-`src/shared/agent-runtimes.ts` and `src/shared/contracts.ts`. These are module
-boundaries, not a requirement for a new generic framework. A future SDK may
+The reverted implementation placed this in `src/daemon/agent-runtimes/`, with
+public types in `src/shared/agent-runtimes.ts` and `src/shared/contracts.ts`.
+These are module boundaries, not a requirement for a new generic framework. A future SDK may
 replace a driver's transport without changing orchestration or persistence.
 
 ## Selection, settings, and discovery
@@ -195,7 +195,7 @@ group; it is not an OS-wide process supervisor or resource scheduler.
 
 | Runtime     | Interactive transport and tools                                                        | Tested protocol floor |
 | ----------- | -------------------------------------------------------------------------------------- | --------------------- |
-| Claude Code | Long-lived stream-json stdin/stdout; control requests and MCP tool callbacks           | 2.1.76                |
+| Claude Code | Long-lived stream-json stdin/stdout; control requests and MCP tool callbacks           | 2.1.83                |
 | Codex       | App Server JSON-RPC; native `dynamicTools`, approval responses, thread/turn lifecycle  | 0.163.0-alpha.10.2    |
 | OpenCode    | Private authenticated loopback `serve`; HTTP requests, SSE events, daemon MCP endpoint | 1.18.33               |
 
@@ -356,7 +356,7 @@ CLI.
 
 The implementation covers shared infrastructure, all three
 drivers, plugin/Skill bridging, settings/model selection, approvals, and
-lifecycle recovery. Focused fixtures cover branch invalidation, expired resume,
+lifecycle recovery. Its focused fixtures covered branch invalidation, expired resume,
 queue checkpoints, cancellation races, token revocation, SSE loss, model/default
 migration, planning writes, child approvals, staged Skill boundaries, and
 verified orphan recovery. No rewrite of the runtime architecture is required.

@@ -285,11 +285,8 @@ const RISKY_COMMANDS = new RegExp(RISKY_SOURCE, "g");
 /** Publishing the person may allow once per conversation, whatever the remote or package; escalations are asked each time. */
 const REPEATABLE_COMMAND = /^(?:git push|(?:npm|pnpm|yarn) publish)$/;
 
-/** Places commands may name without the person being asked: temporary files and installed programs. */
+/** Installed programs commands may name without the person being asked. Shared temporary folders are outside the workspace. */
 const SAFE_OUTSIDE = [
-  os.tmpdir(),
-  "/tmp",
-  "/private/tmp",
   "/dev/null",
   "/usr",
   "/bin",
