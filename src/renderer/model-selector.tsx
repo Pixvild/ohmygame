@@ -174,7 +174,7 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
                 </label>
                 <button className="model-selector-manage" type="button" aria-label={t("modelSelector.manage")} title={t("modelSelector.manage")} onClick={() => {
                   close(true);
-                  window.location.hash = settingsHash("providers");
+                  window.location.hash = settingsHash(native ? "agents" : "providers");
                 }}><Settings aria-hidden="true" size={13} /></button>
               </div>
               <div className="model-selector-model-list">

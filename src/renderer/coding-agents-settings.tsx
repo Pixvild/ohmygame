@@ -26,14 +26,15 @@ import { openModelAuthExternal } from "./use-model-provider-auth.js";
 import { t } from "./i18n.js";
 
 /**
- * Coding agents in Providers & Models: the CLIs found on this computer, each
- * with its sign-in and a switch that offers its models in the model picker.
+ * The coding agent CLIs in Agents: those found on this computer, each with
+ * its sign-in and a switch that offers its models in the model picker.
  */
 export function CodingAgentsGroup({
-  query,
+  defaultAgent,
   onOpen,
 }: {
-  query: string;
+  /** The agent whose model new conversations start with, if it is a CLI. */
+  defaultAgent?: AgentRuntimeId;
   onOpen: (id: AgentRuntimeId) => void;
 }) {
   const [agents, setAgents] = useState<AgentRuntimeStatus[]>();
@@ -90,27 +91,19 @@ export function CodingAgentsGroup({
       });
     }
   }
-  const search = query.trim().toLowerCase();
-  const visible = (agents ?? []).filter(
-    (agent) =>
-      !search ||
-      `${agent.name} ${t("codingAgents.title")}`.toLowerCase().includes(search),
-  );
-  if (agents && !visible.length && search) return null;
   return (
     <section
       className="settings-provider-group coding-agents-group"
       aria-label={t("codingAgents.title")}
     >
       <h4>{t("codingAgents.title")}</h4>
-      <p className="settings-detail-hint">{t("codingAgents.description")}</p>
       {!agents && !error ? (
         <div className="settings-loading">
           <LoaderCircle className="spin" size={18} />
           {t("codingAgents.checking")}
         </div>
       ) : null}
-      {visible.map((agent) => {
+      {(agents ?? []).map((agent) => {
         const action = agent.installed
           ? t("codingAgents.manage", { name: agent.name })
           : t("codingAgents.setUp", { name: agent.name });
@@ -120,16 +113,14 @@ export function CodingAgentsGroup({
             <span className="settings-provider-copy">
               <strong className="settings-provider-name">
                 <span>{agent.name}</span>
+                {agent.id === defaultAgent ? (
+                  <small>{t("agents.default")}</small>
+                ) : null}
               </strong>
               <span className="settings-provider-details">
                 <span className="settings-provider-description">
                   {agentSummary(agent)}
                 </span>
-                {agent.installed ? (
-                  <span className="settings-provider-capabilities">
-                    <small>{billingLabel(agent)}</small>
-                  </span>
-                ) : null}
               </span>
             </span>
             {agent.installed ? (
@@ -285,7 +276,6 @@ export function CodingAgentDetail({
         <AgentMark id={agent.id} />
         <span className="settings-provider-heading">
           <h3>{agent.name}</h3>
-          <small>{t("codingAgents.detailDescription")}</small>
         </span>
         {agent.installed ? (
           <div className="settings-provider-enable-control">
@@ -372,6 +362,18 @@ export function CodingAgentDetail({
             </span>
           </div>
         ) : null}
+        {agent.installed ? (
+          <div className="settings-provider-setting-row">
+            <span className="settings-search-field-label">
+              {t("codingAgents.sandbox")}
+            </span>
+            <span className="settings-provider-setting-value">
+              {agent.commandSandbox === "os"
+                ? t("codingAgents.sandboxOs")
+                : t("codingAgents.sandboxNone")}
+            </span>
+          </div>
+        ) : null}
       </div>
       {login ? <LoginHint login={login} /> : null}
       {problems.length ? (
@@ -406,11 +408,7 @@ export function CodingAgentDetail({
             </span>
             <span>
               <strong>{t("codingAgents.useOwnConfig")}</strong>
-              <small>
-                {agent.isolateUserConfig
-                  ? t("codingAgents.isolatedHint", { name: agent.name })
-                  : t("codingAgents.ownConfigHint", { name: agent.name })}
-              </small>
+              <small>{t("codingAgents.useOwnConfigHint")}</small>
               {agent.partialIsolation ? (
                 <small>
                   {t("codingAgents.partialIsolation", { name: agent.name })}
@@ -418,19 +416,6 @@ export function CodingAgentDetail({
               ) : null}
             </span>
           </label>
-          <p className="settings-detail-hint">
-            {t("codingAgents.permissions")}
-          </p>
-          <p className="settings-detail-hint">
-            {agent.commandSandbox === "os"
-              ? t("codingAgents.sandboxOs", { name: agent.name })
-              : t("codingAgents.sandboxNone", { name: agent.name })}
-          </p>
-          {agent.id === "codex-cli" ? (
-            <p className="settings-detail-hint">
-              {t("codingAgents.codexReadBoundary")}
-            </p>
-          ) : null}
         </section>
       ) : null}
       <section className="settings-detail-section">
@@ -462,9 +447,6 @@ export function CodingAgentDetail({
             </button>
           </div>
         </form>
-        <p className="settings-detail-hint">
-          {t("codingAgents.executableHint")}
-        </p>
       </section>
       {error ? (
         <p className="settings-error" role="alert">
