@@ -6,28 +6,44 @@ import type { ProjectAgentActivity, ProjectState } from "../shared/contracts.js"
 import { getProjectCover } from "./api.js";
 import { ProjectTypeIcon, projectTypeLabel } from "./project-types.js";
 import { language, t } from "./i18n.js";
+import { ProjectPlaceholder } from "./project-placeholder.js";
 
 export interface ProjectCardActions {
   onRename: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
-  onDesign?: () => void;
 }
 
 interface ProjectCardProps {
   project: ProjectState;
-  fallback: number;
   onOpen: () => void;
   actions?: ProjectCardActions;
   agentStatus?: ProjectAgentActivity["status"];
 }
 
-export function ProjectCard({ project, fallback, onOpen, actions, agentStatus }: ProjectCardProps) {
+export function ProjectCard({ project, onOpen, actions, agentStatus }: ProjectCardProps) {
   const activityLabel = agentStatus === "cancelling" ? t("projectCard.stopping") : t("projectCard.working");
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number }>();
+  const [openingFolder, setOpeningFolder] = useState(false);
+  const [folderError, setFolderError] = useState<string>();
+  const openProjectFile = typeof window !== "undefined" ? window.ohMyGameDesktop?.openProjectFile : undefined;
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+
+  async function openFolder(): Promise<void> {
+    if (!openProjectFile || openingFolder) return;
+    setOpeningFolder(true);
+    setFolderError(undefined);
+    try {
+      await openProjectFile(project.id, ".", "default");
+      setMenuOpen(false);
+    } catch (cause) {
+      setFolderError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setOpeningFolder(false);
+    }
+  }
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -61,12 +77,12 @@ export function ProjectCard({ project, fallback, onOpen, actions, agentStatus }:
     const popup = menu.current?.getBoundingClientRect();
     if (!anchor || !popup) return;
     setMenuPosition(menuPlacement(anchor, popup, { width: window.innerWidth, height: window.innerHeight }));
-  }, [menuOpen]);
+  }, [menuOpen, folderError]);
 
   return (
     <article className="project-card">
       <button className="project-card-open" type="button" onClick={onOpen} aria-label={t("projectCard.open", { name: project.name })}>
-        <ProjectCover projectId={project.id} fallback={fallback} />
+        <ProjectCover projectId={project.id} />
         <span className="project-card-meta">
           <span className="project-card-copy">
             <span className="project-card-name" title={project.name}>{project.name}</span>
@@ -91,7 +107,7 @@ export function ProjectCard({ project, fallback, onOpen, actions, agentStatus }:
             aria-label={t("projectCard.actions", { name: project.name })}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((current) => !current)}
+            onClick={() => { setFolderError(undefined); setMenuOpen((current) => !current); }}
           >
             <MoreHorizontal size={16} />
           </button>
@@ -103,12 +119,13 @@ export function ProjectCard({ project, fallback, onOpen, actions, agentStatus }:
               role="menu"
               style={menuPosition ?? { top: 0, left: 0, visibility: "hidden" }}
             >
+              {openProjectFile ? <button type="button" role="menuitem" disabled={openingFolder} onClick={() => void openFolder()}>{t("projectCard.openFolder")}</button> : null}
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); actions.onRename(); }}>{t("common.rename")}</button>
-              {actions.onDesign ? <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); actions.onDesign?.(); }}>{t("projectCard.gameDesign")}</button> : null}
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); actions.onDuplicate(); }}>{t("common.duplicate")}</button>
               <button className="project-card-actions-delete" type="button" role="menuitem" onClick={() => { setMenuOpen(false); actions.onDelete(); }}>
                 {project.workspaceLocation === "external" ? t("projectCard.remove") : t("common.delete")}
               </button>
+              {folderError ? <p className="project-card-folder-error" role="alert">{folderError}</p> : null}
             </div>,
             document.body,
           ) : null}
@@ -118,10 +135,11 @@ export function ProjectCard({ project, fallback, onOpen, actions, agentStatus }:
   );
 }
 
-export function ProjectCover({ projectId, fallback }: { projectId: string; fallback: number }) {
+export function ProjectCover({ projectId }: { projectId: string }) {
   const [url, setUrl] = useState<string>();
 
   useEffect(() => {
+    setUrl(undefined);
     let objectUrl: string | undefined;
     let disposed = false;
     void getProjectCover(projectId).then((cover) => {
@@ -136,8 +154,8 @@ export function ProjectCover({ projectId, fallback }: { projectId: string; fallb
   }, [projectId]);
 
   return (
-    <span className={`project-card-preview project-card-preview-${fallback}`} aria-hidden="true">
-      {url ? <img src={url} alt="" /> : null}
+    <span className="project-card-preview" aria-hidden="true">
+      {url ? <img src={url} alt="" onError={() => setUrl(undefined)} /> : <ProjectPlaceholder projectId={projectId} />}
     </span>
   );
 }
