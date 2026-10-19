@@ -56,6 +56,7 @@ function setup(
   options: {
     snapshot?: () => Promise<string>;
     sessionManager?: SessionManager;
+    beforeCreate?: () => Promise<void>;
   } = {},
 ) {
   const events = new RuntimeEventBus();
@@ -82,8 +83,9 @@ function setup(
     options.sessionManager ?? SessionManager.inMemory("/tmp/project-1");
   const drivers: ScriptedDriver[] = [];
   let manager!: AgentManager;
-  const createSession = async () =>
-    new NativeCodingSession({
+  const createSession = async () => {
+    await options.beforeCreate?.();
+    return new NativeCodingSession({
       runtime: "claude-code-cli",
       model: "sonnet",
       sessionManager,
@@ -103,6 +105,7 @@ function setup(
         ),
       toolNames: ["canvas_check"],
     });
+  };
   manager = new AgentManager(events, {
     createSession,
     activeToolNames: (_project, mode, session) =>
@@ -130,6 +133,69 @@ function items(sessionManager: SessionManager): ThreadItem[] {
 }
 
 describe("coding agent sessions", () => {
+  it("releases changed runtime settings after a busy run and resumes on the next one", async () => {
+    let finish!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const { manager, project, conversation, drivers } = setup([
+      async (_input, sink) => {
+        sink.nativeSession("native-1");
+        await waiting;
+        return { status: "completed" };
+      },
+      async () => ({ status: "completed" }),
+    ]);
+    try {
+      const run = manager.prompt(project, conversation, "work");
+      await expect.poll(() => drivers[0]?.inputs.length).toBe(1);
+      manager.releaseRuntimeSessions("claude-code-cli");
+      expect(drivers[0]!.disposed).toBe(false);
+      finish();
+      await run.result;
+      expect(drivers[0]!.disposed).toBe(true);
+      await manager.prompt(project, conversation, "continue").result;
+      expect(drivers).toHaveLength(2);
+      expect(drivers[1]!.resume).toBe("native-1");
+      manager.releaseRuntimeSessions("claude-code-cli");
+      expect(drivers[1]!.disposed).toBe(true);
+    } finally {
+      finish();
+      await manager.close();
+    }
+  });
+
+  it("recreates a runtime whose settings changed while it was loading", async () => {
+    let finish!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let creating = false;
+    const { manager, project, conversation, drivers } = setup(
+      [async () => ({ status: "completed" })],
+      {
+        beforeCreate: async () => {
+          creating = true;
+          await waiting;
+        },
+      },
+    );
+    try {
+      const run = manager.prompt(project, conversation, "work");
+      await expect.poll(() => creating).toBe(true);
+      manager.releaseRuntimeSessions("claude-code-cli");
+      finish();
+      await run.result;
+      expect(drivers).toHaveLength(2);
+      expect(drivers[0]!.disposed).toBe(true);
+      expect(drivers[0]!.inputs).toHaveLength(0);
+      expect(drivers[1]!.inputs).toHaveLength(1);
+    } finally {
+      finish();
+      await manager.close();
+    }
+  });
+
   function fixture(
     scripts: Script[],
     sessionManager = SessionManager.inMemory("/tmp/project-1"),

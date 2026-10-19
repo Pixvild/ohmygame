@@ -146,9 +146,10 @@ Each agent's detail page has a **Permissions** setting:
   Requests that name a protected root, such as a CLI sign-in folder, are
   still refused, and planning stays read-only.
 
-Changing it, or **Use my own CLI configuration**, lets go of the agent's idle
-open conversations, so their next message restarts the CLI with the new
-setting and resumes its session; a running turn keeps its setting.
+Changing it, **Use my own CLI configuration**, or the executable path lets go
+of the agent's idle open conversations. A running turn keeps its setting and
+is released when its run closes. The next run restarts the CLI with the new
+settings and resumes its session, including when settings change during startup.
 
 In the project folder an agent works without asking, as OhMyGame's own agent
 does. `judgeApproval` decides each request first:
