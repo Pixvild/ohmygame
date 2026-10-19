@@ -2363,6 +2363,7 @@ const zhCN: typeof en = {
     },
   },
   videoTrim: {
+    unavailable: "无法播放此视频，请尝试支持的 MP4 或 WebM 文件。",
     play: "播放",
     pause: "暂停",
     position: "视频位置",

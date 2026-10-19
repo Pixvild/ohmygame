@@ -28,6 +28,18 @@ A Scene uses a trimmed video like any other video, for example through
 
 ## How a trim is encoded
 
+The preview and yellow-handle timeline live in the controlled
+`src/renderer/video-trim-editor.tsx` component. It only edits a range and
+previews it; it never encodes, uploads, or writes project files.
+`VideoTrimmer` wraps that component with the Library/Asset Canvas save action.
+Other editing flows can reuse the same controls and `.video-trimmer-*` styles
+without inheriting the encode/upload action.
+
+Space on the timeline or either handle toggles playback once. Failed video
+loading disables playback/saving and shows a translated error. Encoding can
+be cancelled; once uploading starts, Cancel is disabled because the upload
+cannot be cancelled by the encoder's abort signal.
+
 Trimming runs in the renderer with [Mediabunny](https://mediabunny.dev)
 (MPL-2.0) and the browser's WebCodecs encoders, so no media tools are
 installed. `src/renderer/video-trim.ts` loads Mediabunny only when a trim

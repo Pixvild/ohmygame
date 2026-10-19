@@ -2439,6 +2439,7 @@ const en = {
     },
   },
   videoTrim: {
+    unavailable: "Could not play this video. Try a supported MP4 or WebM file.",
     play: "Play",
     pause: "Pause",
     position: "Video position",

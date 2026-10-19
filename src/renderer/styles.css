@@ -5667,11 +5667,11 @@ button.home-nav-item-active:hover {
   height: min(64dvh, 640px);
 }
 /* A video with handles to keep part of it, in an asset preview. */
-.library-dialog-preview > .video-trimmer {
+.video-trimmer {
   display: grid;
   width: 100%;
   align-self: stretch;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 10px;
   padding: 0 0 12px;
 }
@@ -5806,6 +5806,7 @@ button.home-nav-item-active:hover {
 }
 .video-trimmer-footer {
   display: flex;
+  flex-wrap: wrap;
   min-height: 32px;
   align-items: center;
   justify-content: flex-end;
