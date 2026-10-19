@@ -31,6 +31,7 @@ import {
   previewScriptArguments,
 } from "./preview-launch.js";
 import { startStaticPreview } from "./preview-static.js";
+import { storyWebEditorBridge } from "./story-web-bundle.js";
 
 interface PreviewOptions {
   readinessTimeoutMs?: number;
@@ -63,18 +64,12 @@ export class PreviewCancelledError extends Error {
 /** An automatic start found nothing to run yet, which is expected before the first files exist. */
 class PreviewNotReadyError extends ProjectWorkspaceError {}
 
-export class PreviewManager {
-  readonly #suspended = new Set<string>();
+/** A web story plays its own page through the project preview, like a Web Game. */
+function previewable(project: ProjectState): boolean {
+  return supportsWebPreview(project) || project.type === "interactive-story";
+}
 
-  async withWorkspaceStopped<T>(project: ProjectState, operation: () => Promise<T>): Promise<T> {
-    const resume = ["ready", "starting"].includes(project.preview.status);
-    this.#suspended.add(project.id);
-    try { await this.stop(project, "settings"); return await operation(); }
-    finally {
-      this.#suspended.delete(project.id);
-      if (resume && !this.#session(project).paused) void this.ensureStarted(project, false).catch(() => {});
-    }
-  }
+export class PreviewManager {
   readonly #running = new Map<string, ChildProcess>();
   readonly #proxies = new Map<string, PreviewProxy>();
   readonly #static = new Map<string, { close(): Promise<void> }>();
@@ -197,7 +192,6 @@ export class PreviewManager {
 
   #automaticAllowed(session: PreviewSession): boolean {
     return (
-      !this.#suspended.has(session.project.id) &&
       this.#sessions.get(session.project.id) === session &&
       supportsWebPreview(session.project) &&
       session.project.previewAutoStart !== false &&
@@ -207,8 +201,7 @@ export class PreviewManager {
   }
 
   ensureStarted(project: ProjectState, manual = true): Promise<string> {
-    if (this.#suspended.has(project.id)) return Promise.reject(new PreviewCancelledError());
-    if (!supportsWebPreview(project))
+    if (!previewable(project))
       return Promise.reject(
         new ProjectWorkspaceError(
           "Enable Web preview in project settings first.",
@@ -236,7 +229,6 @@ export class PreviewManager {
     reinstall = false,
     manual = true,
   ): Promise<string> {
-    if (this.#suspended.has(project.id)) return Promise.reject(new PreviewCancelledError());
     if (manual) this.#session(project).paused = false;
     return this.#beginStart(project, reinstall);
   }
@@ -261,7 +253,7 @@ export class PreviewManager {
     reinstall: boolean,
     automatic: boolean,
   ): Promise<string> {
-    if (!supportsWebPreview(project))
+    if (!previewable(project))
       throw new ProjectWorkspaceError(
         "Enable Web preview in project settings first.",
       );
@@ -276,7 +268,10 @@ export class PreviewManager {
     let child: ChildProcess | undefined;
     let began = false;
     try {
-      const workspace = await resolvePreviewWorkspace(project);
+      // A web story is its own page: the folder is served as it is, whatever scripts it carries.
+      const workspace = await resolvePreviewWorkspace(project.type === "interactive-story"
+        ? { workspacePath: project.workspacePath, startupDirectory: ".", previewMode: "static" }
+        : project);
       assertCurrent();
       if (!workspace.runnable) {
         const message = workspace.error ?? "Workspace is not runnable yet";
@@ -487,6 +482,7 @@ export class PreviewManager {
         },
         {
           port: preferredPort,
+          ...(project.type === "interactive-story" ? { story: { bridge: storyWebEditorBridge } } : {}),
           onActivity: (id, active) => {
             if (proxyHandle && this.#proxies.get(project.id) === proxyHandle)
               this.touch(project, `page:${id}`, active);

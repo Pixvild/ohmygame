@@ -1,15 +1,29 @@
 # Git changes in Code
 
+The Files view renders `.md` and `.markdown` files as formatted Markdown.
+Workspace links and images resolve relative to the document's folder; links
+open the selected file in Code, and relative paths cannot leave the project.
+Other source files keep their syntax-highlighted preview.
+
+![Markdown file preview and the publish slash command](assets/workspace-markdown-publish-command.png)
+
 When the project directory is a Git repository, Code offers **Files** and
 **Changes** in the existing explorer. Changes shows the current workspace
 against the last commit, including staged edits, unstaged edits and untracked
 files. Before the first commit, current files are compared with an empty tree.
 Files that have been staged and then changed back to their committed contents
 have no net workspace change and are omitted.
+Removing a file from Git's index with `git rm --cached` also compares its
+remaining, non-ignored working copy with the last commit: unchanged files
+are omitted and edits are listed as modifications, with counts against HEAD.
+Git's `core.filemode` and `core.symlinks` settings also apply to these files.
+If a file disappears or becomes a directory during this comparison, its
+deletion remains listed instead of failing the whole refresh.
 
 Select a changed path to view its diff in the code pane. Added text files show
 `+N -0`, removed files remain inspectable, and renames are shown as a removal and
-an addition. Untracked files honor Git's ignore rules. The path filter applies
+an addition. Untracked files honor Git's ignore rules; an index removal whose
+working copy is now ignored remains listed as a removal. The path filter applies
 to both explorer views. Switching back to Files preserves the selected source
 file; an explicit request to open a source file also switches back to Files.
 

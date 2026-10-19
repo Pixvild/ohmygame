@@ -29,6 +29,9 @@ describe("workspaceLinkPath", () => {
     expect(workspaceLinkPath("../../secret.txt", "/tmp/game", "docs")).toBeUndefined();
     expect(workspaceLinkPath("/tmp/game/src/app.ts", "/tmp/game", "docs")).toBe("src/app.ts");
     expect(workspaceLinkPath("logo.png", undefined, "docs/img")).toBe("docs/img/logo.png");
+    expect(workspaceLinkPath("docs/../README.md", undefined, "")).toBe("README.md");
+    expect(workspaceLinkPath("../secret.txt", undefined, "")).toBeUndefined();
+    expect(workspaceLinkPath("%2e%2e/%2e%2e/secret.txt", undefined, "docs")).toBeUndefined();
   });
 });
 

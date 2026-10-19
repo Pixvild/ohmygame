@@ -101,7 +101,7 @@ export function workspaceLinkPath(href: string | undefined, workspacePath?: stri
   for (const part of [...(absolute || !baseDir ? [] : baseDir.split("/")), ...value.split("/")]) {
     if (!part || part === ".") continue;
     if (part !== "..") parts.push(part);
-    else if (!baseDir || !parts.pop()) return undefined;
+    else if (baseDir === undefined || !parts.pop()) return undefined;
   }
   if (parts.length === 0) return undefined;
   const filePath = parts.join("/");

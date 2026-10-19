@@ -39,8 +39,9 @@ import {
 import { setPlayableElementTranslate } from "../shared/playable-move.js";
 import { isPlayableStoryEnding, withPlayableStoryOption } from "../shared/playable-story-map.js";
 import type { NodePlayerDefinition, PlayableMove, PlayableTextEdit } from "../shared/playable-player-protocol.js";
-import { parsePlayableSourceLocation, replacePlayableElementText } from "../shared/playable-text-edit.js";
-import { clearPlayableBackdrop, playableBackdrop, setPlayableBackdrop } from "../shared/playable-backdrop.js";
+import { parsePlayableSourceLocation, replacePlayableElementText, replacePlayableLineText } from "../shared/playable-text-edit.js";
+import { clearPlayableBackdrop, playableBackdrop, setPlayableBackdrop, setPlayableBackdropClip, type PlayableBackdropDetails } from "../shared/playable-backdrop.js";
+import type { PlayableVideoClip } from "../shared/playable-video-clip.js";
 import {
   addPlayableNodeAsset,
   playableEdgeId,
@@ -57,11 +58,18 @@ import {
   exportInteractiveStoryProject,
   getNodeCodebase,
   getPlayableValidation,
+  getStoryUpgrade,
   getWorkspaceFile,
   listPlayablePresets,
   listPlayableThumbnails,
   updateNodeCodebase,
+  copyStoryLibraryMedia,
+  keepStoryUpgrade,
+  undoStoryUpgrade,
+  upgradeStory,
 } from "./api.js";
+import { CanvasNotice } from "./canvas-notice.js";
+import type { StoryUpgradeStatus } from "../shared/story-web.js";
 import { PublishDialog, type PublishDetails } from "./publish-dialog.js";
 import { WorkspaceCodeView } from "./coding-workspace.js";
 import { playtestHash } from "./routes.js";
@@ -82,6 +90,9 @@ const CanvasWorkspace = lazy(() => import("./canvas-workspace.js").then((module)
 
 const HISTORY_LIMIT = 50;
 const SAVE_ATTEMPTS = 3;
+/** Loading again while a workspace checkpoint or restore runs longer than the daemon waits for it. */
+const WORKSPACE_BUSY_RETRIES = 5;
+const WORKSPACE_BUSY_RETRY_MS = 3000;
 const PROJECT_CHANGED = t("storyEditor.projectChanged");
 
 /** A step to undo or redo: the codebase, and the source files as they were, when the step wrote any. */
@@ -132,6 +143,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   const projectId = project.id;
   const [writeVersion] = useState(() => workspaceVersion(projectId));
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [upgrade, setUpgrade] = useState<StoryUpgradeStatus>();
   const [notice, setNotice] = useState<string>();
   const [graphMeta, setGraphMeta] = useState<GraphMeta>();
   const [nodes, setNodes] = useState<PlayableFlowNode[]>([]);
@@ -243,7 +255,8 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     resetHistory();
     setCanvasContextMenu(undefined);
     setCopiedNode(undefined);
-    void Promise.all([
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const load = (attempt: number) => void Promise.all([
       getNodeCodebase(projectId),
       listPlayablePresets().catch(() => ({ presets: [] as PlayablePresetSummary[] })),
     ]).then(([loaded, catalog]) => {
@@ -253,11 +266,51 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
       setPhase("ready");
     }).catch((error) => {
       if (disposed) return;
+      // A checkpoint or restore that outlasted the daemon's wait still finishes; load again after it.
+      if (error instanceof ApiError && error.code === "workspace_busy" && attempt < WORKSPACE_BUSY_RETRIES) {
+        retry = setTimeout(() => load(attempt + 1), WORKSPACE_BUSY_RETRY_MS);
+        return;
+      }
       setNotice(errorMessage(error));
       setPhase("error");
     });
+    load(0);
+    return () => {
+      disposed = true;
+      clearTimeout(retry);
+    };
+  }, [projectId, workspaceRevision]);
+
+  // A story from before web stories is offered the upgrade; a fresh upgrade can be taken back.
+  useEffect(() => {
+    let disposed = false;
+    void getStoryUpgrade(projectId).then((status) => { if (!disposed) setUpgrade(status); }).catch(() => {});
     return () => { disposed = true; };
   }, [projectId, workspaceRevision]);
+
+  async function runUpgrade(): Promise<void> {
+    // Unsaved edits go first; the upgrade then reloads every editor.
+    if (codebase) await save(codebase);
+    await upgradeStory(projectId);
+    setUpgrade(await getStoryUpgrade(projectId));
+  }
+
+  async function copyLibraryMedia(): Promise<void> {
+    if (codebase) await save(codebase);
+    await copyStoryLibraryMedia(projectId);
+    setUpgrade(await getStoryUpgrade(projectId));
+  }
+
+  async function keepUpgrade(): Promise<void> {
+    setUpgrade((current) => current && { web: current.web, ...(current.libraryAssets ? { libraryAssets: current.libraryAssets } : {}) });
+    await keepStoryUpgrade(projectId).catch(() => {});
+  }
+
+  async function undoUpgrade(): Promise<void> {
+    if (codebase) await save(codebase);
+    await undoStoryUpgrade(projectId);
+    setUpgrade(await getStoryUpgrade(projectId));
+  }
 
   useEffect(() => {
     if (phase !== "ready") return;
@@ -386,6 +439,9 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
           return true;
         } catch (cause) {
           if (!(cause instanceof ApiError) || cause.status !== 409) throw cause;
+          // A trim is tied to the exact background the dialog opened. Never
+          // rebase it onto a graph or source changed by another writer.
+          if (outgoing.sourcePreconditions) throw new Error(t("sceneWorkbench.trim.changed"));
           if (attempt === SAVE_ATTEMPTS) throw new Error(t("storyEditor.keepsChanging"));
         }
         const remote = await getNodeCodebase(projectId);
@@ -531,6 +587,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     const onKeyDown = (event: KeyboardEvent) => {
       const step = undoShortcut(event);
       if (!step || isTextEntry(event.target)) return;
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return;
       event.preventDefault();
       void (step === "redo" ? redoEditorChange() : undoEditorChange())?.catch(() => {});
     };
@@ -667,7 +724,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
    * Adopts a graph and writes source files with it as one undoable step.
    * `before` holds what the files held, for undo to put back.
    */
-  async function writeSources(graph: NodeGraph, sources: Record<string, string>, before: Record<string, string>): Promise<HistoryEntry | undefined> {
+  async function writeSources(graph: NodeGraph, sources: Record<string, string>, before: Record<string, string>, sourcePreconditions?: Record<string, string>): Promise<HistoryEntry | undefined> {
     if (!codebase) return undefined;
     commitPendingHistory();
     // The base stops the graph change from being recorded as a separate step.
@@ -676,7 +733,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     const generation = diskGeneration.current;
     try {
       applyGraph(graph);
-      await save({ graph, editorLayout: codebase.editorLayout, sources });
+      await save({ graph, editorLayout: codebase.editorLayout, sources, ...(sourcePreconditions ? { sourcePreconditions } : {}) });
     } finally {
       if (historyGestureBase.current === base) historyGestureBase.current = undefined;
     }
@@ -698,10 +755,17 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     const graph = codebase?.graph;
     const location = edit.pick.source ? parsePlayableSourceLocation(edit.pick.source) : undefined;
     const node = graph?.nodes.find((candidate) => candidate.id === edit.pick.nodeId);
-    if (!graph || !location || !node || node.source.html !== location.file) return false;
+    if (!graph || !location || !node) return false;
+    // Text a Scene shows from a file of its own, such as a Visual Novel script line, changes in that file.
+    const lineText = location.file !== node.source.html
+      && location.file.startsWith(`${node.source.html.slice(0, node.source.html.lastIndexOf("/") + 1)}`)
+      && location.file.endsWith(".txt");
+    if (location.file !== node.source.html && !lineText) return false;
     const file = await getWorkspaceFile(projectId, location.file);
     const before = file.truncated ? undefined : file.content;
-    const html = before === undefined ? undefined : replacePlayableElementText(before, location, edit.before, edit.after);
+    const html = before === undefined ? undefined : lineText
+      ? replacePlayableLineText(before, location, edit.before, edit.after)
+      : replacePlayableElementText(before, location, edit.before, edit.after);
     if (before === undefined || html === undefined) return false;
     const signal = node.signals.find((candidate) => candidate.id === edit.pick.signal);
     const next = signal && signal.label.trim() === edit.before.trim()
@@ -766,6 +830,19 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     if (html === undefined) return false;
     if (html !== before) await writeSources(graph, { [path]: html }, { [path]: before });
     return true;
+  }
+
+  async function writeVideoClip(nodeId: string, expected: PlayableBackdropDetails, source: string, clip?: PlayableVideoClip): Promise<void> {
+    const graph = codebase?.graph;
+    const node = graph?.nodes.find((candidate) => candidate.id === nodeId);
+    if (!graph || !node || JSON.stringify(graph.assets[expected.assetId]) !== source) throw new Error(t("sceneWorkbench.trim.changed"));
+    const path = node.source.html;
+    const file = await getWorkspaceFile(projectId, path);
+    if (file.content === undefined || file.truncated) throw new Error(t("sceneWorkbench.trim.changed"));
+    const before = file.content;
+    const html = setPlayableBackdropClip(before, expected, clip);
+    if (html === undefined) throw new Error(t("sceneWorkbench.trim.changed"));
+    if (html !== before) await writeSources(graph, { [path]: html }, { [path]: before }, { [path]: before });
   }
 
   function openNode(nodeId: string): void {
@@ -1058,6 +1135,26 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
         <div className="interactive-story-canvas">
           {phase === "loading" ? <div className="story-canvas-state">{t("storyEditor.loadingScenes")}</div> : null}
           {phase === "error" ? <div className="story-canvas-state story-canvas-state-error">{notice}</div> : null}
+          {phase === "ready" && upgrade && !upgrade.web ? <CanvasNotice
+            className="story-upgrade-notice"
+            message={t("storyEditor.upgradeOffer")}
+            detail={t("storyEditor.upgradeDetail")}
+            actionLabel={t("storyEditor.upgrade")}
+            onAction={runUpgrade}
+          /> : null}
+          {phase === "ready" && upgrade?.web && upgrade.libraryAssets?.length ? <CanvasNotice
+            className="story-upgrade-notice"
+            tone="warning"
+            message={t("storyEditor.libraryMedia", { assets: upgrade.libraryAssets.join(", ") })}
+            actionLabel={t("storyEditor.copyLibraryMedia")}
+            onAction={copyLibraryMedia}
+          /> : phase === "ready" && upgrade?.web && upgrade.upgradedAt ? <CanvasNotice
+            className="story-upgrade-notice"
+            message={t("storyEditor.upgraded")}
+            actionLabel={t("storyEditor.undoUpgrade")}
+            onAction={undoUpgrade}
+            onDismiss={() => void keepUpgrade()}
+          /> : null}
           {phase === "ready" ? (
             <PlayableCanvasContext.Provider value={canvasPlayer}>
               <EditorCanvas<PlayableFlowNode>
@@ -1137,6 +1234,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
         {...(onSendToAgent ? { onSendToAgent } : {})}
         onWriteText={writeText}
         onWriteMove={writeMove}
+        onWriteVideoClip={(expected, source, clip) => writeVideoClip(openedNode.id, expected, source, clip)}
         onAddAsset={async (asset) => {
           const { graph, assetId } = addPlayableNodeAsset(codebase.graph, openedNode.id, asset);
           await writeGraph(graph);
