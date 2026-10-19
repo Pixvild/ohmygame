@@ -23,6 +23,7 @@ import { hasPluginMentionToken, parsePluginMentions, serializePluginMentions } f
 import type { RuntimeEventBus } from "../shared/events.js";
 import type { AgentRuntimeId, ApprovalDecision, ApprovalRequestDetails } from "../shared/agent-runtimes.js";
 import type { StoredConversation } from "./conversations.js";
+import { replayNativeMessages } from "./agent-runtimes/replay.js";
 import {
   ensureOhMyGamePiEnvironment,
   withoutOhMyGameManagedPiPackages,
@@ -2944,7 +2945,8 @@ export async function createPiSession(
   };
   const convertToLlm = session.agent.convertToLlm;
   session.agent.convertToLlm = async (messages) => {
-    const converted = await convertToLlm(messages);
+    // Turns a coding agent ran reach Pi's model as text, not as calls of tools Pi does not have or calls differently.
+    const converted = await convertToLlm(replayNativeMessages(messages));
     return converted.map((message) => message.role === "assistant" ? normalizeAssistantMessage(message) : message);
   };
   installDeepSeekImageFiles(session, agentDir);

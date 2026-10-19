@@ -74,6 +74,11 @@ export interface AgentRuntimeStatus {
   isolateUserConfig: boolean;
   /** The CLI cannot be run fully isolated; part of the person's own configuration still applies. */
   partialIsolation?: boolean;
+  /**
+   * Whether the commands the agent runs are confined by an operating-system
+   * sandbox, beyond OhMyGame's approvals. "none" means approvals alone.
+   */
+  commandSandbox: "os" | "none";
   diagnostics: AgentRuntimeDiagnostic[];
   checkedAt?: string;
 }
@@ -109,6 +114,11 @@ export interface ApprovalRequestDetails {
   reason?: string;
   /** Whether "allow for this conversation" can be offered. */
   canAllowSession: boolean;
+  /**
+   * What "allow for this conversation" covers when that is broader than this
+   * exact request: every use of these commands, or reads in these folders.
+   */
+  sessionScope?: { commands?: string[]; readFolders?: string[] };
 }
 
 export interface AnswerApprovalRequest {

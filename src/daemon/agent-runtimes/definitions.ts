@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import type { AgentRuntimeId } from "../../shared/agent-runtimes.js";
 
 /**
@@ -34,7 +36,7 @@ export const AGENT_RUNTIME_DEFINITIONS: Record<
     name: "Claude Code",
     binaries: ["claude"],
     versionArgs: ["--version"],
-    minimumVersion: "2.1.76",
+    minimumVersion: "2.1.83",
     loginCommand: "claude auth login",
     installUrl: "https://docs.anthropic.com/en/docs/claude-code/setup",
   },
@@ -63,6 +65,31 @@ export const AGENT_RUNTIME_DEFINITIONS: Record<
     installUrl: "https://opencode.ai/docs/",
   },
 };
+
+/**
+ * Codex confines commands with its own sandbox and Claude Code with its
+ * native one (Seatbelt on macOS, bubblewrap on Linux), which OhMyGame turns
+ * on; OpenCode has none. Windows support is not established for either.
+ * Claude Code runs commands unconfined when bubblewrap or socat is missing.
+ */
+export function commandSandbox(
+  id: AgentRuntimeId,
+  platform: NodeJS.Platform = process.platform,
+  onPath: (program: string) => boolean = programOnPath,
+): "os" | "none" {
+  if (id === "opencode-cli") return "none";
+  if (platform === "darwin") return "os";
+  if (platform !== "linux") return "none";
+  return id === "codex-cli" || (onPath("bwrap") && onPath("socat"))
+    ? "os"
+    : "none";
+}
+
+function programOnPath(program: string): boolean {
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .some((folder) => !!folder && existsSync(path.join(folder, program)));
+}
 
 /** The first dotted version number a CLI prints, such as `2.1.301` from `2.1.301 (Claude Code)`. */
 export function parseVersion(output: string): string | undefined {

@@ -18,7 +18,11 @@ import {
 } from "../../shared/agent-runtimes.js";
 import type { SkillCatalogItem } from "../agent.js";
 import type { EffectiveMcpConfig, PluginMcpHost } from "../plugin-mcp-host.js";
-import { AGENT_RUNTIME_DEFINITIONS, versionAtLeast } from "./definitions.js";
+import {
+  AGENT_RUNTIME_DEFINITIONS,
+  commandSandbox,
+  versionAtLeast,
+} from "./definitions.js";
 import {
   privateFolder,
   probeAuth,
@@ -40,7 +44,9 @@ import type { AgentPolicyContext } from "./policy.js";
 import { AgentRuntimeSettingsStore } from "./settings.js";
 import { stagedSkillsRoot } from "./skills.js";
 import { ClaudeCodeDriver } from "./claude-code.js";
-import { CodexAppServer, CodexDriver } from "./codex.js";
+import { CodexAppServer } from "./codex-app-server.js";
+import { CodexDriver } from "./codex.js";
+import { codexServerIdentity } from "./codex-server-pool.js";
 import { OpenCodeDriver } from "./opencode.js";
 
 const STATUS_TTL_MS = 60_000;
@@ -50,7 +56,7 @@ const STATUS_TTL_MS = 60_000;
  * their own planning habits, such as plan files; Pi needs neither line.
  */
 const NATIVE_INSTRUCTIONS =
-  "OhMyGame's own tools (canvas checks, image, video, 3D and audio generation, game playtesting, questionnaire, update_plan and plugin services) come from its ohmygame tool server; your CLI may name them with a prefix such as mcp__ohmygame__ or ohmygame_. In a planning turn, record the plan with update_plan before you finish, rather than writing a plan file or only describing it.";
+  "OhMyGame's own tools (canvas checks, image, video, 3D and audio generation, game playtesting, questionnaire, update_plan and plugin services) come from its ohmygame tool server; your CLI may name them with a prefix such as mcp__ohmygame__ or ohmygame_. In a planning turn, record the plan with update_plan before you finish, rather than writing a plan file or only describing it. The Skills your CLI lists are readable where it lists them, even outside the workspace: read a Skill's files directly when a request calls for it.";
 const MODELS_TTL_MS = 10 * 60_000;
 const MODELS_WAIT_MS = 6_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -144,6 +150,7 @@ export class AgentRuntimeService {
       name: definition.name,
       enabled: settings.enabled,
       isolateUserConfig: settings.isolateUserConfig,
+      commandSandbox: commandSandbox(id),
       ...(id === "codex-cli" && settings.isolateUserConfig
         ? { partialIsolation: true }
         : {}),
@@ -371,6 +378,16 @@ export class AgentRuntimeService {
       ...(pluginTool ? [pluginTool.tool] : []),
     ]);
     const env = await this.#environment(request.runtime, binary.path);
+    // Codex conversations with the same executable, environment and Skills share one app server.
+    const codexServer =
+      request.runtime === "codex-cli"
+        ? await codexServerIdentity(
+            this.#root,
+            binary.path,
+            env,
+            request.skillDirectories,
+          )
+        : undefined;
     const revoke = new Set<() => void>();
     const context = (
       resume: string | undefined,
@@ -387,8 +404,19 @@ export class AgentRuntimeService {
       bridge,
       policy: {
         ...request.policy,
-        readablePaths: [stagedSkillsRoot(request.runtime, folder.path)],
+        // Claude Code runs every command in its sandbox. Codex asks only for
+        // what would leave its sandbox, so its requests are judged strictly.
+        sandboxedCommands:
+          request.runtime === "claude-code-cli" &&
+          commandSandbox(request.runtime) === "os",
+        readablePaths: [
+          stagedSkillsRoot(
+            request.runtime,
+            codexServer?.directory ?? folder.path,
+          ),
+        ],
       },
+      ...(codexServer ? { codexServer } : {}),
       skillDirectories: request.skillDirectories,
       httpBridge: async (handlers) => {
         const registered = this.#registerBridge(bridge, handlers);

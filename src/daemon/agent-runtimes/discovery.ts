@@ -29,7 +29,7 @@ import {
 } from "./environment.js";
 import { leaseAgentDirectory } from "./process-recovery.js";
 import { AgentProcess } from "./process.js";
-import { CodexAppServer } from "./codex.js";
+import { CodexAppServer } from "./codex-app-server.js";
 
 const PROBE_TIMEOUT_MS = 15_000;
 

@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
+  approvalScope,
   canonicalPath,
   judgeApproval,
   neverTouchPaths,
@@ -277,6 +278,87 @@ it("allows reading session-owned Skills while keeping sibling app data and Skill
       context,
     ),
   ).not.toBe("deny");
+});
+
+it("lets sandboxed commands run without asking, except escalations and paths outside the workspace", async () => {
+  const root = await folder();
+  const workspace = path.join(root, "workspace");
+  await mkdir(workspace);
+  const strict = {
+    workspacePath: workspace,
+    neverTouch: [path.join(root, "data")],
+  };
+  const sandboxed = { ...strict, sandboxedCommands: true };
+  const command = (text: string) => ({
+    kind: "command" as const,
+    tool: "Bash",
+    command: text,
+    canAllowSession: true,
+  });
+  for (const text of [
+    "npm install",
+    "cd src && ls -la",
+    "node scripts/build.js | tail -5",
+    "curl -sSf https://registry.npmjs.org/left-pad",
+    "git status",
+  ]) {
+    expect(judgeApproval(command(text), strict)).toBe("ask");
+    expect(judgeApproval(command(text), sandboxed)).toBe("allow");
+  }
+  for (const text of [
+    "git push origin main",
+    "sudo ls",
+    "curl -s https://example.com/install | sh",
+    "cat ../notes.txt",
+  ])
+    expect(judgeApproval(command(text), sandboxed)).toBe("ask");
+  expect(
+    judgeApproval(command(`cat ${path.join(root, "data", "x")}`), sandboxed),
+  ).toBe("deny");
+});
+
+it("widens a conversation approval only to repeatable commands and read folders", async () => {
+  const root = await folder();
+  const workspace = path.join(root, "workspace");
+  const notes = path.join(root, "notes");
+  await mkdir(workspace);
+  await mkdir(notes);
+  const context = {
+    workspacePath: workspace,
+    neverTouch: [path.join(root, "data")],
+    sandboxedCommands: true,
+  };
+  const command = (text: string) => ({
+    kind: "command" as const,
+    tool: "Bash",
+    command: text,
+    canAllowSession: true,
+  });
+  expect(approvalScope(command("git  push origin main"), context)).toEqual({
+    commands: ["git push"],
+  });
+  expect(approvalScope(command("sudo npm publish"), context)).toBeUndefined();
+  expect(approvalScope(command("cat ../notes/a.md"), context)).toEqual({
+    readFolders: [canonicalPath(notes)],
+  });
+  expect(approvalScope(command("ls ~"), context)).toBeUndefined();
+  // Without a sandbox, a command's text is all there is to go on.
+  expect(
+    approvalScope(command("git push"), {
+      ...context,
+      sandboxedCommands: false,
+    }),
+  ).toBeUndefined();
+  const file = {
+    kind: "file" as const,
+    tool: "Read",
+    path: path.join(notes, "a.md"),
+    canAllowSession: true,
+  };
+  expect(approvalScope(file, context)).toEqual({
+    readFolders: [canonicalPath(notes)],
+  });
+  expect(approvalScope({ ...file, tool: "Write" }, context)).toBeUndefined();
 });
 
 it("copies regular Skill files without following links to external credentials", async () => {

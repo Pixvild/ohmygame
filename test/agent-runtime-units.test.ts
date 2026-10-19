@@ -9,6 +9,7 @@ import {
   toolchainRoots,
 } from "../src/daemon/agent-runtimes/environment.js";
 import {
+  commandSandbox,
   parseVersion,
   compareVersions,
   versionAtLeast,
@@ -33,7 +34,11 @@ import {
 } from "../src/daemon/agent-runtimes/policy.js";
 import { ToolBridge } from "../src/daemon/agent-runtimes/tool-bridge.js";
 import { piToolCall } from "../src/daemon/agent-runtimes/driver-context.js";
-import { claudeToolCall } from "../src/daemon/agent-runtimes/claude-code.js";
+import {
+  claudeSandboxSettings,
+  claudeToolCall,
+} from "../src/daemon/agent-runtimes/claude-code.js";
+import type { DriverContext } from "../src/daemon/agent-runtimes/driver-context.js";
 import {
   openCodeToolCall,
   splitModel,
@@ -52,6 +57,26 @@ const policy = {
   workspacePath: workspace,
   neverTouch: neverTouchPaths(path.join(home, "OhMyGame", "data")),
 };
+
+it("requires Claude's sandbox when the policy automatically allows confined commands", () => {
+  for (const sandboxedCommands of [true, false]) {
+    const context: DriverContext = {
+      binaryPath: "/usr/bin/claude",
+      workspacePath: workspace,
+      privateDirectory: path.join(os.tmpdir(), "ohmygame-session"),
+      env: {},
+      isolateUserConfig: true,
+      instructions: "",
+      bridge: new ToolBridge([]),
+      skillDirectories: [],
+      model: "sonnet",
+      policy: { ...policy, sandboxedCommands },
+    };
+    expect(claudeSandboxSettings(context).sandbox.failIfUnavailable).toBe(
+      sandboxedCommands,
+    );
+  }
+});
 
 describe("coding agent approval policy", () => {
   it("lets an agent work in its workspace, even inside OhMyGame's data folder", () => {
@@ -707,5 +732,23 @@ describe("sandboxed toolchains", () => {
     } finally {
       await rm(developer, { recursive: true, force: true });
     }
+  });
+});
+
+describe("command sandbox status", () => {
+  it("reports an OS sandbox only where the CLI confines its commands", () => {
+    expect(commandSandbox("claude-code-cli", "darwin")).toBe("os");
+    expect(commandSandbox("codex-cli", "linux")).toBe("os");
+    expect(commandSandbox("opencode-cli", "darwin")).toBe("none");
+    expect(commandSandbox("claude-code-cli", "win32")).toBe("none");
+    // Claude Code's Linux sandbox needs bubblewrap and socat.
+    expect(commandSandbox("claude-code-cli", "linux", () => true)).toBe("os");
+    expect(
+      commandSandbox(
+        "claude-code-cli",
+        "linux",
+        (program) => program !== "socat",
+      ),
+    ).toBe("none");
   });
 });

@@ -73,7 +73,11 @@ plan mode, cancellation, errors and events are the same code.
   files the earlier agent worked on, the structured plan, and restore notices.
   It asks no model, and private context such
   as file references is left out. Moving back to Pi needs no summary; Pi reads
-  the stored messages.
+  the stored messages. A native turn reaches Pi as text: what the agent said,
+  the tools it used with their arguments, and bounded results. Its tool calls
+  are the CLI's own (Skill, subagents, Codex's path-only `edit`), so replayed
+  as calls they would read as examples of Pi's tools; its reasoning is left
+  out because no other model can verify it.
 
 Terminal approval decisions and native compaction results are custom entries
 in the same session file. Reload restores their history without restoring
@@ -87,7 +91,7 @@ permission grants. No second conversation manager or event database is needed.
 | Codex       | `codex app-server` JSON-RPC; one thread per conversation         | The thread's dynamic tools, answered over the same pipe | App server approval requests                         |
 | OpenCode    | `opencode serve` on loopback with its own password               | Remote MCP on the daemon with a turn token              | `permission.asked` events, answered on the server    |
 
-Each stdin stays open for the session. A CLI that no message has used for ten minutes is stopped; the next message starts a new process that resumes the same native session. Native queue prioritization means
+Each stdin stays open for the session. A CLI that no message has used for ten minutes is stopped; the next message starts a new process that resumes the same native session. Codex conversations with the same executable, environment and staged Skills share one app server, routed by thread; it stops with its last conversation. OpenCode keeps a server per conversation because its MCP servers, and so OhMyGame's tools, are registered for the whole instance. Native queue prioritization means
 **Next**: after the current turn, before ordinary follow-ups. Mid-turn native
 injection is excluded because concurrent file writes cannot provide an
 independent checkpoint before delivery. Processes run in their
@@ -141,7 +145,12 @@ does. `judgeApproval` decides each request first:
   checked like any other.
 - **Ask** the person for paths outside the workspace and other commands,
   including build scripts, interpreters, Git, compound commands, globs and
-  recursive link-following (`grep -R`, `rg -L`). A request
+  recursive link-following (`grep -R`, `rg -L`). Where Claude Code runs its
+  commands in its OS sandbox, which keeps their writes in the workspace and
+  protected folders unreadable, only commands that publish or escalate
+  (`git push`, `npm publish`, `sudo`, `curl … | sh`) and commands naming paths
+  outside the workspace are asked about; installs, builds, Git, pipes and
+  compound commands run. Planning still allows only the simple read commands. A request
   Codex makes to leave its sandbox always asks, because Codex only makes one
   when its sandbox would stop the command.
 
@@ -170,19 +179,30 @@ in the timeline. Stopping the turn denies every request still waiting.
 
 Explicit permission grants show all read/write roots and network access.
 Codex grants only understood concrete paths that were reviewed, for one turn.
-Conversation approvals are cached for the exact request; broad native prefix
-grants are not issued. OpenCode read/edit/search/shell requests are mediated,
+Allowing for the conversation covers the exact request, with two exceptions
+the card names: a sandboxed `git push` or package publish covers that command
+whatever its remote or package, and a read outside the workspace covers its
+folder (never the home folder or the disk root). A sandboxed command naming an
+outside path covers reads in that folder, since its sandbox keeps writes in the
+workspace. Escalations such as `sudo` and `curl … | sh` are asked each time. OpenCode read/edit/search/shell requests are mediated,
 with file patterns resolved from its reported Git root rather than assuming
 that it equals the application workspace. Search metadata identifies the actual
 search directory. Child-session permission requests are admitted only after
 verifying their ancestry through the native API; they cannot be dropped merely
 because their session ID differs from the parent.
 
-These are native permission controls, not a universal OS sandbox. CLIs run as
-the signed-in OS user; hooks and sandbox capabilities differ, and do not
-necessarily mediate every subprocess, plugin or read. Strong confidentiality
-isolation requires a separate process/container sandbox and isolated
-credentials. Shell syntax checks alone cannot provide it.
+Shell syntax checks cannot resolve globs, brace expansion or links, so a
+command a person allows could still name a protected file indirectly. Codex and
+Claude Code therefore also run commands in their own OS sandbox (Seatbelt on
+macOS, bubblewrap on Linux); the settings page says which agents have one.
+When the approval policy relies on that sandbox, Claude Code must stop at
+startup if it cannot enable it; it cannot silently fall back to unconfined
+commands. This requires Claude Code 2.1.83 or newer. Where the required
+dependencies are absent, the strict command approval policy applies instead.
+OpenCode has none, so its approvals are its only boundary. Each CLI's parent
+process runs as the signed-in OS user and is not confined. Strong
+confidentiality isolation requires a separate process/container sandbox and
+isolated credentials.
 
 Codex requires named permission profiles and checks that its app server actually
 activated the requested profile before delivering a prompt. The legacy
@@ -204,10 +224,14 @@ grants. The native `request_permissions` tool is enabled explicitly, with grants
 limited to the current turn. Shell snapshots are off and the shell environment
 is rebuilt from the same allowlist, without CLI authentication tokens.
 
-This enforces Codex command boundaries through its own OS sandbox. It does not
-isolate the CLI parent process, which still needs its sign-in and configuration.
-The callback controls for Claude Code and OpenCode do not offer the same OS
-boundary for arbitrary shell programs a person approves.
+Claude Code's sandbox is turned on through flag settings, which apply whether
+or not the person's own configuration loads. Protected roots are unreadable,
+the workspace and the session's staged Skills stay readable, commands cannot
+opt out of the sandbox, approvals still go through OhMyGame, and the network
+stays available for installs. Package caches live in the session's temporary
+folder, which commands may write. Where the sandbox cannot start (Windows, or
+Linux without bubblewrap and socat), Claude Code runs commands without it and
+the settings page says approvals are the boundary.
 
 ## Environment and isolation
 
@@ -275,15 +299,17 @@ The Provider, media, canvas, checkpoint and plugin code does not change.
 
 ## Compatibility and real acceptance
 
-The tested compatibility floors are Claude Code 2.1.76, Codex
+The tested compatibility floors are Claude Code 2.1.83, Codex
 0.163.0-alpha.10.2 (named permission profiles) and OpenCode 1.18.33. Version checks are protocol floors, not certification of every newer
 release. Claude discovery accepts catalogs from either `initialize` or
 `list_models`; failed/empty catalogs produce a `models-unavailable` diagnostic.
 Being signed in and seeing a model does not guarantee account entitlement.
 
 The direct adapters preserve the installed executable and shared host services.
-Adopting an SDK is useful when it removes transport maintenance while retaining
-hooks, MCP, resume and cancellation; it does not require replacing orchestration.
+The Claude Agent SDK was evaluated and not adopted: it bundles its own Claude
+Code binary (about 268 MB per platform) and each release targets one CLI
+release, while OhMyGame drives the CLI the person installed. See
+[agent-runtimes.md](agent-runtimes.md#runtime-transports-and-compatibility).
 Claude's direct control protocol and Codex's experimental dynamic tools need
 compatibility tests when their CLIs change. A generic Basic CLI adapter is not
 implemented; each new CLI needs discovery, a driver, and acceptance tests.

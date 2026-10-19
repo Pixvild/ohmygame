@@ -421,6 +421,11 @@ export function CodingAgentDetail({
           <p className="settings-detail-hint">
             {t("codingAgents.permissions")}
           </p>
+          <p className="settings-detail-hint">
+            {agent.commandSandbox === "os"
+              ? t("codingAgents.sandboxOs", { name: agent.name })
+              : t("codingAgents.sandboxNone", { name: agent.name })}
+          </p>
           {agent.id === "codex-cli" ? (
             <p className="settings-detail-hint">
               {t("codingAgents.codexReadBoundary")}

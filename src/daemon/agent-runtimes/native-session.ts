@@ -13,6 +13,8 @@ import type {
 import { CHECKPOINT_ENTRY, recordCheckpoint } from "../checkpoint-extension.js";
 import type { CodingSession, SkillCatalogItem } from "../agent.js";
 import { handoffSummary } from "./handoff.js";
+import { NATIVE_API } from "./replay.js";
+import { inside } from "./policy.js";
 
 /** The custom entry that records which native session a conversation's branch continues. */
 export const NATIVE_SESSION_ENTRY = "ohmygame-native-session";
@@ -147,8 +149,6 @@ export interface NativeSessionOptions {
 
 const IDLE_PROCESS_MS = 10 * 60_000;
 
-const NATIVE_API = "ohmygame-native";
-
 /**
  * A conversation run by a coding agent CLI. It keeps the conversation in the
  * same Pi session file as OhMyGame's own agent: every user message, answer
@@ -172,6 +172,7 @@ export class NativeCodingSession implements CodingSession {
   #nativeSessionId?: string;
   #usage?: AgentContextUsage;
   #allowed = new Set<string>();
+  #readFolders: string[] = [];
   #checkpointFailure?: { cause: unknown };
   #disposed = false;
   #idleTimer?: ReturnType<typeof setTimeout>;
@@ -445,16 +446,40 @@ export class NativeCodingSession implements CodingSession {
     signal?: AbortSignal,
   ): Promise<ApprovalDecision> {
     if (signal?.aborted || this.#disposed) return "deny";
-    const key = approvalKey(details);
-    if (this.#allowed.has(key)) return "allow";
+    if (this.#covered(details)) return "allow";
     const decision = await this.options.requestApproval(
       details,
       toolCallId,
       signal,
     );
     if (decision === "allow-session" && details.canAllowSession)
-      this.#allowed.add(key);
+      this.#remember(details);
     return decision;
+  }
+
+  /** Whether the person already allowed this, or all it covers, for the conversation. */
+  #covered(details: ApprovalRequestDetails): boolean {
+    const scope = details.sessionScope;
+    if (!scope) return this.#allowed.has(approvalKey(details));
+    return (
+      (scope.commands ?? []).every((command) =>
+        this.#allowed.has(`command:${command}`),
+      ) &&
+      (scope.readFolders ?? []).every((folder) =>
+        this.#readFolders.some((root) => inside(folder, root)),
+      )
+    );
+  }
+
+  #remember(details: ApprovalRequestDetails): void {
+    const scope = details.sessionScope;
+    if (!scope) {
+      this.#allowed.add(approvalKey(details));
+      return;
+    }
+    for (const command of scope.commands ?? [])
+      this.#allowed.add(`command:${command}`);
+    this.#readFolders.push(...(scope.readFolders ?? []));
   }
 
   emit(event: AgentSessionEvent): void {
@@ -585,6 +610,7 @@ export class NativeCodingSession implements CodingSession {
     this.#handoff = hasMessages(this.sessionManager.getBranch());
     this.#usage = undefined;
     this.#allowed.clear();
+    this.#readFolders = [];
   }
 
   /** Stores a user message after the checkpoint taken for it, as Pi does. False when the snapshot failed. */

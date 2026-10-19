@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ThreadItem } from "../shared/contracts.js";
-import type { ApprovalDecision } from "../shared/agent-runtimes.js";
+import type {
+  ApprovalDecision,
+  ApprovalRequestDetails,
+} from "../shared/agent-runtimes.js";
 import { Terminal } from "./icons.js";
 import { t } from "./i18n.js";
 
@@ -112,8 +115,9 @@ export function ApprovalCard({
             className="settings-secondary-button"
             disabled={submitting}
             onClick={() => void decide("allow-session")}
+            title={sessionScopeTitle(details.sessionScope)}
           >
-            {t("approval.allowSession")}
+            {sessionLabel(details.sessionScope)}
           </button>
         ) : null}
         <button
@@ -148,4 +152,30 @@ export function approvalOutcomeLabel(
     return t("approval.allowedSession", { subject });
   if (item.status === "completed") return t("approval.denied", { subject });
   return t("approval.notAnswered", { subject });
+}
+
+type SessionScope = NonNullable<ApprovalRequestDetails["sessionScope"]>;
+
+/** Names what allowing for the conversation covers when it is more than this request. */
+function sessionLabel(scope: SessionScope | undefined): string {
+  if (scope?.commands?.length && !scope.readFolders?.length)
+    return t("approval.allowSessionCommands", {
+      commands: scope.commands.join(", "),
+    });
+  if (scope?.readFolders?.length && !scope.commands?.length)
+    return t("approval.allowSessionFolders", {
+      folders: scope.readFolders.map(folderName).join(", "),
+    });
+  return t("approval.allowSession");
+}
+
+function sessionScopeTitle(
+  scope: SessionScope | undefined,
+): string | undefined {
+  const folders = scope?.readFolders ?? [];
+  return folders.length ? folders.join("\n") : undefined;
+}
+
+function folderName(folder: string): string {
+  return `${folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder}/`;
 }

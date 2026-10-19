@@ -178,3 +178,29 @@ it("keeps a failed approval request answerable and identifies granted paths in h
     }),
   ).toContain("/reference");
 });
+
+it("names what allowing for the conversation covers", async () => {
+  const render = (
+    sessionScope: NonNullable<(typeof request)["request"]["sessionScope"]>,
+  ) =>
+    act(async () =>
+      root.render(
+        <ApprovalCard
+          request={{
+            ...request,
+            request: { ...request.request, sessionScope },
+          }}
+          waiting={0}
+          onDecide={vi.fn(async () => true)}
+        />,
+      ),
+    );
+  const labels = () =>
+    [...container.querySelectorAll("button")].map(
+      (button) => button.textContent,
+    );
+  await render({ commands: ["git push"] });
+  expect(labels()).toContain("Allow git push for this conversation");
+  await render({ readFolders: ["/Users/me/notes"] });
+  expect(labels()).toContain("Allow reading notes/ for this conversation");
+});

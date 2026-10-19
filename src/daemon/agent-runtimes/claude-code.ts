@@ -24,7 +24,8 @@ import {
   type DriverContext,
 } from "./driver-context.js";
 import { stageSkills, stagedSkillsRoot } from "./skills.js";
-import { judgeApproval } from "./policy.js";
+import { canonicalPath, judgeApproval } from "./policy.js";
+import { sessionCaches } from "./environment.js";
 import { NativeSessionExpiredError } from "./native-session.js";
 
 const CONTROL_TIMEOUT_MS = 30_000;
@@ -194,7 +195,11 @@ export class ClaudeCodeDriver implements NativeDriver {
           binaryPath: this.context.binaryPath,
           args,
           cwd: this.context.workspacePath,
-          env: { ...this.context.env, ...FOREGROUND_ONLY },
+          env: {
+            ...this.context.env,
+            ...FOREGROUND_ONLY,
+            ...sessionCaches(commandTemporary(this.context)),
+          },
           processDirectory: this.context.processDirectory,
           onLine: (line) => this.#receive(line),
           onExit: (code, signal, stderr) =>
@@ -243,6 +248,9 @@ export class ClaudeCodeDriver implements NativeDriver {
     if (context.reasoningLevel) args.push("--effort", context.reasoningLevel);
     if (context.isolateUserConfig)
       args.push("--setting-sources", "", "--strict-mcp-config");
+    // Flag settings apply whichever sources load, so the sandbox holds with the person's own configuration too.
+    await mkdir(commandTemporary(context), { recursive: true, mode: 0o700 });
+    args.push("--settings", JSON.stringify(claudeSandboxSettings(context)));
     if (context.skillDirectories.length) {
       // Skills reach Claude Code as a plugin of this session's own.
       const skills = stagedSkillsRoot(
@@ -660,7 +668,10 @@ export class ClaudeCodeDriver implements NativeDriver {
       // run the read commands the policy allows without asking, and no other.
       const readCommand =
         tool === "Bash" &&
-        judgeApproval(details, this.context.policy) === "allow";
+        judgeApproval(details, {
+          ...this.context.policy,
+          sandboxedCommands: false,
+        }) === "allow";
       return readCommand
         ? { decision: "allow", reason: "Approved by OhMyGame" }
         : {
@@ -730,6 +741,52 @@ const CLAUDE_OWN_TOOLS = new Set([
 
 /** File tools a planning turn may use; the shared policy still checks their paths. */
 const CLAUDE_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS"]);
+
+/**
+ * Claude Code's own sandbox confines the commands it runs at the operating
+ * system level: what the shell-text policy cannot see, such as a glob or a
+ * workspace link that resolves into a protected folder, is refused by the
+ * OS. Protected roots are unreadable; the workspace and this session's
+ * staged Skills stay readable even when they lie inside one, and writes keep
+ * the sandbox's default of the workspace and temporary files. Commands
+ * cannot opt out, and OhMyGame still decides which ones run. Where the
+ * sandbox is not available, such as Linux without bubblewrap, the strict
+ * approval policy applies. When the policy relies on confinement, startup
+ * must fail instead of silently running commands without it.
+ */
+/** Where sandboxed commands keep package caches, in the session's private folder. */
+function commandTemporary(context: DriverContext): string {
+  return path.join(context.privateDirectory, "tmp");
+}
+
+export function claudeSandboxSettings(context: DriverContext): {
+  sandbox: Record<string, unknown>;
+} {
+  const workspace = canonicalPath(context.workspacePath);
+  const temporary = canonicalPath(commandTemporary(context));
+  return {
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: context.policy.sandboxedCommands === true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      filesystem: {
+        denyRead: context.policy.neverTouch
+          .map(canonicalPath)
+          .filter((root) => root !== workspace),
+        allowRead: [
+          workspace,
+          temporary,
+          ...(context.policy.readablePaths ?? []).map(canonicalPath),
+        ],
+        // Installs fill the package caches; those in the home folder are not writable here.
+        allowWrite: [temporary],
+      },
+      // Builds and installs need the network, as they do for OhMyGame's own agent.
+      network: { allowedDomains: ["*"] },
+    },
+  };
+}
 
 function userMessage(input: NativeTurnInput): Record<string, unknown> {
   return {

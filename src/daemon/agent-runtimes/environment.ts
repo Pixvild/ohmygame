@@ -214,6 +214,19 @@ export function toolchainRoots(
 }
 
 /**
+ * Package caches kept in a session's temporary folder: the home folder's
+ * caches are outside the folders a sandboxed command may write.
+ */
+export function sessionCaches(temporary: string): Record<string, string> {
+  return {
+    XDG_CACHE_HOME: path.join(temporary, "cache"),
+    npm_config_cache: path.join(temporary, "npm-cache"),
+    BUN_INSTALL_CACHE_DIR: path.join(temporary, "bun-cache"),
+    YARN_CACHE_FOLDER: path.join(temporary, "yarn-cache"),
+  };
+}
+
+/**
  * The PATH for sandboxed commands. On macOS the /usr/bin shims for git,
  * python3 and make go through xcrun, which writes a cache to the system
  * temporary folder that a sandbox does not let commands write; the

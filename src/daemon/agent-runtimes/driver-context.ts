@@ -3,7 +3,11 @@ import type {
   ApprovalRequestDetails,
 } from "../../shared/agent-runtimes.js";
 import type { NativeToolResult, NativeTurnSink } from "./native-session.js";
-import { judgeApproval, type AgentPolicyContext } from "./policy.js";
+import {
+  approvalScope,
+  judgeApproval,
+  type AgentPolicyContext,
+} from "./policy.js";
 import type { ToolBridge } from "./tool-bridge.js";
 
 /** Why a planning turn refused a request, so the agent can adjust instead of stopping. */
@@ -38,6 +42,8 @@ export interface DriverContext {
   contextWindow?: number;
   /** The native session to continue, if the conversation has one. */
   resume?: string;
+  /** The pooled Codex app server this conversation shares with others of the same configuration. */
+  codexServer?: { key: string; directory: string };
 }
 
 export interface HttpBridgeHandlers {
@@ -64,7 +70,13 @@ export async function decideApproval(
   const verdict = judgeApproval(details, context.policy);
   if (verdict === "allow") return "allow";
   if (verdict === "deny") return "deny";
-  return sink.requestApproval(details, options);
+  const sessionScope = details.canAllowSession
+    ? approvalScope(details, context.policy)
+    : undefined;
+  return sink.requestApproval(
+    sessionScope ? { ...details, sessionScope } : details,
+    options,
+  );
 }
 
 /** Stores what a bridged OhMyGame tool returned, so its record keeps the artifact and not just MCP's text. */

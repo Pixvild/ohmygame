@@ -147,6 +147,11 @@ notices. Exclude private prompt context and do not make another model call.
 An explicitly expired/not-found native resume receives one fresh-context retry,
 without appending the user message twice. Other failures remain visible.
 Moving back to Pi uses the shared messages; native hidden state is not imported.
+Native turns are replayed to Pi as text (`replay.ts`): the agent's words, each
+tool it used with bounded arguments, and bounded results, merged per turn,
+without reasoning. Replaying them as tool calls taught Pi the CLI's tool names
+and argument shapes; in a probe the text form made the next Pi turn call no
+foreign tools and cut the replayed history by about a third.
 
 ## Checkpoints, queues, and cancellation
 
@@ -164,7 +169,14 @@ of claiming steering parity across CLIs.
 
 A CLI idle for ten minutes is stopped and its replacement resumes the ready
 native session with the next message, so open conversations do not each keep
-a process. Check abort before spawning and again before delivery. Interrupt waits are
+a process. Codex conversations with the same executable, environment and
+staged Skills share one app server, routed by thread: thread configuration,
+permission profiles, dynamic tools and turns are per thread, and Skill roots
+are the one server-wide setting. A conversation that leaves interrupts its
+own turn and releases the server, which stops with the last. OpenCode keeps
+one server per conversation: it registers MCP servers for the whole instance,
+so a shared server would offer every conversation the others' OhMyGame tools,
+and its configuration is per process. Check abort before spawning and again before delivery. Interrupt waits are
 bounded and fall back to stopping the process group. A turn must settle on
 spawn failure, close, transport loss, timeout, and cancellation, including
 startup races. Ignore late callbacks/results after settlement.
@@ -180,15 +192,19 @@ group; it is not an OS-wide process supervisor or resource scheduler.
 
 | Runtime     | Interactive transport and tools                                                        | Tested protocol floor |
 | ----------- | -------------------------------------------------------------------------------------- | --------------------- |
-| Claude Code | Long-lived stream-json stdin/stdout; control requests and MCP tool callbacks           | 2.1.76                |
+| Claude Code | Long-lived stream-json stdin/stdout; control requests and MCP tool callbacks           | 2.1.83                |
 | Codex       | App Server JSON-RPC; native `dynamicTools`, approval responses, thread/turn lifecycle  | 0.163.0-alpha.10.2    |
 | OpenCode    | Private authenticated loopback `serve`; HTTP requests, SSE events, daemon MCP endpoint | 1.18.33               |
 
 These are tested capability floors, not certification of all later releases.
 Check required capabilities and refuse unsafe fallbacks. Direct protocols keep
-the installed executable and avoid introducing SDK dependencies now. Prefer an
-SDK later if it removes maintenance while preserving hooks, permissions, MCP,
-resume, and cancellation; no separate SDK architecture is needed.
+the installed executable. The Claude Agent SDK was evaluated (0.3.302) and not
+adopted: its platform package bundles a full Claude Code binary of about
+268 MB per platform, it adds three peer dependencies, and each SDK release is
+built for one CLI release, while OhMyGame drives whichever supported CLI the
+person installed. Reconsider when the SDK can drive an installed CLI across a
+version range without its bundled binary; a driver's transport can change
+without changing orchestration or persistence.
 
 Claude's permission controls use both `PreToolUse` and `can_use_tool`; validate
 control callbacks, planning restrictions, and allowed MCP calls. Planning runs in
@@ -257,6 +273,13 @@ custom CLI credential roots, and denies direct requests for credential homes,
 OhMyGame data, other projects, or ancestors that expose them. Workspace file
 operations and a small set of simple read commands may proceed; external paths,
 builds, interpreters, Git, compound commands, and unknown scopes need approval.
+A runtime whose commands all run in its OS sandbox (`sandboxedCommands`, Claude
+Code where its sandbox starts) asks only for commands that publish or escalate
+and for paths outside the workspace; planning keeps the strict rule. Codex's
+requests are escalations out of its sandbox and keep the strict rule too.
+`approvalScope` widens a conversation approval only to a repeatable publish
+(`git push`, `npm publish`) and to read folders, and only where writes stay
+confined.
 Globs, brace expansion, and recursive link-following options (`grep -R`,
 `rg -L`, `ls -LR`) are unknown scopes: they reach paths the command text does
 not name. A native agent's own tools that touch no file and run no command,
@@ -265,13 +288,19 @@ run without approval; their subagents' tool calls are still checked.
 Explicit permission grants must contain understood, concrete roots; reject
 root-filesystem grants, globs, unknown forms, and protected paths.
 
-This policy is not universal OS isolation. Codex command execution has a native
-OS sandbox with minimal runtime/workspace/private-temp/Skill access and
-explicit protected-root denials. Its parent process still uses native auth and
-configuration. Claude/OpenCode callback controls cannot guarantee confinement
-of arbitrary approved programs, plugins, or subprocesses. Shell text inspection
-alone is heuristic. Strong credential confidentiality across all runtimes
-requires a separate sandbox and isolated credentials; that is deferred work.
+This policy decides what to ask about; an OS sandbox is the boundary behind
+it. Codex command execution has a native OS sandbox with minimal
+runtime/workspace/private-temp/Skill access and explicit protected-root
+denials. Claude Code's commands run in its native sandbox (Seatbelt on macOS,
+bubblewrap on Linux), enabled through flag settings: protected roots are
+unreadable, the workspace and staged Skills stay readable, commands cannot opt
+out, and the network stays open for installs. Where it cannot start, Claude
+runs commands under the approvals alone. OpenCode has no command sandbox, and
+its status and settings say so. Each runtime reports `commandSandbox` as `os`
+or `none`; Windows is `none` until established. The CLI parent processes still
+use their native auth and configuration, and sandboxes do not cover every
+plugin or MCP server a person adds. Strong credential confidentiality across
+all runtimes needs isolated credentials as well; that is deferred work.
 
 Build the child environment from an allowlist: PATH, HOME, locale, temp,
 proxy/certificate settings, and the runtime's own configuration directories.
