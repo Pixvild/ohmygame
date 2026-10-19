@@ -709,6 +709,7 @@ body {
   overflow: auto;
   padding: 0 40px 48px;
   scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
@@ -2885,6 +2886,7 @@ button.home-nav-item-active:hover {
   overflow: auto;
   padding: 161px 32px 44px;
   scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
@@ -2929,6 +2931,7 @@ button.home-nav-item-active:hover {
   overflow: auto;
   padding: 0 36px 48px;
   scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
