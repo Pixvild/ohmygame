@@ -47,7 +47,7 @@ import {
   type ConversationSummary,
   type ProjectRunSettings,
   type ProjectFileOpenMode,
-  type ProjectAgentActivity,
+  type ProjectActivitySnapshot,
   type ProjectCoverMode,
   type ProjectCoverState,
   type ProjectState,
@@ -189,7 +189,7 @@ export async function listProjects(): Promise<ProjectState[]> {
   return request("/projects");
 }
 
-export async function listProjectActivity(signal?: AbortSignal): Promise<ProjectAgentActivity[]> {
+export async function listProjectActivity(signal?: AbortSignal): Promise<ProjectActivitySnapshot> {
   return request("/projects/activity", { signal });
 }
 
@@ -407,6 +407,15 @@ export async function getVolcengineTtsSettings(): Promise<{ configured: boolean;
 
 export async function updateVolcengineTtsApiKey(apiKey: string): Promise<{ configured: boolean; defaultVoiceId?: string }> {
   const result = await request<{ configured: boolean; defaultVoiceId?: string }>("/settings/models/providers/volcengine-tts", {
+    method: "PUT",
+    body: JSON.stringify({ apiKey }),
+  });
+  notifyAgentModelsChanged();
+  return result;
+}
+
+export async function updateVolcengineSeedAudioApiKey(apiKey: string): Promise<{ configured: boolean }> {
+  const result = await request<{ configured: boolean }>("/settings/models/providers/volcengine-seed-audio", {
     method: "PUT",
     body: JSON.stringify({ apiKey }),
   });
