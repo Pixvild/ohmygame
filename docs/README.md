@@ -65,6 +65,9 @@ are `test/checkpoints.test.ts`, `test/turn-checkpoints.test.ts`,
 | [desktop-releases.md](desktop-releases.md)       | Maintainer packaging, signing, update feeds, publishing, and rollback.                                                         |
 | [ui-languages.md](ui-languages.md)               | Renderer translations, language selection, what stays in English, and terminology.                                             |
 
+[Video trimming](video-trimming.md) covers Library and Asset Canvas video
+trimming, the shared preview controls, encoding, and the Library record.
+
 [Playable Nodes](playable-nodes/README.md) has its own vocabulary and index:
 [runtime](playable-nodes/runtime.md) is the node contract,
 [authoring](playable-nodes/authoring.md) describes the editor, and
