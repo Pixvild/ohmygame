@@ -14,6 +14,7 @@ import type {
   AgentRuntimeId,
   AgentRuntimeStatus,
 } from "../shared/agent-runtimes.js";
+import type { AgentModel } from "../shared/contracts.js";
 import {
   listAgentRuntimes,
   loginAgentRuntime,
@@ -41,9 +42,12 @@ const PERMISSION_OPTIONS: readonly {
  * its sign-in and a switch that offers its models in the model picker.
  */
 export function CodingAgentsGroup({
+  models,
   defaultAgent,
   onOpen,
 }: {
+  /** Model probes can also report fresh account limits; reload status when they finish. */
+  models?: readonly AgentModel[];
   /** The agent whose model new conversations start with, if it is a CLI. */
   defaultAgent?: AgentRuntimeId;
   onOpen: (id: AgentRuntimeId) => void;
@@ -72,7 +76,7 @@ export function CodingAgentsGroup({
       window.removeEventListener(MODELS_CHANGED_EVENT, load);
       window.removeEventListener("focus", load);
     };
-  }, []);
+  }, [models]);
   async function toggle(
     agent: AgentRuntimeStatus,
     enabled: boolean,
