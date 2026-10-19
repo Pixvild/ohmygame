@@ -3872,7 +3872,9 @@ button.home-nav-item-active:hover {
   position: fixed;
   z-index: 50;
   display: grid;
-  width: 108px;
+  width: max-content;
+  min-width: 108px;
+  max-width: min(260px, calc(100vw - 16px));
   padding: 4px;
   overflow: hidden;
   border: 0;
@@ -3901,6 +3903,16 @@ button.home-nav-item-active:hover {
 }
 .project-card-actions-menu .project-card-actions-delete {
   color: #ff6b62;
+}
+.project-card-actions-menu button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.project-card-folder-error {
+  margin: 4px 8px;
+  color: #ff6b62;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 .project-card-actions-menu
   .project-card-actions-delete:is(:hover, :focus-visible) {
