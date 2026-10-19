@@ -192,7 +192,7 @@ group; it is not an OS-wide process supervisor or resource scheduler.
 
 | Runtime     | Interactive transport and tools                                                        | Tested protocol floor |
 | ----------- | -------------------------------------------------------------------------------------- | --------------------- |
-| Claude Code | Long-lived stream-json stdin/stdout; control requests and MCP tool callbacks           | 2.1.76                |
+| Claude Code | Long-lived stream-json stdin/stdout; control requests and MCP tool callbacks           | 2.1.83                |
 | Codex       | App Server JSON-RPC; native `dynamicTools`, approval responses, thread/turn lifecycle  | 0.163.0-alpha.10.2    |
 | OpenCode    | Private authenticated loopback `serve`; HTTP requests, SSE events, daemon MCP endpoint | 1.18.33               |
 

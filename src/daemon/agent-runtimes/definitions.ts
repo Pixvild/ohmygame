@@ -36,7 +36,7 @@ export const AGENT_RUNTIME_DEFINITIONS: Record<
     name: "Claude Code",
     binaries: ["claude"],
     versionArgs: ["--version"],
-    minimumVersion: "2.1.76",
+    minimumVersion: "2.1.83",
     loginCommand: "claude auth login",
     installUrl: "https://docs.anthropic.com/en/docs/claude-code/setup",
   },
