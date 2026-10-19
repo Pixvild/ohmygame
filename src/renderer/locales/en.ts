@@ -1326,6 +1326,8 @@ const en = {
     attachFilesHint: "Add files to this message",
     design: "Reference game design",
     designHint: "Use the saved design document",
+    publish: "Publish game",
+    publishHint: "Publish your game and get a share link",
     trigger: "Add context or attach files",
     label: "Add context",
     noMatch: "No matching items",

@@ -45,6 +45,7 @@ import { AssetToolbar, WorkspaceAssetCard, WorkspaceAssetDialog, fileName, filte
 import { ProjectAssetCollectionFilters } from "./library-filters.js";
 import { ProjectRenameDialog } from "./project-rename-dialog.js";
 import { HighlightedCode } from "./highlighted-code.js";
+import { MarkdownContent } from "./markdown-content.js";
 import { PublishDialog, type PublishDetails } from "./publish-dialog.js";
 import { ProjectSettingsDialog } from "./project-settings-dialog.js";
 import { AssetMedia } from "./asset-gallery.js";
@@ -1075,6 +1076,7 @@ export function WorkspaceFileBrowser({
               : selectedFile.binary
               ? <WorkspaceState label={t("workspace.binaryUnavailable")} />
               : renderFile ? renderFile(selectedFile)
+              : isMarkdownFile(selectedFile.path) ? <MarkdownContent text={selectedFile.content ?? ""} onOpenWorkspaceFile={onSelect} />
               : <HighlightedCode path={selectedFile.path} content={selectedFile.content ?? ""} />}
           </>
         ) : <WorkspaceState icon={<FolderOpen size={20} />} label={t("workspace.selectFile")} />}
@@ -1381,6 +1383,11 @@ interface MutableWorkspaceFileNode {
   path?: string;
   directory?: true;
   children: Map<string, MutableWorkspaceFileNode>;
+}
+
+function isMarkdownFile(path: string): boolean {
+  const ext = path.split(".").at(-1)?.toLocaleLowerCase();
+  return ext === "md" || ext === "markdown";
 }
 
 export function workspaceFileTree(files: readonly WorkspaceFile[]): WorkspaceFileNode[] {

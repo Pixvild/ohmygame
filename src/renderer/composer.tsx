@@ -53,6 +53,8 @@ interface ComposerProps {
   /** Editor context the next message carries, such as the open Node. */
   contexts?: ChatContextChip[];
   onRemoveContext?: (key: string) => void;
+  canPublish?: boolean;
+  onPublish?: () => void;
 }
 
 export function Composer({
@@ -87,6 +89,8 @@ export function Composer({
   onEditPending,
   contexts = [],
   onRemoveContext,
+  canPublish,
+  onPublish,
 }: ComposerProps) {
   const [draftSession] = useState(() => composerDrafts.get(
     projectId && conversationId ? { projectId, conversationId } : undefined,
@@ -285,10 +289,12 @@ export function Composer({
     onDesignReference: supportsDesign ? () => { void referenceDesign(); } : undefined,
     onTogglePlanning: () => { void togglePlanning(false); },
     onCompact: conversationReady && !running && !stopping && !selectedSkill && !selectedPlugin ? () => { void runCompact(compactInstructions(prompt) ?? undefined); } : undefined,
+    onPublish,
     onMention: selectMention,
     onChange: changePrompt,
     onSelectionChange: setMentionCursor,
     contextPercent,
+    canPublish,
   });
 
   useEffect(() => {

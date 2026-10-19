@@ -1291,6 +1291,8 @@ const zhCN: typeof en = {
     attachFilesHint: "为这条消息添加文件",
     design: "引用游戏设计",
     designHint: "使用已保存的设计文档",
+    publish: "发布游戏",
+    publishHint: "发布你的游戏并获取分享链接",
     trigger: "添加上下文或文件",
     label: "添加上下文",
     noMatch: "没有匹配的项目",
