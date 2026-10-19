@@ -14382,6 +14382,21 @@ button {
   flex: 1;
 }
 
+.file-content-markdown {
+  flex: 1;
+  min-height: 0;
+  padding: 20px 28px;
+  overflow: auto;
+}
+
+.file-content-markdown img {
+  max-width: 100%;
+}
+
+.file-content-markdown-image {
+  color: var(--text-muted);
+}
+
 .assets-view {
   display: flex;
   flex: 1;

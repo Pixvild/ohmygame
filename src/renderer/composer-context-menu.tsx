@@ -12,7 +12,7 @@ interface ContextMenuItem {
   label: string;
   description: string;
   source?: string;
-  command?: "plan" | "compact";
+  command?: "plan" | "compact" | "publish";
   action?: ContextAction;
   mention?: ComposerMention;
 }
@@ -30,7 +30,7 @@ export function composerContextItems({ capabilities, query, planning, canToggleP
   const actions: ContextMenuItem[] = query?.trigger === "$" ? [] : query?.trigger === "/" ? [
     ...(canTogglePlanning ? [{ id: "plan", command: "plan" as const, section: "Commands" as const, label: t("planMode.mode"), description: planning ? t("planMode.turnOff") : t("planMode.turnOn"), action: "plan" as const }] : []),
     ...(showCompact ? [{ id: "compact", command: "compact" as const, section: "Commands" as const, label: t("planMode.compact"), description: `${t("planMode.compactHint")}${contextPercent === undefined ? "" : t("planMode.full", { percent: contextPercent })}`, action: "compact" as const }] : []),
-    ...(canPublish ? [{ id: "publish", section: "Commands" as const, label: t("contextMenu.publish"), description: t("contextMenu.publishHint"), action: "publish" as const }] : []),
+    ...(canPublish ? [{ id: "publish", command: "publish" as const, section: "Commands" as const, label: t("contextMenu.publish"), description: t("contextMenu.publishHint"), action: "publish" as const }] : []),
   ] : [
     { id: "files", section: "Add", label: t("contextMenu.attachFiles"), description: t("contextMenu.attachFilesHint"), action: "files" },
     ...(supportsDesign ? [{ id: "design", section: "Add" as const, label: t("contextMenu.design"), description: t("contextMenu.designHint"), action: "design" as const }] : []),
