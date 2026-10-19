@@ -268,7 +268,8 @@ A native language model is not an image, video, or 3D model.
 Approvals ship with each adapter, including exact command/path/access/network
 information and `allow`, `allow-session`, or `deny`. Keep terminal outcomes in
 the timeline; deny pending requests on stop and allow retry after an HTTP error.
-Cache conversation grants only for the exact request. Do not issue broad native
+Cache conversation grants in OhMyGame, widening them only to the reviewed
+command or read-folder scope shown on the card. Do not issue broad native
 command-prefix grants.
 
 The shared policy resolves symlinks and missing descendants, accounts for
@@ -302,8 +303,10 @@ runtime/workspace/private-temp/Skill access and explicit protected-root
 denials. Claude Code's commands run in its native sandbox (Seatbelt on macOS,
 bubblewrap on Linux), enabled through flag settings: protected roots are
 unreadable, the workspace and staged Skills stay readable, commands cannot opt
-out, and the network stays open for installs. Where it cannot start, Claude
-runs commands under the approvals alone. OpenCode has no command sandbox, and
+out, and the network stays open for installs. Hosts without the required
+sandbox dependencies use the strict approval policy. When approvals rely on
+the sandbox, startup must fail if it cannot initialize; Claude cannot fall
+back to unconfined commands. OpenCode has no command sandbox, and
 its status and settings say so. Each runtime reports `commandSandbox` as `os`
 or `none`; Windows is `none` until established. The CLI parent processes still
 use their native auth and configuration, and sandboxes do not cover every
