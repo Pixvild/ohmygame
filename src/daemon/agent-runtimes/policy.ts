@@ -169,11 +169,8 @@ export function canonicalPath(value: string): string {
 const RISKY_COMMAND =
   /(^|[\s;&|(])(sudo|su|doas|git\s+push|npm\s+publish|pnpm\s+publish|yarn\s+publish|security|launchctl|crontab|chmod\s+-R\s+777|curl[^|]*\|\s*(sh|bash|zsh)|wget[^|]*\|\s*(sh|bash|zsh))\b/;
 
-/** Places commands may name without the person being asked: temporary files and installed programs. */
+/** Installed programs commands may name without the person being asked. Shared temporary folders are outside the workspace. */
 const SAFE_OUTSIDE = [
-  os.tmpdir(),
-  "/tmp",
-  "/private/tmp",
   "/dev/null",
   "/usr",
   "/bin",
