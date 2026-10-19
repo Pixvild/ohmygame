@@ -60,11 +60,18 @@ const policy = {
 
 it("requires Claude's sandbox when the policy automatically allows confined commands", () => {
   for (const sandboxedCommands of [true, false]) {
-    const context = {
+    const context: DriverContext = {
+      binaryPath: "/usr/bin/claude",
       workspacePath: workspace,
       privateDirectory: path.join(os.tmpdir(), "ohmygame-session"),
+      env: {},
+      isolateUserConfig: true,
+      instructions: "",
+      bridge: new ToolBridge([]),
+      skillDirectories: [],
+      model: "sonnet",
       policy: { ...policy, sandboxedCommands },
-    } as DriverContext;
+    };
     expect(claudeSandboxSettings(context).sandbox.failIfUnavailable).toBe(
       sandboxedCommands,
     );
