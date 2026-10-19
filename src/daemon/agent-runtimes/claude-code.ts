@@ -753,8 +753,9 @@ const CLAUDE_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS"]);
  * staged Skills stay readable even when they lie inside one, and writes keep
  * the sandbox's default of the workspace and temporary files. Commands
  * cannot opt out, and OhMyGame still decides which ones run. Where the
- * sandbox cannot start, such as Linux without bubblewrap, Claude runs the
- * command under OhMyGame's approvals alone rather than failing the turn.
+ * sandbox is not available, such as Linux without bubblewrap, the strict
+ * approval policy applies. When the policy relies on confinement, startup
+ * must fail instead of silently running commands without it.
  */
 /** Where sandboxed commands keep package caches, in the session's private folder. */
 function commandTemporary(context: DriverContext): string {
@@ -769,7 +770,7 @@ export function claudeSandboxSettings(context: DriverContext): {
   return {
     sandbox: {
       enabled: true,
-      failIfUnavailable: false,
+      failIfUnavailable: context.policy.sandboxedCommands === true,
       autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       filesystem: {
