@@ -24,11 +24,15 @@ detail page signs in, checks again, chooses the executable, and decides whether
 the person's own CLI configuration applies.
 
 The model picker lists each agent's models in a group named after the agent.
+Each CLI group shows its brand icon; the conversation's model button keeps the
+same icon beside the selected model name.
 Choosing one runs the conversation on that agent. A model reference names both:
 its provider is the agent's ID (`claude-code-cli`, `codex-cli`, `opencode-cli`),
 its ID is the agent's own model name, such as `sonnet` or
 `anthropic/claude-sonnet-5`. The `-cli` suffix keeps these apart from Pi
 providers of the same name; Pi has its own `opencode` provider.
+
+![Agent brand icons in the model picker and composer (sample data)](assets/model-selector-agent-icons.png)
 
 `GET /models` lists Pi's models only, for canvas text and other one-off
 generation. Conversation pickers ask for `GET /models?runtimes=1`, which adds

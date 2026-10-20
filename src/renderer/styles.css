@@ -12802,6 +12802,22 @@ button {
   font-size: 10px;
 }
 
+.model-selector-agent-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  vertical-align: -2px;
+}
+
+.model-selector-agent-icon.is-monochrome {
+  filter: invert(1);
+}
+
+.model-selector-provider-name .model-selector-agent-icon {
+  margin-right: 6px;
+}
+
 .model-selector-name {
   min-width: 0;
   overflow: hidden;
@@ -15521,6 +15537,10 @@ button {
 
 :root[data-appearance="light"] .settings-provider-mark.is-monochrome {
   background: #2d2d2d;
+}
+
+:root[data-appearance="light"] .model-selector-agent-icon.is-monochrome {
+  filter: none;
 }
 
 :root[data-appearance="light"]
