@@ -275,6 +275,6 @@ function ComposerContextMenu({ id, menuRef, items, selected, onSelect, onHover, 
         <small>{item.description}</small>
       </button>
     </Fragment>) : <div className="composer-context-menu-empty" role="status">{t("contextMenu.noMatch")}</div>}
-    {usageLimits?.length ? <div className="composer-context-menu-usage" role="status" aria-label={t("agentUsage.title")}><AgentUsageInline limits={usageLimits} /></div> : null}
+    {usageLimits?.length ? <div className="composer-context-menu-usage" role="status" aria-label={t("agentUsage.title")}><AgentUsageInline limits={usageLimits} compact /></div> : null}
   </div>;
 }
