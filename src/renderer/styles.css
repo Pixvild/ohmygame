@@ -2443,6 +2443,10 @@ select.settings-search-input {
   line-height: 16px;
 }
 
+.coding-agent-executable-path {
+  overflow-wrap: anywhere;
+}
+
 .settings-detail-status-copy strong {
   color: var(--text);
   font-size: 13px;
