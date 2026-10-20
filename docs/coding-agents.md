@@ -52,7 +52,8 @@ rather than being inferred from token totals.
 An account's quota windows show in **Settings → Agents**: a bar per window in
 each agent's row (5-hour, weekly), labeled as used. The detail page adds reset
 times. In a conversation they stay out of the composer and appear only
-under the commands when `/` is typed. A conversation shows the account's latest
+under the commands when `/` is typed, with compact percentages and a tooltip
+on each window stating the share used. A conversation shows the account's latest
 report, so it has them before its own first turn. Codex reports them whenever its
 models are checked and while it works; Claude Code reports them during a
 conversation (its `rate_limit_event`), so they appear after its first one.
@@ -61,6 +62,8 @@ reset time has passed shows as empty. OpenCode bills each model provider and
 has no quota of its own.
 
 ![Claude Code and Codex quotas labeled as used (sample data)](assets/agent-usage-used-label.png)
+
+![Compact quota percentages in the slash menu (sample data)](assets/agent-usage-compact.png)
 
 ![Codex conversation with a denied read, a cancelled turn, and Medium effort selected](assets/coding-agent-native-effort.png)
 
