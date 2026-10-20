@@ -80,6 +80,37 @@ has no quota of its own.
 
 ![Codex conversation with a denied read, a cancelled turn, and Medium effort selected](assets/coding-agent-native-effort.png)
 
+## Codex as an image provider
+
+**Providers & Models → Codex CLI** exposes one image entry, **Codex Image**,
+using the installed CLI and its saved sign-in. Its image switch is independent
+of the Codex conversation-agent switch in Agents. Any chat agent can use it
+through `generate_image`; canvas image nodes and global/project image defaults
+use the same provider. Closing a terminal does not disconnect the provider.
+
+![Codex Image selected in the asset canvas](assets/codex-image-canvas.png)
+
+Discovery asks `modelProvider/capabilities/read` without submitting a model
+turn. Missing CLI, signed-out accounts, unsupported capability probes and
+unavailable image backends keep the provider entry visible with a diagnostic,
+but offer no image model. **Check again** refreshes sign-in and capabilities.
+Capability detection does not guarantee account entitlement; generation failures
+are reported without switching providers or automatically retrying inference.
+
+Each generation starts its own ephemeral app-server thread, with no OhMyGame
+dynamic tools, external MCP servers, shell tools or subagents. The process is
+started on demand and stopped on completion, failure or cancellation. Multiple
+reference images are passed in order as inline image inputs, without staging
+reference files; the app's shared 16-image limit applies. Codex manages the
+actual image model and dimensions, so the canvas hides resolution and
+aspect-ratio controls for this provider. Built-in Codex chat generation remains
+a separate native path; the image provider does not force a Codex chat to stop
+using its own tools.
+
+Validation includes simulated canvas-to-Library generation, image-toggle
+persistence, failure/cancellation fixtures, and a real image generation with
+Codex 0.163.0-alpha.10.2 on macOS while its conversation agent was disabled.
+
 ## What OhMyGame keeps
 
 A coding agent session (`NativeCodingSession`) implements the same
@@ -332,7 +363,8 @@ back to the defaults. Credentials remain in the CLI's own store.
 | `POST /projects/:p/conversations/:c/approvals/:requestId` | Answer an approval request: `allow`, `allow-session` or `deny`         |
 
 Status and models are probed only when asked for and cached by executable
-signature; choosing Pi never starts a CLI.
+signature. Conversation model discovery does not start disabled CLIs; the
+image catalog independently probes Codex when checking image providers.
 
 ## Adding an agent
 
