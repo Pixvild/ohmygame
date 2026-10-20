@@ -23,6 +23,24 @@ Agents are off by default. Enabling the switch offers their models in the conver
 detail page signs in, checks again, chooses the executable, and decides whether
 the person's own CLI configuration applies.
 
+On macOS, discovery includes the CLIs bundled with Codex and ChatGPT in
+`/Applications` and `~/Applications`, as well as PATH, the login shell's PATH
+and usual CLI install folders. The detail page shows the resolved executable
+and where it was found. With several installations, the newest version wins;
+equal versions keep discovery order. A manually selected executable takes
+precedence even when another installation is newer.
+
+An undetected CLI is not necessarily uninstalled. Choose its absolute executable
+path for a custom installation, or leave the path field empty and save to restore
+automatic discovery. An unavailable manual path is reported explicitly rather
+than silently switching installations. **Rescan** and **Check again** refresh the
+login shell's PATH and probe caches, so installing a CLI or changing shell setup
+does not normally require restarting OhMyGame. Discovery, CLI startup, protocol
+compatibility and sign-in are separate checks; finding a bundled CLI does not
+guarantee that its version supports OhMyGame's integration.
+
+![Codex settings showing the desktop-bundled executable and automatic detection](assets/codex-cli-discovery.png)
+
 The model picker lists each agent's models in a group named after the agent.
 Choosing one runs the conversation on that agent. A model reference names both:
 its provider is the agent's ID (`claude-code-cli`, `codex-cli`, `opencode-cli`),

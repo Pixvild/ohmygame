@@ -222,7 +222,7 @@ describe("coding agent routes", () => {
       ["opencode-cli", false],
     ]);
     expect(statuses.body[1]!.diagnostics[0]).toMatchObject({
-      code: "not-installed",
+      code: "invalid-executable",
     });
     expect(
       (
