@@ -39,10 +39,20 @@ type Connection = NonNullable<
 type Connect = (recheck?: boolean) => Promise<Connection | undefined>;
 const PROBE_TIMEOUT = 10_000;
 const GENERATION_TIMEOUT = 5 * 60_000;
+const STATUS_TTL = 60_000;
+
+interface CodexImageStatus {
+  ready: boolean;
+  message?: string;
+}
 
 /** Uses the installed CLI and its credential store, independently of conversation settings. */
 export class CodexImageProvider {
   #capabilities?: { key: string; at: number; result: Promise<boolean> };
+  #statusSnapshot: CodexImageStatus = { ready: false };
+  #statusCheckedAt = 0;
+  #refresh?: Promise<CodexImageStatus>;
+  #closed = false;
 
   constructor(
     private readonly root: string,
@@ -50,13 +60,48 @@ export class CodexImageProvider {
   ) {}
 
   async recheck(enabled: boolean): Promise<ProviderSummary> {
-    this.#capabilities = undefined;
     return this.summary(enabled, true);
+  }
+
+  /** Settings and onboarding must never wait for a local CLI to respond. */
+  summarySnapshot(enabled: boolean): ProviderSummary {
+    if (enabled && Date.now() - this.#statusCheckedAt >= STATUS_TTL)
+      void this.#refreshStatus();
+    return this.#summary(enabled, this.#statusSnapshot);
+  }
+
+  close(): void {
+    // The runtime service stops existing app servers; pending discovery must
+    // not start another one after daemon shutdown has begun.
+    this.#closed = true;
+  }
+
+  #refreshStatus(recheck = false): Promise<CodexImageStatus> {
+    if (this.#closed) return Promise.resolve(this.#statusSnapshot);
+    if (this.#refresh) {
+      // An explicit recheck must observe login/config changes after an older probe.
+      return recheck
+        ? this.#refresh.then(() => this.#refreshStatus(true))
+        : this.#refresh;
+    }
+    if (recheck) this.#capabilities = undefined;
+    const work = this.#status(recheck)
+      .then((status) => {
+        this.#statusSnapshot = status;
+        this.#statusCheckedAt = Date.now();
+        return status;
+      })
+      .finally(() => {
+        if (this.#refresh === work) this.#refresh = undefined;
+      });
+    this.#refresh = work;
+    return work;
   }
 
   async #status(recheck = false) {
     try {
       const connection = await this.connect(recheck);
+      if (this.#closed) return { ready: false };
       if (!connection)
         return {
           ready: false,
@@ -91,7 +136,10 @@ export class CodexImageProvider {
   }
 
   async summary(enabled: boolean, recheck = false): Promise<ProviderSummary> {
-    const status = await this.#status(recheck);
+    return this.#summary(enabled, await this.#refreshStatus(recheck));
+  }
+
+  #summary(enabled: boolean, status: CodexImageStatus): ProviderSummary {
     return {
       id: "codex-cli",
       name: "Codex CLI",
@@ -108,7 +156,7 @@ export class CodexImageProvider {
 
   async catalog(signal?: AbortSignal): Promise<ImageModelCatalog> {
     signal?.throwIfAborted();
-    const status = await this.#status();
+    const status = await this.#refreshStatus();
     signal?.throwIfAborted();
     return {
       models: status.ready ? [CODEX_IMAGE_MODEL] : [],
@@ -128,6 +176,10 @@ export class CodexImageProvider {
       path.join(this.root, "probes"),
       "codex-image",
     );
+    if (this.#closed) {
+      await folder.remove();
+      return false;
+    }
     const server = new CodexAppServer(
       connection.path,
       folder.path,

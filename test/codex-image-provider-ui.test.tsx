@@ -73,6 +73,37 @@ it("offers an independent image switch and recheck without an API key form", asy
   await act(async () => refresh.click());
   expect(api.recheckCodexImages).toHaveBeenCalledOnce();
   expect(host.textContent).toContain("Sign in to Codex CLI");
-  expect(host.querySelector('input[role="switch"]')).toBeNull();
+  expect(
+    host.querySelector<HTMLInputElement>('input[role="switch"]')!.checked,
+  ).toBe(false);
   expect(openAgents).not.toHaveBeenCalled();
+});
+
+it("keeps the image switch available before a disabled provider has been checked", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () =>
+    root!.render(
+      <ModelsSettings
+        view={{
+          page: "provider",
+          provider: {
+            ...provider,
+            configured: false,
+            enabled: false,
+            status: "not_configured",
+          },
+        }}
+        onViewChange={() => {}}
+        onOpenAgents={() => {}}
+      />,
+    ),
+  );
+  const toggle = host.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  expect(toggle.checked).toBe(false);
+  await act(async () => toggle.click());
+  expect(api.setProviderEnabled).toHaveBeenLastCalledWith("codex-cli", true);
+  expect(toggle.checked).toBe(true);
 });

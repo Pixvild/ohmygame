@@ -70,6 +70,11 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     payload?: object,
   ) => app.inject({ method, url, ...(payload ? { payload } : {}) });
   const ref = { provider: "codex-cli", id: "codex-image" };
+  // Explicit catalog discovery waits; provider summaries only return a snapshot.
+  expect(
+    (await call("GET", "/image-models/catalog")).json<ImageModelCatalog>()
+      .models,
+  ).toContainEqual(CODEX_IMAGE_MODEL);
   expect(
     (await call("GET", "/settings/providers")).json<ProviderSummary[]>(),
   ).toContainEqual(
@@ -175,7 +180,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
   ).toContainEqual(
     expect.objectContaining({
       id: "codex-cli",
-      configured: true,
+      configured: false,
       enabled: false,
     }),
   );

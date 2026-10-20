@@ -96,6 +96,10 @@ unavailable image backends keep the provider entry visible with a diagnostic,
 but offer no image model. **Check again** refreshes sign-in and capabilities.
 Capability detection does not guarantee account entitlement; generation failures
 are reported without switching providers or automatically retrying inference.
+The provider list and first-run setup return the last known image status without
+waiting for the CLI. Enabled image providers refresh that status in the background;
+disabled ones do not start a probe. **Check again** explicitly waits for a fresh
+login and capability check, including when image generation is disabled.
 
 Each generation starts its own ephemeral app-server thread, with no OhMyGame
 dynamic tools, external MCP servers, shell tools or subagents. The process is

@@ -289,7 +289,7 @@ function CodexImageProviderDetail({ provider, onBack, onOpenAgents }: { provider
   }
   return <section className="settings-panel settings-provider-detail">
     <ProviderDetailHeader provider={current} onBack={onBack}>
-      {current.configured ? <ProviderEnableControl provider={current} label={t("codexImages.enable")} disabled={busy} onChanged={() => setRevision((value) => value + 1)} /> : null}
+      <ProviderEnableControl provider={current} label={t("codexImages.enable")} disabled={busy} onChanged={() => setRevision((value) => value + 1)} />
     </ProviderDetailHeader>
     <section className="settings-detail-section">
       <h4>{current.configured ? t("codexImages.ready") : t("codexImages.unavailable")}</h4>

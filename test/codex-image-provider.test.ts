@@ -143,6 +143,62 @@ async function setup() {
 }
 
 describe("Codex CLI image provider", () => {
+  it("does not launch a late background probe after daemon shutdown", async () => {
+    const cli = fakeServer();
+    const { provider, connect, connection } = await setup();
+    let release!: (value: typeof connection) => void;
+    connect.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    provider.summarySnapshot(true);
+    const catalog = provider.catalog();
+    provider.close();
+    release(connection);
+    expect((await catalog).models).toEqual([]);
+    provider.summarySnapshot(true);
+    expect(connect).toHaveBeenCalledOnce();
+    expect(cli.calls).toEqual([]);
+  });
+
+  it("returns snapshots immediately, skips disabled probes and shares background discovery", async () => {
+    const cli = fakeServer();
+    const { provider, connect, connection } = await setup();
+    let release!: (value: typeof connection) => void;
+    connect.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    expect(provider.summarySnapshot(false)).toMatchObject({
+      enabled: false,
+      configured: false,
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(provider.summarySnapshot(true)).toMatchObject({
+      enabled: true,
+      configured: false,
+    });
+    provider.summarySnapshot(true);
+    expect(connect).toHaveBeenCalledOnce();
+    const catalog = provider.catalog();
+    release(connection);
+    expect((await catalog).models).toEqual([CODEX_IMAGE_MODEL]);
+    expect(provider.summarySnapshot(false)).toMatchObject({
+      enabled: false,
+      configured: true,
+    });
+    expect(provider.summarySnapshot(true)).toMatchObject({
+      enabled: true,
+      configured: true,
+    });
+    expect(connect).toHaveBeenCalledOnce();
+    expect(cli.closed).toHaveBeenCalledOnce();
+  });
+
   it("checks capabilities without inference, caches probes, and remains separate from a conversation agent", async () => {
     const cli = fakeServer();
     const { provider } = await setup();
