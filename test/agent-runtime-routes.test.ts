@@ -1,8 +1,9 @@
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/daemon/app.js";
+import * as environment from "../src/daemon/agent-runtimes/environment.js";
 import {
   isAgentRuntimeId,
   type AgentRuntimeStatus,
@@ -10,8 +11,17 @@ import {
 import type { AgentModelCatalog } from "../src/shared/contracts.js";
 
 const cleanup: Array<() => Promise<unknown>> = [];
+beforeEach(() => {
+  // Routes use explicit fixture executables. Real shell startup belongs in the
+  // binary discovery tests and must not consume the slow-model timeout here.
+  vi.spyOn(environment, "loginShellPath").mockResolvedValue(undefined);
+});
 afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) await close();
+  try {
+    for (const close of cleanup.splice(0).reverse()) await close();
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 /** A stand-in for the `claude` executable: its version, its sign-in and its model list. */
