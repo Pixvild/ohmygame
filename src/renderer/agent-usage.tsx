@@ -68,7 +68,11 @@ export function AgentUsageInline({
           <span key={limit.id}>
             <small>{usageWindowLabel(limit)}</small>
             <Meter limit={limit} />
-            <small>{Math.round(limit.usedPercent)}%</small>
+            <small>
+              {t("agentUsage.used", {
+                percent: Math.round(limit.usedPercent),
+              })}
+            </small>
           </span>
         );
       })}

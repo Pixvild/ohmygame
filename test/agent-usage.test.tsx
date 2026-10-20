@@ -58,7 +58,7 @@ it("shows each window's share used, warns near the limit and treats a passed res
   await act(async () =>
     root.render(<AgentUsageInline limits={limits} now={now} />),
   );
-  expect(container.textContent).toBe("5-hour13%Weekly96%5-hour0%");
+  expect(container.textContent).toBe("5-hour13% usedWeekly96% used5-hour0% used");
   const meters = [...container.querySelectorAll('[role="meter"]')];
   expect(meters.map((meter) => meter.className)).toEqual([
     "cloud-quota-meter agent-usage-meter",
