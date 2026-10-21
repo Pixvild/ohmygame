@@ -47,6 +47,10 @@ to open the workspace root; file reads and writes still require a file path.
 
 ## Architecture and feature guides
 
+The main sidebar opens **Plugins** for the plugin library, plugin details, and
+Plugin Builder. Earlier Settings → Plugins links still open the same plugin
+on this page.
+
 [Git changes in Code](workspace-git.md) covers the read-only project changes
 view, its comparison baseline and refresh behavior.
 
@@ -106,6 +110,12 @@ commands live in `package.json`; environment examples are in `.env.example`.
 These instructions are shipped with the product and guide its game-making
 agent. Editing them changes a plugin workflow; see the plugin verification
 guidance in [CONTRIBUTING.md](../CONTRIBUTING.md#make-and-check-your-change).
+For the additional engine, mini-game, and asset-tool Beta packages, use the
+[manual acceptance checklist (中文)](plugin-beta-testing.zh-CN.md).
+
+- [Blender Assets](../plugins/blender/skills/blender-assets/SKILL.md),
+  [Godot Game](../plugins/godot/skills/godot-game/SKILL.md), and
+  [TapTap Maker](../plugins/taptap-maker/skills/taptap-maker/SKILL.md).
 
 - [Game Studio](../plugins/game-studio/skills/game-studio/SKILL.md),
   [Game Foundations](../plugins/game-studio/skills/game-foundations/SKILL.md),
@@ -125,6 +135,17 @@ guidance in [CONTRIBUTING.md](../CONTRIBUTING.md#make-and-check-your-change).
   [presentation](../plugins/threejs-world/skills/threejs-world/references/presentation.md),
   [validation](../plugins/threejs-world/skills/threejs-world/references/validation.md),
   and [expansion example](../plugins/threejs-world/skills/threejs-world/references/expansion-example.txt).
+- Beta engine and platform workflows:
+  [Cocos Creator](../plugins/cocos-creator/skills/cocos-creator/SKILL.md),
+  [WeChat Mini Games](../plugins/wechat-minigame/skills/wechat-minigame/SKILL.md),
+  [Douyin Mini Games](../plugins/douyin-minigame/skills/douyin-minigame/SKILL.md),
+  [Unity](../plugins/unity/skills/unity-game/SKILL.md), and
+  [Unreal Engine](../plugins/unreal-engine/skills/unreal-game/SKILL.md).
+- Beta asset tools: [Aseprite](../plugins/aseprite/skills/aseprite-assets/SKILL.md)
+  and [Tiled](../plugins/tiled/skills/tiled-maps/SKILL.md).
+
+Plugin brand assets and their per-package source notices are described in
+[Plugin logos](plugin-logos.md).
 
 Asset-specific terms are documented in the
 [provider logo notes](../src/renderer/assets/providers/README.md) and the

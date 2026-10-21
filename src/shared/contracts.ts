@@ -391,6 +391,8 @@ export interface ProjectState extends ProjectPreviewSettings {
   type: ProjectType;
   updatedAt: string;
   workspacePath: string;
+  /** The plugin owns the binding file; OhMyGame stores only its identity and presentation. */
+  integration?: { pluginId: string; preview?: "external" };
   /** General Game's explicit Web preview opt-in; missing means disabled. */
   webPreviewEnabled?: boolean;
   /** Directory, relative to the workspace root, in which the Web Game preview starts. */
@@ -892,6 +894,7 @@ export interface CreateProjectRequest {
   viewport?: Viewport;
   /** Absolute path returned by the desktop directory picker. */
   workspacePath?: string;
+  pluginId?: string;
 }
 /** `reasoningLevel` is for a Pi model and `nativeReasoningLevel` for a coding agent's. */
 export interface CreateConversationRequest {
@@ -939,6 +942,10 @@ export interface ConversationCapabilities {
     description: string;
     marketplaceId: string;
     marketplaceDisplayName: string;
+    icon?: import("./plugins.js").PluginIcon;
+    iconRevision?: string;
+    projectTypes?: ProjectType[];
+    integration?: import("./plugin-integration.js").PluginIntegrationDefinition;
   }>;
   skills: Array<{
     name: string;
