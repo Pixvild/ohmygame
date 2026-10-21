@@ -451,15 +451,33 @@ when an update is published; publication details show that snapshot.
 ## Publishing
 
 In web game, General, and interactive story chats, type `/publish` and select
-the command or send it to open the existing publish dialog. The command is handled locally
-and is not sent to the agent. It is available while the agent and publishing
-are idle; Godot projects do not offer it. Confirm the title, description, and
-cover in the dialog to publish and get the share link.
+the command or send it to open the existing publish dialog. The command is
+handled locally and is not sent to the agent. It is available while the agent
+and publishing are idle; Godot projects do not offer it. Confirm the title,
+description, and cover in the dialog to publish and get the share link.
+
+Published ZIPs may be up to 100 MiB. The matching Cloud API accepts up to
+200 MiB per file, 1 GiB after extraction, and 2,000 entries. Deploy the Cloud
+limit update before releasing the client; older services still reject larger
+uploads. Deployment uploads have a ten-minute timeout per attempt.
+
+Interactive Story publishing optimizes temporary copies of referenced media;
+workspace and Library originals, local builds, and project exports are unchanged.
+PNG scanlines are recompressed losslessly, preserving transparency and metadata.
+MP4 files are encoded as H.264 (CRF 23) with AAC audio at 128 kbit/s when FFmpeg
+is available on PATH or selected by `OHMYGAME_FFMPEG_PATH`. No encoder is bundled.
+Video dimensions are rounded down to even pixels for H.264 compatibility.
+Encoding has a two-minute limit per video. Missing encoders, failed encodes,
+and larger results keep the original. Files below 256 KiB are skipped; PNG
+optimization is bounded to 64 MiB and video encoding to 200 MiB per source.
+Other media formats keep their original encoding. ZIP compression alone offers
+little reduction for already compressed images, audio, or video.
 
 A workspace is publishable when it has a non-empty `scripts.build` that
 produces a static `index.html` under `dist`, `build`, or `out`, or has a root
 `index.html`. Only that static output is uploaded; hidden files, dependencies,
-and symbolic links are skipped, and binary assets are preserved byte for byte.
+and symbolic links are skipped. Binary assets retain their original bytes except
+for the Interactive Story publish-copy optimizations described above.
 The workspace, Pi sessions, conversations, and credentials are never sent.
 
 Each publish creates an immutable Deployment of the same Game, so the play link
