@@ -228,8 +228,11 @@ function ComposerContextMenu({ id, menuRef, items, selected, onSelect, onHover, 
     const anchor = element?.closest(".prompt-box");
     if (!element || !anchor) return;
     const updateHeight = () => {
-      const boundary = anchor.closest(".agent-body")?.getBoundingClientRect().top ?? 0;
-      element.style.maxHeight = `${Math.min(400, Math.max(48, anchor.getBoundingClientRect().top - boundary - 12))}px`;
+      const boundary = Math.max(0,
+        anchor.closest(".agent-body")?.getBoundingClientRect().top ?? 0,
+        anchor.closest(".desktop-window-content")?.getBoundingClientRect().top ?? 0,
+      );
+      element.style.maxHeight = `${Math.min(400, Math.max(0, anchor.getBoundingClientRect().top - boundary - 12))}px`;
     };
     updateHeight();
     const observer = new ResizeObserver(updateHeight);
@@ -237,9 +240,11 @@ function ComposerContextMenu({ id, menuRef, items, selected, onSelect, onHover, 
     const boundary = anchor.closest(".agent-body");
     if (boundary) observer.observe(boundary);
     window.addEventListener("resize", updateHeight);
+    window.addEventListener("scroll", updateHeight, true);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", updateHeight);
+      window.removeEventListener("scroll", updateHeight, true);
     };
   }, [menuRef, items.length]);
   useEffect(() => {
