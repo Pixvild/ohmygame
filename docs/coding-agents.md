@@ -10,6 +10,13 @@ accepted tradeoffs, and validation limits.
 
 ## Using one
 
+First-run setup also offers Claude Code, Codex, and OpenCode in one
+horizontally scrolling row. Select an agent after installation and sign-in, choose its model
+on the same connection screen, then save with **Next** and continue to optional
+creative tools. Switching agents retains each selection until it is saved. OhMyGame
+(Pi) is always enabled and uses connected model providers. Discovery alone never
+enables a CLI.
+
 **Settings → Agents** lists who can work in a conversation. OhMyGame's own
 agent comes first: it uses the models set up in Providers & Models, and its row
 links there. The coding agent CLIs follow, under **Coding agent CLIs on this
