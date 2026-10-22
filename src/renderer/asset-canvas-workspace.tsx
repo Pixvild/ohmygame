@@ -16,6 +16,7 @@ import {
   LoaderCircle,
   Maximize,
   Music2,
+  Package,
   Pause,
   Pencil,
   Play,
@@ -90,7 +91,7 @@ import {
 } from "../shared/contracts.js";
 import { combineAssetCanvasPrompt, createAssetGenerationNode, isTextGenerationReferenceNode, preferredImageOption, validateAssetCanvasDocument } from "../shared/asset-canvas.js";
 import { VOLCENGINE_TTS_VOICES, availableAudioOperations, type AudioModel, type AudioOperation, type AudioProviderCatalogStatus } from "../shared/audio.js";
-import { createLibraryImage, getLibraryAsset, getWorkspaceAsset, getProjectCover, getProjectCoverState, listAudioModelCatalog, listImageModelCatalog, listModel3DAnimations, listModel3DOperations, listModel3DCatalog, listVideoModelCatalog, MODELS_CHANGED_EVENT, setProjectCover, uploadLibraryAsset } from "./api.js";
+import { createLibraryImage, getLibraryAsset, getWorkspaceAsset, getProjectCover, getProjectCoverState, listAudioModelCatalog, listImageModelCatalog, listModel3DAnimations, listModel3DOperations, listModel3DCatalog, listVideoModelCatalog, MODELS_CHANGED_EVENT, setProjectCover, uploadLibraryAsset, importCanvasFile } from "./api.js";
 import { useAuth } from "./auth.js";
 import { accountCloudState, canAffordCloudModel, CloudQuotaStatus } from "./cloud-quota.js";
 import { downloadAssetBlob, loadLibraryAssets, type LibraryAsset } from "./library-assets.js";
@@ -123,13 +124,15 @@ import { CanvasTextarea, CanvasTextComposer } from "./canvas-text-composer.js";
 import { VideoReferencePrompt } from "./video-reference-prompt.js";
 import { resolveVideoMentions, sameVideoReference, videoReferenceAliases, videoReferenceAspectRatios, videoReferenceLimit, videoReferenceMode } from "../shared/video-references.js";
 import { CanvasNodeReferenceStrip, CanvasReferenceThumbnail, type CanvasNodeReferencesRuntime } from "./canvas-node-references.js";
-import { language, t, tNodes } from "./i18n.js";
-import { CANVAS_IMPORT_ACCEPT, canvasImportKind, isIgnoredImportPath } from "./canvas-file-import.js";
+import { t, tNodes } from "./i18n.js";
+import { canvasImportKind, isIgnoredImportPath } from "./canvas-file-import.js";
+import { fileExtension } from "../shared/media-files.js";
 import { importCanvasCsv } from "../shared/canvas-table.js";
 
 const ASSET_EDGE_PREFIX = "asset:";
 const OUTPUT_HANDLE = "out";
 const MEDIA_NODE_MAX_WIDTH = 440;
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 const MEDIA_NODE_MIN_WIDTH = 300;
 const MEDIA_NODE_MAX_HEIGHT = 360;
 const MEDIA_NODE_MIN_HEIGHT = 200;
@@ -198,6 +201,9 @@ type AssetCanvasFlowData = {
   panelOpen?: boolean;
   tableId?: string;
   tableRuntime?: TableNodeRuntime;
+  /** Project-relative path of a file node. */
+  path?: string;
+  fileRuntime?: { onReveal?: () => void };
   documentId?: string;
   documentRuntime?: DocumentNodeRuntime;
   prompt?: string;
@@ -338,6 +344,7 @@ const STORY_NODE_TYPES: NodeTypes = {
   "model-3d": Model3DNode,
   "animate-3d": Animate3DNode,
   asset: AssetNode,
+  file: FileNode,
 };
 
 export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled, hidden = false, storage, documents, tables, assets: localAssets, conflicted = false, overlay, onSaveReady, onSyncReady, onResolveReady, onStatusChange, onSelectionChange, expandedDocument }: {
@@ -1036,13 +1043,19 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   }
 
   async function uploadAssetFile(file: File, mediaType: LibraryUploadMediaType): Promise<LibraryAsset> {
-    if (file.size > 200 * 1024 * 1024) throw new Error(t("assetCanvas.uploadSize"));
+    if (file.size > MAX_UPLOAD_BYTES) throw new Error(t("assetCanvas.uploadSize"));
     const kind = mediaType.startsWith("video/") ? "video" : mediaType.startsWith("audio/") ? "audio" : undefined;
     const duration = kind ? await readMediaFileDuration(file, kind) : undefined;
     const uploaded = await uploadLibraryAsset(file, mediaType, duration);
     const asset: LibraryAsset = { ...uploaded, assetId: uploaded.id, path: uploaded.name };
     setLibraryAssets((current) => [asset, ...current]);
     return asset;
+  }
+
+  /** Copies a file that is not a document, table or media asset into the project; returns its project path. */
+  async function importProjectFile(file: File): Promise<string> {
+    if (file.size > MAX_UPLOAD_BYTES) throw new Error(t("assetCanvas.uploadSize"));
+    return (await importCanvasFile(projectId, file)).path;
   }
 
   async function importAssetFiles(files: File[], position: { x: number; y: number }): Promise<void> {
@@ -1077,10 +1090,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     const failures: string[] = [];
     const imported: AssetCanvasFlowNode[] = [];
     try {
-      const transferred = (await source).filter(({ file, relativePath }) => !isIgnoredImportPath(relativePath ?? file.name));
-      const files = transferred.flatMap(({ file }) => { const kind = canvasImportKind(file.name); return kind ? [{ file, kind }] : []; });
-      const skipped = transferred.filter(({ file }) => !canvasImportKind(file.name)).map(({ file, relativePath }) => relativePath ?? file.name);
-      if (skipped.length) failures.push(skippedFilesMessage(skipped));
+      const files = (await source).filter(({ file, relativePath }) => !isIgnoredImportPath(relativePath ?? file.name)).map(({ file }) => ({ file, kind: canvasImportKind(file.name) }));
       if (files.length > 1_000) throw new Error(t("assetCanvas.importLimit"));
       if (nodesRef.current.length + files.length > MAX_ASSET_CANVAS_NODES) throw new Error(t("assetCanvas.nodeLimit"));
       for (const [index, { file, kind }] of files.entries()) {
@@ -1095,7 +1105,8 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
             if (!id) throw new Error(t("assetCanvas.documentCreateFailed"));
             documents.update(id, { title: file.name.replace(/\.[^.]+$/, "").slice(0, 200), markdown: text });
             imported.push({ id: crypto.randomUUID(), type: "document", position: at, selected: true, data: { documentId: id } });
-          } else imported.push(assetFlowNode(await uploadAssetFile(file, kind.mediaType), at));
+          } else if (kind.kind === "media") imported.push(assetFlowNode(await uploadAssetFile(file, kind.mediaType), at));
+          else imported.push({ id: crypto.randomUUID(), type: "file", position: at, selected: true, data: { path: await importProjectFile(file) } });
         } catch (cause) { failures.push(`${file.name}: ${errorMessage(cause)}`); }
       }
       if (nodesRef.current.length + imported.length > MAX_ASSET_CANVAS_NODES) throw new Error(t("assetCanvas.canvasFull"));
@@ -1131,7 +1142,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     if (nodesRef.current.length + value.nodes.length > MAX_ASSET_CANVAS_NODES) {
       setTransferError(t("assetCanvas.nodeLimit")); return;
     }
-    if (value.nodes.some((node) => (node.type === "document" || node.type === "table")) && value.projectId !== projectId) {
+    if (value.nodes.some((node) => (node.type === "document" || node.type === "table" || node.type === "file")) && value.projectId !== projectId) {
       setTransferError(t("assetCanvas.pasteProject")); return;
     }
     commitPendingHistory();
@@ -1457,6 +1468,10 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     if (node.type === "table") {
       const session = tables.storage.sessions.get(node.data.tableId ?? "");
       return { ...node, data: { ...node.data, tableRuntime: { tables, table: session?.local, issue: session?.issue ?? tables.issues?.find((issue) => issue.id === node.data.tableId)?.message, models: textModelCatalog.models, modelStatus: textModelCatalog.status, defaultModel: defaultTextModel, defaultReasoningLevel: textModelCatalog.defaultReasoningLevel } } };
+    }
+    if (node.type === "file") {
+      const reveal = window.ohMyGameDesktop?.openProjectFile;
+      return { ...node, data: { ...node.data, fileRuntime: { onReveal: reveal && node.data.path ? () => { void reveal(projectId, node.data.path!, "reveal").catch((cause) => setNotice({ kind: "action", message: errorMessage(cause) })); } : undefined } } };
     }
     if (node.type === "document") return { ...node, data: { ...node.data, documentRuntime: { ...nodeReferencesRuntime(node), referenceSource: { boardId: storage.boardId, nodeId: node.id }, design: documents, document: documents.documents.find((doc) => doc.id === node.data.documentId), models: textModelCatalog.models, modelStatus: textModelCatalog.status, defaultModel: defaultTextModel, defaultReasoningLevel: textModelCatalog.defaultReasoningLevel } } };
     if (node.type === "asset") return {
@@ -2326,6 +2341,24 @@ function AssetNode({ data, selected }: Pick<NodeProps<AssetCanvasFlowNode>, "dat
   );
 }
 
+function FileNode({ data, selected }: Pick<NodeProps<AssetCanvasFlowNode>, "data" | "selected">) {
+  const filePath = data.path ?? "";
+  const name = filePath.split("/").at(-1) || t("assetCanvas.file");
+  const extension = fileExtension(name).slice(1).toUpperCase();
+  return (
+    <div className={`story-node story-media-node story-file-node${selected ? " is-selected" : ""}`} style={{ "--story-media-width": "300px", "--story-media-height": "150px" } as CSSProperties}>
+      <CanvasNodeLabel icon={Package} label={name} details={data.nodeDetails} trailing={extension ? <small>{extension}</small> : undefined} />
+      <div data-alignment-frame className="story-media-stage">
+        <div className="story-media-empty">
+          <Package size={30} />
+          <span title={filePath}>{filePath}</span>
+          {data.fileRuntime?.onReveal ? <button className="canvas-asset-retry nodrag" type="button" onClick={data.fileRuntime.onReveal}>{t("assetCanvas.showInFolder")}</button> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const CHARACTER_HEIGHTS = [1, 1.2, 1.5, 1.7, 1.8, 2];
 
 function Animate3DNode({ data, selected }: Pick<NodeProps<AssetCanvasFlowNode>, "data" | "selected">) {
@@ -2953,7 +2986,6 @@ function AssetCanvasAddControl({
           ref={uploadInput}
           hidden
           type="file"
-          accept={CANVAS_IMPORT_ACCEPT}
           multiple
           onChange={(event) => {
             const files = [...(event.target.files ?? [])];
@@ -3148,7 +3180,6 @@ function AssetCanvasContextMenu({
           ref={uploadInput}
           hidden
           type="file"
-          accept={CANVAS_IMPORT_ACCEPT}
           multiple
           onChange={(event) => {
             const files = [...(event.target.files ?? [])];
@@ -3180,7 +3211,7 @@ function toFlowNode(node: AssetCanvasNode, imageModels: ImageModel[], videoModel
   return { ...flowNodeData(node, imageModels, videoModels), ...(measured ? { measured } : {}), ...(node.width !== undefined ? { width: node.width } : {}), ...(node.height !== undefined ? { height: node.height } : {}), ...(node.title !== undefined ? { title: node.title } : {}), ...(node.description !== undefined ? { description: node.description } : {}) };
 }
 function flowNodeData(node: AssetCanvasNode, imageModels: ImageModel[], videoModels: VideoModel[]): AssetCanvasFlowNode {
-  if (node.type === "asset") return { ...node, deletable: true };
+  if (node.type === "asset" || node.type === "file") return { ...node, deletable: true };
   if (node.type === "text") return {
     id: node.id,
     type: "text",
@@ -3460,6 +3491,7 @@ function assetCanvasNodeData(node: AssetCanvasFlowNode, model3DModels?: readonly
     };
   }
   if (node.type === "table") return { id: node.id, type: "table", position: node.position, data: { tableId: node.data.tableId ?? "" } };
+  if (node.type === "file") return { id: node.id, type: "file", position: node.position, data: { path: node.data.path ?? "" } };
   if (node.type === "document") return { id: node.id, type: "document", position: node.position, data: { documentId: node.data.documentId ?? "", ...(node.data.references ? { references: textNodeReferences(node) } : {}) } };
   if (node.type === "asset") return {
     id: node.id,
@@ -3850,12 +3882,6 @@ async function readUploadImage(file: File): Promise<{ name: string; image: Creat
   }
   if (file.size > 10 * 1024 * 1024) throw new Error(t("assetCanvas.referenceSize"));
   return { name: file.name, image: await promptImage(file) };
-}
-
-function skippedFilesMessage(names: string[]): string {
-  const shown = names.slice(0, 5);
-  if (names.length > shown.length) shown.push(t("assetCanvas.moreFiles", { count: names.length - shown.length }));
-  return t("assetCanvas.skippedFiles", { count: names.length, names: new Intl.ListFormat(language, { type: "conjunction" }).format(shown) });
 }
 
 function titleCase(value: string): string {

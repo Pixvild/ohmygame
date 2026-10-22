@@ -171,9 +171,13 @@ documents (up to 1 MB) and CSV or TSV files as tables (up to 4 MB). Images
 (PNG, JPEG, GIF, WebP, AVIF, SVG), video (MP4, MOV, WebM), audio (MP3, WAV,
 Ogg, M4A) and GLB models go to the Library as asset nodes, up to 200 MB each;
 `src/shared/media-files.ts` lists the media types, and the daemon checks each
-file's data against its type. System files such as `.DS_Store`, `__MACOSX`
-and hidden entries inside a dropped folder are left out. Other files are
-skipped and named in one message.
+file's data against its type. Any other file, such as a source file, font,
+archive or editor project, is copied into the project under `assets/files/`
+(a repeated name gets a `-2` suffix) and shown as a file node whose
+`data.path` is that project-relative path. File nodes stay in their project:
+pasting one into another project is refused. `canvas_check` reports a file
+node whose file is missing. System files such as `.DS_Store`, `__MACOSX` and
+hidden entries inside a dropped folder are left out.
 
 Hold Option (Alt on Windows and Linux) when starting a node drag to pull out
 copies. Copies keep node content and Library resources, use new IDs, and drop

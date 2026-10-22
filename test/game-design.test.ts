@@ -107,6 +107,28 @@ describe("Markdown design workspace", () => {
     board.board.nodes.push({ id: "missing", type: "table", position: { x: 0, y: 0 }, data: { tableId: "unknown" } }); board.board.editorLayout.nodes.missing = { x: 0, y: 0 };
     expect((await app.inject({ method: "PUT", url: `${base}/boards/${board.board.id}`, payload: board })).statusCode).toBe(404);
   });
+  it("keeps imported files under assets/files and reports file nodes whose file is gone", async () => {
+    const app = createApp({ dataDirectory: await temp() }); apps.push(app);
+    const project = (await app.inject({ method: "POST", url: "/projects", payload: {} })).json(), base = `/projects/${project.id}/canvas`;
+    const workspace = (await app.inject(`${base}/workspace`)).json();
+    const upload = (name: string, payload: Buffer) => app.inject({ method: "POST", url: `${base}/files?name=${encodeURIComponent(name)}`, headers: { "content-type": "application/octet-stream" }, payload });
+    const first = await upload("Hero.psd", Buffer.from("8BPS"));
+    expect(first.statusCode, first.body).toBe(201);
+    expect(first.json()).toEqual({ path: "assets/files/Hero.psd" });
+    expect((await upload("Hero.psd", Buffer.from("8BPS v2"))).json()).toEqual({ path: "assets/files/Hero-2.psd" });
+    expect((await upload("empty.json", Buffer.alloc(0))).json()).toEqual({ path: "assets/files/empty.json" });
+    expect(await readFile(path.join(project.workspacePath, "assets/files/Hero-2.psd"), "utf8")).toBe("8BPS v2");
+    expect((await upload("..", Buffer.from("x"))).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/projects/missing/canvas/files?name=a.txt", headers: { "content-type": "application/octet-stream" }, payload: Buffer.from("x") })).statusCode).toBe(404);
+
+    const board = (await app.inject(`${base}/boards/${workspace.boards[0].id}`)).json();
+    board.board.nodes.push({ id: "hero", type: "file", position: { x: 0, y: 0 }, data: { path: "assets/files/Hero.psd" } }); board.board.editorLayout.nodes.hero = { x: 0, y: 0 };
+    expect((await app.inject({ method: "PUT", url: `${base}/boards/${board.board.id}`, payload: board })).statusCode).toBe(200);
+    expect((await checkCanvasWorkspace(project.workspacePath)).ok).toBe(true);
+    await rm(path.join(project.workspacePath, "assets/files/Hero.psd"));
+    expect((await checkCanvasWorkspace(project.workspacePath)).issues).toContainEqual({ file: `canvas/boards/${board.board.id}.json`, message: "Node hero: file assets/files/Hero.psd: File not found" });
+  });
+
   it("records contextual defaults in canvas history and preserves them through retries and reloads", async () => {
     let defaultId = "project-image";
     const generate = vi.fn<ImageGenerator["generate"]>()
