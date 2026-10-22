@@ -11,6 +11,7 @@ import {
   writeNodeCodebase,
 } from "../src/daemon/playable-codebase.js";
 import { validatePlayableProject } from "../src/daemon/playable-project.js";
+import { compileNodeGraph } from "../src/daemon/playable-compiler.js";
 import { PLAYABLE_PRESETS, PLAYABLE_PRESET_IDS, playablePreset } from "../src/daemon/playable-presets.js";
 import { PLAYABLE_PROJECT_STYLE_FILES } from "../src/daemon/playable-style.js";
 import { playableBackdrop } from "../src/shared/playable-backdrop.js";
@@ -189,17 +190,33 @@ describe("addPlayableNode", () => {
     expect(validation.issues).toEqual([]);
   });
 
-  it("keeps a menu and a Story map off the Story map, and compiles the Story map", async () => {
+  it("compiles all eight Templates with bundled artwork and preserves project edits", async () => {
     const workspacePath = await createWorkspace("add-story-map");
 
-    await addPlayableNode(workspacePath, { preset: "main-menu", id: "menu" });
-    await addPlayableNode(workspacePath, { preset: "story-map", id: "map" });
+    for (const preset of PLAYABLE_PRESETS) {
+      await addPlayableNode(workspacePath, { preset: preset.id, id: preset.id });
+    }
 
-    const nodes = (await readNodeCodebase(workspacePath)).graph.nodes;
+    const { graph } = await readNodeCodebase(workspacePath);
+    const { nodes } = graph;
     expect(nodes.find((node) => node.id === "start")?.story).toBeUndefined();
-    expect(nodes.find((node) => node.id === "menu")?.story).toEqual({ hidden: true });
-    expect(nodes.find((node) => node.id === "map")?.story).toEqual({ hidden: true });
+    expect(nodes.find((node) => node.id === "main-menu")?.story).toEqual({ hidden: true });
+    expect(nodes.find((node) => node.id === "story-map")?.story).toEqual({ hidden: true });
     expect((await validatePlayableProject(workspacePath, "draft")).issues).toEqual([]);
+    const compiled = await compileNodeGraph(workspacePath, graph);
+    for (const id of PLAYABLE_PRESET_IDS) {
+      // Actual project CSS embeds the image, including in exported sandbox builds.
+      expect(compiled.nodes[id]!.css).toContain("data:image/webp;base64,");
+      expect(compiled.nodes[id]!.css).toContain(':not([data-asset])');
+    }
+
+    const illustration = "shared/templates/lastbus-station.css";
+    const authored = "/* Author's replacement artwork */\n.backdrop { background: navy; }\n";
+    await writeFile(path.join(workspacePath, illustration), authored);
+    const existingScene = await readFile(path.join(workspacePath, "nodes/story-map/style.css"), "utf8");
+    await addPlayableNode(workspacePath, { preset: "visual-novel", id: "chapter-2" });
+    expect(await readFile(path.join(workspacePath, illustration), "utf8")).toBe(authored);
+    expect(await readFile(path.join(workspacePath, "nodes/story-map/style.css"), "utf8")).toBe(existingScene);
   });
 
   it("gives a Main menu a Story map Exit that waits to be connected", async () => {

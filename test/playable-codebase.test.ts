@@ -132,6 +132,11 @@ describe("Playable codebase", () => {
       createPlayableStarterCodebase("Broken", { width: 1280, height: 720 }),
     );
     await addPlayableNode(workspace, { preset: "hotspot", id: "hotspot" });
+    // Legacy Scenes predate the bundled template artwork; only their Project Style is missing.
+    const stylesheet = path.join(workspace, "nodes/hotspot/style.css");
+    await writeFile(stylesheet, (await readFile(stylesheet, "utf8")).replace(
+      '@import "../../shared/templates/lastbus-cabin.css";\n', "",
+    ));
     await rm(path.join(workspace, "shared"), { recursive: true });
     await rm(path.join(workspace, PROJECT_STYLE_MIGRATION_FILE));
 
