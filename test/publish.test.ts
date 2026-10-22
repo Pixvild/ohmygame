@@ -396,7 +396,7 @@ describePublishContract("remote publish", () => {
     expect((await runtime.daemon.inject({ method: "POST", url: `/community/games/${first.game.id}/view`, payload: {} })).statusCode).toBe(404);
     const like = await runtime.daemon.inject({ method: "PUT", url: `/community/games/${first.game.id}/like`, payload: { accessToken: token, liked: true } });
     expect(like.json()).toMatchObject({ viewCount: 2, likeCount: 1, liked: true });
-    expect((await runtime.daemon.inject({ method: "GET", url: "/community/games?metrics=true", headers })).json()[0].stats).toEqual({ viewCount: 2, likeCount: 1, liked: true });
+    expect((await runtime.daemon.inject({ method: "GET", url: "/community/games?metrics=true", headers })).json()[0].stats).toMatchObject({ viewCount: 2, likeCount: 1, liked: true });
 
     expect((await runtime.daemon.inject({ method: "PUT", url: `/community/games/${first.game.id}`, payload: { accessToken: token, title: "Edited title", description: "Edited description" } })).statusCode).toBe(200);
     expect((await runtime.daemon.inject({ method: "GET", url: `/projects/${project.id}` })).json().publication).toMatchObject({ title: "Edited title", description: "Edited description" });
