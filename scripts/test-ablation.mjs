@@ -40,6 +40,7 @@ const explicitTestGroups = {
   "electron-updater-patch.test.ts": "desktop",
   "release-notes.test.ts": "desktop",
   "desktop-installer-contract.test.ts": "desktop",
+  "desktop-installer-process.test.ts": "desktop",
   "desktop-update-ranges.test.ts": "desktop",
 };
 // These skip without a local Blender or a platform-specific process feature.
@@ -48,6 +49,7 @@ const explicitTestGroups = {
 const expectedPendingTestFiles = new Set([
   "test/blender-export.test.ts",
   "test/daemon-process.test.ts",
+  "test/desktop-installer-process.test.ts",
 ]);
 const options = Object.fromEntries(
   process.argv.slice(2).map((argument) => {
