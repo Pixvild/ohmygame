@@ -123,11 +123,12 @@ import { CanvasTextarea, CanvasTextComposer } from "./canvas-text-composer.js";
 import { VideoReferencePrompt } from "./video-reference-prompt.js";
 import { resolveVideoMentions, sameVideoReference, videoReferenceAliases, videoReferenceAspectRatios, videoReferenceLimit, videoReferenceMode } from "../shared/video-references.js";
 import { CanvasNodeReferenceStrip, CanvasReferenceThumbnail, type CanvasNodeReferencesRuntime } from "./canvas-node-references.js";
-import { t, tNodes } from "./i18n.js";
+import { language, t, tNodes } from "./i18n.js";
+import { CANVAS_IMPORT_ACCEPT, canvasImportKind, isIgnoredImportPath } from "./canvas-file-import.js";
+import { importCanvasCsv } from "../shared/canvas-table.js";
 
 const ASSET_EDGE_PREFIX = "asset:";
 const OUTPUT_HANDLE = "out";
-const STORY_ASSET_ACCEPT = "image/png,image/jpeg,image/svg+xml,image/webp,video/mp4,video/quicktime,video/webm,audio/mpeg,audio/wav,.svg,.mov,.mp3,.wav";
 const MEDIA_NODE_MAX_WIDTH = 440;
 const MEDIA_NODE_MIN_WIDTH = 300;
 const MEDIA_NODE_MAX_HEIGHT = 360;
@@ -1034,9 +1035,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     };
   }
 
-  async function uploadAssetFile(file: File): Promise<LibraryAsset> {
-    const mediaType = libraryUploadMediaType(file);
-    if (!mediaType) throw new Error(t("assetCanvas.uploadTypes"));
+  async function uploadAssetFile(file: File, mediaType: LibraryUploadMediaType): Promise<LibraryAsset> {
     if (file.size > 200 * 1024 * 1024) throw new Error(t("assetCanvas.uploadSize"));
     const kind = mediaType.startsWith("video/") ? "video" : mediaType.startsWith("audio/") ? "audio" : undefined;
     const duration = kind ? await readMediaFileDuration(file, kind) : undefined;
@@ -1046,8 +1045,20 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     return asset;
   }
 
-  async function importAssetFile(file: File, position: { x: number; y: number }): Promise<void> {
-    await importCanvasFiles([{ file }], position);
+  async function importAssetFiles(files: File[], position: { x: number; y: number }): Promise<void> {
+    await importCanvasFiles(files.map((file) => ({ file })), position);
+  }
+
+  async function importTableFile(file: File, delimiter: "," | "\t"): Promise<string> {
+    if (file.size > 4 * 1024 * 1024) throw new Error(t("tableNode.tooLarge"));
+    const text = await file.text();
+    const title = file.name.replace(/\.[^.]+$/, "").slice(0, 200);
+    // Parse before creating, so a malformed file leaves no empty table behind.
+    const draft = importCanvasCsv({ version: 1, id: "import", title, columns: [], rows: [] }, text, delimiter);
+    const id = await tables.add();
+    if (!id || !tables.storage.sessions.has(id)) throw new Error(t("assetCanvas.tableCreateFailed"));
+    tables.storage.update({ ...draft, id }, false);
+    return id;
   }
 
   function importCanvasFiles(source: TransferredFile[] | Promise<TransferredFile[]>, position: { x: number; y: number }): Promise<void> {
@@ -1066,32 +1077,40 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     const failures: string[] = [];
     const imported: AssetCanvasFlowNode[] = [];
     try {
-      const files = await source;
+      const transferred = (await source).filter(({ file, relativePath }) => !isIgnoredImportPath(relativePath ?? file.name));
+      const files = transferred.flatMap(({ file }) => { const kind = canvasImportKind(file.name); return kind ? [{ file, kind }] : []; });
+      const skipped = transferred.filter(({ file }) => !canvasImportKind(file.name)).map(({ file, relativePath }) => relativePath ?? file.name);
+      if (skipped.length) failures.push(skippedFilesMessage(skipped));
       if (files.length > 1_000) throw new Error(t("assetCanvas.importLimit"));
       if (nodesRef.current.length + files.length > MAX_ASSET_CANVAS_NODES) throw new Error(t("assetCanvas.nodeLimit"));
-      for (const [index, { file }] of files.entries()) {
+      for (const [index, { file, kind }] of files.entries()) {
         const at = snapCanvasPosition({ x: position.x + (index % 3) * 480, y: position.y + Math.floor(index / 3) * 560 });
         try {
-          if (/\.(?:md|markdown|txt)$/i.test(file.name)) {
+          if (kind.kind === "table") {
+            imported.push({ id: crypto.randomUUID(), type: "table", position: at, selected: true, data: { tableId: await importTableFile(file, kind.delimiter) } });
+          } else if (kind.kind === "document") {
             if (file.size > 1_000_000) throw new Error(t("assetCanvas.textTooLarge"));
             const text = await file.text();
             const id = await documents.add();
             if (!id) throw new Error(t("assetCanvas.documentCreateFailed"));
             documents.update(id, { title: file.name.replace(/\.[^.]+$/, "").slice(0, 200), markdown: text });
             imported.push({ id: crypto.randomUUID(), type: "document", position: at, selected: true, data: { documentId: id } });
-          } else imported.push(assetFlowNode(await uploadAssetFile(file), at));
+          } else imported.push(assetFlowNode(await uploadAssetFile(file, kind.mediaType), at));
         } catch (cause) { failures.push(`${file.name}: ${errorMessage(cause)}`); }
       }
       if (nodesRef.current.length + imported.length > MAX_ASSET_CANVAS_NODES) throw new Error(t("assetCanvas.canvasFull"));
-      const occupied = nodesRef.current.map((node) => ({ ...node.position, width: node.measured?.width ?? 440, height: node.measured?.height ?? 520 }));
+      // Tables and documents start at their default size; other nodes leave room for their selected controls.
+      const footprint = (node: AssetCanvasFlowNode) => isResizableCanvasNodeType(node.type) ? { width: node.width ?? RESIZABLE_CANVAS_NODE_SIZES[node.type].width, height: node.height ?? RESIZABLE_CANVAS_NODE_SIZES[node.type].height } : { width: 440, height: 520 };
+      const occupied = nodesRef.current.map((node) => ({ ...node.position, width: node.measured?.width ?? footprint(node).width, height: node.measured?.height ?? footprint(node).height }));
       for (const node of imported) {
         // Keep imported files near the drop point while leaving space for selected node controls.
+        const { width, height } = footprint(node);
         let overlaps;
         do {
-          overlaps = occupied.filter((rect) => node.position.x < rect.x + rect.width + 20 && node.position.x + 460 > rect.x && node.position.y < rect.y + rect.height + 20 && node.position.y + 540 > rect.y);
+          overlaps = occupied.filter((rect) => node.position.x < rect.x + rect.width + 20 && node.position.x + width + 20 > rect.x && node.position.y < rect.y + rect.height + 20 && node.position.y + height + 20 > rect.y);
           if (overlaps.length) node.position.y = snapCanvasPosition({ x: node.position.x, y: Math.max(...overlaps.map((rect) => rect.y + rect.height)) + 40 }).y;
         } while (overlaps.length);
-        occupied.push({ ...node.position, width: 440, height: 520 });
+        occupied.push({ ...node.position, width, height });
       }
       // Publish before a waiting board switch flushes the canvas.
       if (imported.length) flushSync(() => setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), ...imported]));
@@ -1693,7 +1712,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
                 importing={importingAssets}
                 onAdd={addNode}
                 onAddAsset={addAssetNode}
-                onUpload={(file, position) => void importAssetFile(file, position)}
+                onUpload={(files, position) => void importAssetFiles(files, position)}
               />}
               onOpenMenu={setCanvasContextMenu}
               addOnDoubleClick
@@ -1760,7 +1779,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
             onRedo={redoEditorChange}
             onPaste={() => { const value = lastCanvasClipboard(); if (value) pasteSelection(value, canvasContextMenu.flowPosition); }}
             onAdd={(item) => addCanvasNode(item, canvasContextMenu.flowPosition)}
-            onUpload={(file) => void importAssetFile(file, canvasContextMenu.flowPosition)}
+            onUpload={(files) => void importAssetFiles(files, canvasContextMenu.flowPosition)}
             onView={() => { if (contextMenuNode) openViewer(contextMenuNode); }}
             onDownload={() => { if (contextMenuNode?.data.assetId) downloadAsset(contextMenuNode.data.assetId, contextMenuNode.data.name || titleCase(contextMenuNode.type ?? "asset")); }}
             onSendToProject={() => { if (contextMenuNode?.data.assetId) sendAssetToProject(contextMenuNode.data.assetId, contextMenuNode.data.name || titleCase(contextMenuNode.type ?? "asset")); }}
@@ -2866,7 +2885,7 @@ function AssetCanvasAddControl({
   importing: boolean;
   onAdd: (type: Exclude<AssetCanvasNodeType, "asset">, position: { x: number; y: number }, documentId?: string) => void;
   onAddAsset: (asset: LibraryAsset, position: { x: number; y: number }) => void;
-  onUpload: (file: File, position: { x: number; y: number }) => void;
+  onUpload: (files: File[], position: { x: number; y: number }) => void;
 }) {
   const creationGroups = canvasCreationGroups(documents, tables, audioOperations);
   const [addOpen, setAddOpen] = useState(false);
@@ -2934,12 +2953,13 @@ function AssetCanvasAddControl({
           ref={uploadInput}
           hidden
           type="file"
-          accept={STORY_ASSET_ACCEPT}
+          accept={CANVAS_IMPORT_ACCEPT}
+          multiple
           onChange={(event) => {
-            const file = event.target.files?.[0];
+            const files = [...(event.target.files ?? [])];
             event.target.value = "";
             const position = placementPosition();
-            if (file && position) onUpload(file, position);
+            if (files.length && position) onUpload(files, position);
             setAddOpen(false);
           }}
         />
@@ -3064,7 +3084,7 @@ function AssetCanvasContextMenu({
   onRedo: () => unknown;
   onPaste: () => void;
   onAdd: (item: CanvasNodeCreationLeaf) => void;
-  onUpload: (file: File) => void;
+  onUpload: (files: File[]) => void;
   onView: () => void;
   onDownload: () => void;
   onSendToProject: () => void;
@@ -3128,11 +3148,12 @@ function AssetCanvasContextMenu({
           ref={uploadInput}
           hidden
           type="file"
-          accept={STORY_ASSET_ACCEPT}
+          accept={CANVAS_IMPORT_ACCEPT}
+          multiple
           onChange={(event) => {
-            const file = event.target.files?.[0];
+            const files = [...(event.target.files ?? [])];
             event.target.value = "";
-            if (file) onUpload(file);
+            if (files.length) onUpload(files);
             onClose();
           }}
         />
@@ -3831,18 +3852,10 @@ async function readUploadImage(file: File): Promise<{ name: string; image: Creat
   return { name: file.name, image: await promptImage(file) };
 }
 
-function libraryUploadMediaType(file: File): LibraryUploadMediaType | undefined {
-  const extension = file.name.split(".").pop()?.toLowerCase();
-  if (extension === "png") return "image/png";
-  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
-  if (extension === "svg") return "image/svg+xml";
-  if (extension === "webp") return "image/webp";
-  if (extension === "mp4") return "video/mp4";
-  if (extension === "mov") return "video/quicktime";
-  if (extension === "webm") return "video/webm";
-  if (extension === "mp3") return "audio/mpeg";
-  if (extension === "wav") return "audio/wav";
-  return undefined;
+function skippedFilesMessage(names: string[]): string {
+  const shown = names.slice(0, 5);
+  if (names.length > shown.length) shown.push(t("assetCanvas.moreFiles", { count: names.length - shown.length }));
+  return t("assetCanvas.skippedFiles", { count: names.length, names: new Intl.ListFormat(language, { type: "conjunction" }).format(shown) });
 }
 
 function titleCase(value: string): string {

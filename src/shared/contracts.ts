@@ -2,6 +2,7 @@ import type { ProjectPreviewSettings } from "./preview-settings.js";
 import type { PublishCommunityGame, PublishDeployment } from "./publish-v1.js";
 import type { WebSearchToolMetadata } from "./web-search.js";
 import type { DiffHunk } from "./line-diff.js";
+import type { MediaContentType } from "./media-files.js";
 import type { AgentRuntimeAuthStatus, AgentRuntimeId, ApprovalDecision, ApprovalRequestDetails } from "./agent-runtimes.js";
 
 export type PreviewStatus = "waiting" | "stopped" | "starting" | "ready" | "error";
@@ -1009,21 +1010,12 @@ export interface LibraryAssetSummary extends LibraryAsset {
   referenceOnly: boolean;
 }
 
-export type LibraryUploadMediaType =
-  | "image/png"
-  | "image/jpeg"
-  | "image/svg+xml"
-  | "image/webp"
-  | "video/mp4"
-  | "video/quicktime"
-  | "video/webm"
-  | "audio/mpeg"
-  | "audio/wav";
+export type LibraryUploadMediaType = MediaContentType;
 
 export interface CreateLibraryImageRequest {
   name: string;
   purpose?: LibraryAssetPurpose;
-  image: PromptImage & { mediaType: Extract<LibraryUploadMediaType, `image/${string}`> };
+  image: PromptImage & { mediaType: "image/png" | "image/jpeg" | "image/webp" };
 }
 
 export interface LineChanges {

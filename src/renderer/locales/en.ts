@@ -2333,14 +2333,17 @@ const en = {
       sharedTable: "Shared table",
     },
     saveFailedDetail: "Could not save canvas: {{error}}",
-    uploadTypes:
-      "Upload a PNG, JPEG, SVG, WebP, MP4, MOV, WebM, MP3, or WAV file.",
+    skippedFiles_one: "Skipped {{count}} unsupported file: {{names}}",
+    skippedFiles_other: "Skipped {{count}} unsupported files: {{names}}",
+    moreFiles_one: "{{count}} more",
+    moreFiles_other: "{{count}} more",
     uploadSize: "The upload must be no larger than 200 MB.",
     importRunning: "A file import is already running.",
     importLimit: "Import at most 1,000 files at a time.",
     nodeLimit: "A canvas can contain at most 2,000 nodes.",
     textTooLarge: "Text documents cannot exceed 1 MB.",
     documentCreateFailed: "Could not create a document.",
+    tableCreateFailed: "Could not create a table.",
     canvasFull:
       "The canvas filled up during import. Add the uploaded assets from Library.",
     pasteProject:
