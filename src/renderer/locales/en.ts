@@ -1063,9 +1063,6 @@ const en = {
   community: {
     myProfile: "My profile",
     creator: "Creator",
-    filterGames: "Filter games",
-    filters: "Filters",
-    closeFilters: "Close filters",
     search: "Search",
     searchPlaceholder: "Games or creators",
     sortBy: "Sort by",
