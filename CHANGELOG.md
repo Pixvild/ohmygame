@@ -31,6 +31,9 @@ Older versions are documented in
   and simplify provider detail controls. Availability and quota errors are reported
   when generating an image.
   ([#356](https://github.com/WhiteTowerAI/ohmygame/pull/356) by @dogxii)
+- The Windows installer is shown in English or Simplified Chinese, matching the
+  app's languages; other system languages get English.
+  ([#377](https://github.com/WhiteTowerAI/ohmygame/pull/377) by @dihuangdh)
 
 ### Fixed
 
@@ -47,7 +50,8 @@ Older versions are documented in
   moving forward, allow more time for first-start plugin preparation, and
   prevent a failed process check from incorrectly blocking installation.
   ([#352](https://github.com/WhiteTowerAI/ohmygame/pull/352) by @82228,
-  [#369](https://github.com/WhiteTowerAI/ohmygame/pull/369) by @82228)
+  [#369](https://github.com/WhiteTowerAI/ohmygame/pull/369) by @82228,
+  [#377](https://github.com/WhiteTowerAI/ohmygame/pull/377) by @dihuangdh)
 - Keep composer attachment and context menus usable near window edges and in
   short viewports, with scrolling when the full menu does not fit.
   ([#352](https://github.com/WhiteTowerAI/ohmygame/pull/352) by @82228,
