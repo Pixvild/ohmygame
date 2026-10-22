@@ -32,6 +32,7 @@ describe("Windows desktop installer safety", () => {
       expect(messages[key].en).toBeTruthy();
       expect(messages[key].zh_CN).toBeTruthy();
     }
+    expect(messages.appProcessCheckFailed.vi).toBeTruthy();
   });
 
   it("reserves completion for a successful installation", async () => {
