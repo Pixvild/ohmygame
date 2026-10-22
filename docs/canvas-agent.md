@@ -166,6 +166,15 @@ file uploads and external file synchronization. Asset Canvas uses one default
 board and retains automatic covers and sending assets to projects. Game
 projects expose multiple boards and an optional main game design document.
 
+Dropping, pasting or uploading files imports Markdown and text files as
+documents (up to 1 MB) and CSV or TSV files as tables (up to 4 MB). Images
+(PNG, JPEG, GIF, WebP, AVIF, SVG), video (MP4, MOV, WebM), audio (MP3, WAV,
+Ogg, M4A) and GLB models go to the Library as asset nodes, up to 200 MB each;
+`src/shared/media-files.ts` lists the media types, and the daemon checks each
+file's data against its type. System files such as `.DS_Store`, `__MACOSX`
+and hidden entries inside a dropped folder are left out. Other files are
+skipped and named in one message.
+
 Hold Option (Alt on Windows and Linux) when starting a node drag to pull out
 copies. Copies keep node content and Library resources, use new IDs, and drop
 all connections, including connections within a copied selection. The originals
