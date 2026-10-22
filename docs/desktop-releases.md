@@ -139,6 +139,13 @@ Pushing the tag starts `.github/workflows/release-desktop.yml`, which:
 5. Creates a GitHub pre-release with the Windows installer and macOS DMG/ZIP,
    extracting the matching changelog section from the same tag as its description.
 
+To test the packages before tagging, run the workflow manually from the
+branch to release (**Actions → Release desktop → Run workflow**, or
+`gh workflow run release-desktop.yml --ref <branch>`). It validates the
+changelog against `package.json`, builds both packages the same way, and keeps
+them as workflow artifacts for seven days; it does not upload to R2 or create a
+release. Only a pushed tag publishes.
+
 Re-running the release job updates the existing GitHub release assets and
 restores its description from the same tag's changelog. Do not re-push a published
 tag just to repair its GitHub Release page. A changelog edit on `dev` does not
