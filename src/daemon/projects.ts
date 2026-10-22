@@ -517,15 +517,24 @@ export class ProjectManager {
     });
   }
 
-  async #storeImportedAsset(id: string, fileName: string, writeTemporary: (temporary: string) => Promise<unknown>): Promise<string> {
+  /** Stores a file the canvas imported that is not a document, table or media asset, under `assets/files/`. */
+  async importWorkspaceFile(id: string, fileName: string, contents: Uint8Array): Promise<string> {
+    if (!this.#projects.has(id)) throw new ProjectAssetError("Project not found", 404);
+    return this.#mutateWorkspace(id, () => this.#storeImportedAsset(id, fileName, (temporary) => writeFile(temporary, contents, { flag: "wx" }), ["files"]));
+  }
+
+  async #storeImportedAsset(id: string, fileName: string, writeTemporary: (temporary: string) => Promise<unknown>, folder: readonly string[] = ["imported"]): Promise<string> {
     const project = this.#projects.get(id);
     if (!project) throw new Error(`Project not found: ${id}`);
     if (!validAssetName(fileName)) throw new ProjectAssetError("Invalid asset name", 400);
-    const assetsDirectory = path.join(project.workspacePath, "assets");
-    const importedDirectory = path.join(assetsDirectory, "imported");
+    if (!folder.every(validAssetName)) throw new ProjectAssetError("Invalid folder name", 400);
+    let importedDirectory = path.join(project.workspacePath, "assets");
     await ensureDirectory(project.workspacePath);
-    await ensureDirectory(assetsDirectory, true);
     await ensureDirectory(importedDirectory, true);
+    for (const part of folder) {
+      importedDirectory = path.join(importedDirectory, part);
+      await ensureDirectory(importedDirectory, true);
+    }
     const parsed = path.parse(fileName);
     let candidate = fileName;
     for (let suffix = 2; await exists(path.join(importedDirectory, candidate)); suffix += 1) {
@@ -540,7 +549,7 @@ export class ProjectManager {
       await rm(temporary, { force: true });
     }
     await this.touch(id);
-    return path.posix.join("assets", "imported", candidate);
+    return path.posix.join("assets", ...folder, candidate);
   }
 
   async renameAsset(id: string, assetPath: string, name: string): Promise<string> {

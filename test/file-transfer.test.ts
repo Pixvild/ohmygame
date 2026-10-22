@@ -25,15 +25,15 @@ describe("renderer file transfers", () => {
     expect(batch).toBe(2);
   });
 
-  it("sorts canvas imports into documents, tables and Library media, and leaves system files behind", () => {
+  it("sorts canvas imports into documents, tables, Library media and project files, and leaves system files behind", () => {
     expect(canvasImportKind("Notes.MD")).toEqual({ kind: "document" });
     expect(canvasImportKind("items.csv")).toEqual({ kind: "table", delimiter: "," });
     expect(canvasImportKind("items.tsv")).toEqual({ kind: "table", delimiter: "\t" });
     expect(canvasImportKind("hero.glb")).toEqual({ kind: "media", mediaType: "model/gltf-binary" });
     expect(canvasImportKind("theme.ogg")).toEqual({ kind: "media", mediaType: "audio/ogg" });
     expect(canvasImportKind("walk.GIF")).toEqual({ kind: "media", mediaType: "image/gif" });
-    expect(canvasImportKind("scene.psd")).toBeUndefined();
-    expect(canvasImportKind(".png")).toBeUndefined();
+    expect(canvasImportKind("scene.psd")).toEqual({ kind: "file" });
+    expect(canvasImportKind(".png")).toEqual({ kind: "file" });
     for (const path of [".DS_Store", "pack/Thumbs.db", "pack/._hero.png", "__MACOSX/pack/hero.png", "pack/.cache/hero.png"]) expect(isIgnoredImportPath(path), path).toBe(true);
     for (const path of [".env", ".pack/hero.png", "pack/hero.png"]) expect(isIgnoredImportPath(path), path).toBe(false);
   });

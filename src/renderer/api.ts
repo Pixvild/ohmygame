@@ -894,6 +894,15 @@ export async function uploadLibraryAsset(file: File, mediaType: LibraryUploadMed
   });
 }
 
+/** Copies a file that is not a document, table or media asset into the project's `assets/files/` folder. */
+export async function importCanvasFile(projectId: string, file: File): Promise<{ path: string }> {
+  return request(`/projects/${encodeURIComponent(projectId)}/canvas/files?${new URLSearchParams({ name: file.name })}`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: file,
+  });
+}
+
 export async function getLibraryAsset(assetId: string): Promise<Blob> {
   const response = await fetch(apiUrl(`/library/assets/${encodeURIComponent(assetId)}/content`), { headers: runtimeHeaders() });
   if (!response.ok) throw await responseError(response);
