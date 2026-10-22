@@ -179,6 +179,15 @@ pasting one into another project is refused. `canvas_check` reports a file
 node whose file is missing. System files such as `.DS_Store`, `__MACOSX` and
 hidden entries inside a dropped folder are left out.
 
+Dropping or pasting a folder asks first, because a folder is easy to drop by
+mistake. **Import folder** copies it into `assets/files/<folder>/` with its
+structure intact, so files that refer to each other by relative path (a glTF
+with its textures, a sprite atlas, an engine asset pack) keep working, and adds
+one folder node (`data.directory: true`). A repeated folder name gets a `-2`
+suffix. Folder imports take up to 5,000 files and 2 GB at a time.
+**Import files separately** imports each file as above, and **Cancel** imports
+nothing.
+
 Hold Option (Alt on Windows and Linux) when starting a node drag to pull out
 copies. Copies keep node content and Library resources, use new IDs, and drop
 all connections, including connections within a copied selection. The originals

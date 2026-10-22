@@ -125,6 +125,13 @@ describe("Markdown design workspace", () => {
     board.board.nodes.push({ id: "hero", type: "file", position: { x: 0, y: 0 }, data: { path: "assets/files/Hero.psd" } }); board.board.editorLayout.nodes.hero = { x: 0, y: 0 };
     expect((await app.inject({ method: "PUT", url: `${base}/boards/${board.board.id}`, payload: board })).statusCode).toBe(200);
     expect((await checkCanvasWorkspace(project.workspacePath)).ok).toBe(true);
+    const folder = (name: string) => app.inject({ method: "POST", url: `${base}/folders`, payload: { name } });
+    expect((await folder("pack")).json()).toEqual({ path: "assets/files/pack" });
+    expect((await folder("pack")).json()).toEqual({ path: "assets/files/pack-2" });
+    const nested = (directory: string) => app.inject({ method: "POST", url: `${base}/files?name=skin.png&directory=${encodeURIComponent(directory)}`, headers: { "content-type": "application/octet-stream" }, payload: Buffer.from("png") });
+    expect((await nested("assets/files/pack/textures/hero")).json()).toEqual({ path: "assets/files/pack/textures/hero/skin.png" });
+    for (const directory of ["assets/imported", "src", "assets/files/../../src", "assets/files/pack/", "assets/files/./pack"]) expect((await nested(directory)).statusCode, directory).toBe(400);
+    expect((await folder("..")).statusCode).toBe(400);
     await rm(path.join(project.workspacePath, "assets/files/Hero.psd"));
     expect((await checkCanvasWorkspace(project.workspacePath)).issues).toContainEqual({ file: `canvas/boards/${board.board.id}.json`, message: "Node hero: file assets/files/Hero.psd: File not found" });
   });

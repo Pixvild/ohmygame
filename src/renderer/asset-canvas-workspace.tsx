@@ -91,7 +91,7 @@ import {
 } from "../shared/contracts.js";
 import { combineAssetCanvasPrompt, createAssetGenerationNode, isTextGenerationReferenceNode, preferredImageOption, validateAssetCanvasDocument } from "../shared/asset-canvas.js";
 import { VOLCENGINE_TTS_VOICES, availableAudioOperations, type AudioModel, type AudioOperation, type AudioProviderCatalogStatus } from "../shared/audio.js";
-import { createLibraryImage, getLibraryAsset, getWorkspaceAsset, getProjectCover, getProjectCoverState, listAudioModelCatalog, listImageModelCatalog, listModel3DAnimations, listModel3DOperations, listModel3DCatalog, listVideoModelCatalog, MODELS_CHANGED_EVENT, setProjectCover, uploadLibraryAsset, importCanvasFile } from "./api.js";
+import { createLibraryImage, getLibraryAsset, getWorkspaceAsset, getProjectCover, getProjectCoverState, listAudioModelCatalog, listImageModelCatalog, listModel3DAnimations, listModel3DOperations, listModel3DCatalog, listVideoModelCatalog, MODELS_CHANGED_EVENT, setProjectCover, uploadLibraryAsset, importCanvasFile, createCanvasImportFolder } from "./api.js";
 import { useAuth } from "./auth.js";
 import { accountCloudState, canAffordCloudModel, CloudQuotaStatus } from "./cloud-quota.js";
 import { downloadAssetBlob, loadLibraryAssets, type LibraryAsset } from "./library-assets.js";
@@ -125,7 +125,8 @@ import { VideoReferencePrompt } from "./video-reference-prompt.js";
 import { resolveVideoMentions, sameVideoReference, videoReferenceAliases, videoReferenceAspectRatios, videoReferenceLimit, videoReferenceMode } from "../shared/video-references.js";
 import { CanvasNodeReferenceStrip, CanvasReferenceThumbnail, type CanvasNodeReferencesRuntime } from "./canvas-node-references.js";
 import { t, tNodes } from "./i18n.js";
-import { canvasImportKind, isIgnoredImportPath } from "./canvas-file-import.js";
+import { canvasImportKind, droppedFolders, isIgnoredImportPath, type DroppedFolder } from "./canvas-file-import.js";
+import { formatBytes } from "./format-bytes.js";
 import { fileExtension } from "../shared/media-files.js";
 import { importCanvasCsv } from "../shared/canvas-table.js";
 
@@ -133,6 +134,8 @@ const ASSET_EDGE_PREFIX = "asset:";
 const OUTPUT_HANDLE = "out";
 const MEDIA_NODE_MAX_WIDTH = 440;
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+const MAX_FOLDER_IMPORT_FILES = 5_000;
+const MAX_FOLDER_IMPORT_BYTES = 2 * 1024 * 1024 * 1024;
 const MEDIA_NODE_MIN_WIDTH = 300;
 const MEDIA_NODE_MAX_HEIGHT = 360;
 const MEDIA_NODE_MIN_HEIGHT = 200;
@@ -203,6 +206,7 @@ type AssetCanvasFlowData = {
   tableRuntime?: TableNodeRuntime;
   /** Project-relative path of a file node. */
   path?: string;
+  directory?: true;
   fileRuntime?: { onReveal?: () => void };
   documentId?: string;
   documentRuntime?: DocumentNodeRuntime;
@@ -445,6 +449,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   const [generatingTextNodeId, setGeneratingTextNodeId] = useState<string>();
   const [uploadingNodeId, setUploadingNodeId] = useState<string>();
   const [importingAssets, setImportingAssets] = useState(false);
+  const [folderPrompt, setFolderPrompt] = useState<{ folders: DroppedFolder[]; answer: (choice: "folder" | "files" | undefined) => void }>();
   const [generationError, setGenerationError] = useState<{ nodeId: string; message: string }>();
   const latestCanvas = useRef<AssetCanvasDocument | undefined>(undefined);
   const storageRef = useRef(storage);
@@ -1053,9 +1058,9 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   }
 
   /** Copies a file that is not a document, table or media asset into the project; returns its project path. */
-  async function importProjectFile(file: File): Promise<string> {
+  async function importProjectFile(file: File, directory?: string): Promise<string> {
     if (file.size > MAX_UPLOAD_BYTES) throw new Error(t("assetCanvas.uploadSize"));
-    return (await importCanvasFile(projectId, file)).path;
+    return (await importCanvasFile(projectId, file, directory)).path;
   }
 
   async function importAssetFiles(files: File[], position: { x: number; y: number }): Promise<void> {
@@ -1090,11 +1095,39 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     const failures: string[] = [];
     const imported: AssetCanvasFlowNode[] = [];
     try {
-      const files = (await source).filter(({ file, relativePath }) => !isIgnoredImportPath(relativePath ?? file.name)).map(({ file }) => ({ file, kind: canvasImportKind(file.name) }));
+      const accepted = (await source).filter(({ file, relativePath }) => !isIgnoredImportPath(relativePath ?? file.name));
+      let { folders, files: chosen } = droppedFolders(accepted);
+      if (folders.length) {
+        // A folder is easy to drop by mistake and can hold many files, so ask first.
+        setImportingAssets(false);
+        const choice = await new Promise<"folder" | "files" | undefined>((answer) => setFolderPrompt({ folders, answer }));
+        setFolderPrompt(undefined);
+        if (!choice || !mounted.current) return;
+        setImportingAssets(true);
+        if (choice === "files") { chosen = accepted; folders = []; }
+      }
+      if (folders.reduce((count, folder) => count + folder.files.length, 0) > MAX_FOLDER_IMPORT_FILES) throw new Error(t("assetCanvas.folderFileLimit"));
+      if (folders.reduce((bytes, folder) => bytes + folder.bytes, 0) > MAX_FOLDER_IMPORT_BYTES) throw new Error(t("assetCanvas.folderSizeLimit"));
+      const files = chosen.map(({ file }) => ({ file, kind: canvasImportKind(file.name) }));
       if (files.length > 1_000) throw new Error(t("assetCanvas.importLimit"));
-      if (nodesRef.current.length + files.length > MAX_ASSET_CANVAS_NODES) throw new Error(t("assetCanvas.nodeLimit"));
-      for (const [index, { file, kind }] of files.entries()) {
-        const at = snapCanvasPosition({ x: position.x + (index % 3) * 480, y: position.y + Math.floor(index / 3) * 560 });
+      if (nodesRef.current.length + files.length + folders.length > MAX_ASSET_CANVAS_NODES) throw new Error(t("assetCanvas.nodeLimit"));
+      let placed = 0;
+      const nextPosition = () => { const index = placed++; return snapCanvasPosition({ x: position.x + (index % 3) * 480, y: position.y + Math.floor(index / 3) * 560 }); };
+      for (const folder of folders) {
+        try {
+          const root = (await createCanvasImportFolder(projectId, folder.name)).path;
+          const queue = [...folder.files];
+          await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+            for (let item = queue.shift(); item; item = queue.shift()) {
+              const { file, directory } = item;
+              try { await importProjectFile(file, directory ? `${root}/${directory}` : root); } catch (cause) { failures.push(`${[folder.name, directory, file.name].filter(Boolean).join("/")}: ${errorMessage(cause)}`); }
+            }
+          }));
+          imported.push({ id: crypto.randomUUID(), type: "file", position: nextPosition(), selected: true, data: { path: root, directory: true } });
+        } catch (cause) { failures.push(`${folder.name}: ${errorMessage(cause)}`); }
+      }
+      for (const { file, kind } of files) {
+        const at = nextPosition();
         try {
           if (kind.kind === "table") {
             imported.push({ id: crypto.randomUUID(), type: "table", position: at, selected: true, data: { tableId: await importTableFile(file, kind.delimiter) } });
@@ -1824,6 +1857,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
         } } : {})}
       /> : null}
       {sentAsset ? <SendToProjectDialog assetId={sentAsset.assetId} name={sentAsset.name} onClose={() => setSentAsset(undefined)} /> : null}
+      {folderPrompt ? createPortal(<FolderImportDialog folders={folderPrompt.folders} onAnswer={folderPrompt.answer} />, window.document.body) : null}
       {nodeDetails ? createPortal(<div className="design-modal-backdrop nokey" onPointerDown={(event) => { if (event.target === event.currentTarget) setNodeDetails(undefined); }}><section className="design-modal" role="dialog" aria-modal="true" aria-label={t("assetCanvas.nodeDetails")} onKeyDown={(event) => { if (event.key === "Escape") setNodeDetails(undefined); }}>
         <header><h2>{t("assetCanvas.nodeDetails")}</h2><button type="button" title={t("common.close")} aria-label={t("common.close")} onClick={() => setNodeDetails(undefined)}><X size={16} /></button></header>
         <form onSubmit={(event) => { event.preventDefault(); setNodes((current) => current.map((node) => node.id === nodeDetails.id ? { ...node, title: nodeDetails.title.trim() || undefined, description: nodeDetails.description.trim() || undefined } : node)); setNodeDetails(undefined); }}>
@@ -2343,18 +2377,40 @@ function AssetNode({ data, selected }: Pick<NodeProps<AssetCanvasFlowNode>, "dat
 
 function FileNode({ data, selected }: Pick<NodeProps<AssetCanvasFlowNode>, "data" | "selected">) {
   const filePath = data.path ?? "";
-  const name = filePath.split("/").at(-1) || t("assetCanvas.file");
-  const extension = fileExtension(name).slice(1).toUpperCase();
+  const name = filePath.split("/").at(-1) || t(data.directory ? "assetCanvas.folder" : "assetCanvas.file");
+  const extension = data.directory ? "" : fileExtension(name).slice(1).toUpperCase();
+  const Icon = data.directory ? Folder : Package;
   return (
     <div className={`story-node story-media-node story-file-node${selected ? " is-selected" : ""}`} style={{ "--story-media-width": "300px", "--story-media-height": "150px" } as CSSProperties}>
-      <CanvasNodeLabel icon={Package} label={name} details={data.nodeDetails} trailing={extension ? <small>{extension}</small> : undefined} />
+      <CanvasNodeLabel icon={Icon} label={name} details={data.nodeDetails} trailing={data.directory ? <small>{t("assetCanvas.folder")}</small> : extension ? <small>{extension}</small> : undefined} />
       <div data-alignment-frame className="story-media-stage">
         <div className="story-media-empty">
-          <Package size={30} />
+          <Icon size={30} />
           <span title={filePath}>{filePath}</span>
           {data.fileRuntime?.onReveal ? <button className="canvas-asset-retry nodrag" type="button" onClick={data.fileRuntime.onReveal}>{t("assetCanvas.showInFolder")}</button> : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function FolderImportDialog({ folders, onAnswer }: { folders: DroppedFolder[]; onAnswer: (choice: "folder" | "files" | undefined) => void }) {
+  const files = folders.reduce((count, folder) => count + folder.files.length, 0);
+  const size = formatBytes(folders.reduce((bytes, folder) => bytes + folder.bytes, 0));
+  return (
+    <div className="design-modal-backdrop nokey" onPointerDown={(event) => { if (event.target === event.currentTarget) onAnswer(undefined); }}>
+      <section className="design-modal" role="alertdialog" aria-modal="true" aria-labelledby="canvas-folder-import-title" onKeyDown={(event) => { if (event.key === "Escape") onAnswer(undefined); }}>
+        <header><h2 id="canvas-folder-import-title">{t("assetCanvas.folderImportTitle", { count: folders.length })}</h2></header>
+        <p>{folders.length === 1
+          ? tNodes(files === 1 ? "assetCanvas.folderImportOneFile" : "assetCanvas.folderImportFiles", { name: <strong>{folders[0]!.name}</strong>, count: files, size })
+          : t("assetCanvas.folderImportMany", { folders: folders.length, count: files, size })}</p>
+        <p>{t("assetCanvas.folderImportHint")}</p>
+        <footer>
+          <button type="button" onClick={() => onAnswer(undefined)}>{t("common.cancel")}</button>
+          <button type="button" onClick={() => onAnswer("files")}>{t("assetCanvas.importFilesSeparately")}</button>
+          <button type="button" autoFocus onClick={() => onAnswer("folder")}>{t("assetCanvas.importFolder", { count: folders.length })}</button>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -3491,7 +3547,7 @@ function assetCanvasNodeData(node: AssetCanvasFlowNode, model3DModels?: readonly
     };
   }
   if (node.type === "table") return { id: node.id, type: "table", position: node.position, data: { tableId: node.data.tableId ?? "" } };
-  if (node.type === "file") return { id: node.id, type: "file", position: node.position, data: { path: node.data.path ?? "" } };
+  if (node.type === "file") return { id: node.id, type: "file", position: node.position, data: { path: node.data.path ?? "", ...(node.data.directory ? { directory: true as const } : {}) } };
   if (node.type === "document") return { id: node.id, type: "document", position: node.position, data: { documentId: node.data.documentId ?? "", ...(node.data.references ? { references: textNodeReferences(node) } : {}) } };
   if (node.type === "asset") return {
     id: node.id,

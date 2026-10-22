@@ -56,6 +56,7 @@ describe("Asset Canvas schema diagnostics", () => {
     ["assets\\file.txt", false],
   ] as const)("checks file node path %s", (path, accepted) => {
     expect(Check(ASSET_CANVAS_SCHEMA, canvas({ id: "file", type: "file", data: { path } }))).toBe(accepted);
+    expect(Check(ASSET_CANVAS_SCHEMA, canvas({ id: "folder", type: "file", data: { path, directory: true } }))).toBe(accepted);
   });
 
   it.each([{}, { type: "unknown" }, { type: "image", data: {} }, null])(
