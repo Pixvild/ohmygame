@@ -2,7 +2,7 @@ import type { ProjectPreviewSettings } from "./preview-settings.js";
 import type { PublishCommunityGame, PublishDeployment } from "./publish-v1.js";
 import type { WebSearchToolMetadata } from "./web-search.js";
 import type { DiffHunk } from "./line-diff.js";
-import type { AgentRuntimeId, ApprovalDecision, ApprovalRequestDetails } from "./agent-runtimes.js";
+import type { AgentRuntimeAuthStatus, AgentRuntimeId, ApprovalDecision, ApprovalRequestDetails } from "./agent-runtimes.js";
 
 export type PreviewStatus = "waiting" | "stopped" | "starting" | "ready" | "error";
 export type AgentStatus = "idle" | "running" | "cancelling" | "error";
@@ -79,6 +79,8 @@ export type MediaModelUsage = "image" | "3d" | "video";
 export type MediaModelDefaults = Partial<Record<MediaModelUsage, ModelRef>>;
 
 export interface ProviderSummary extends ModelProviderSummary {
+  /** Saved sign-in status for a local CLI provider. */
+  authStatus?: AgentRuntimeAuthStatus;
   /** OpenAI can connect chat and images independently. */
   languageConfigured?: boolean;
   imageConfigured?: boolean;
@@ -391,6 +393,8 @@ export interface ProjectState extends ProjectPreviewSettings {
   type: ProjectType;
   updatedAt: string;
   workspacePath: string;
+  /** The plugin owns the binding file; OhMyGame stores only its identity and presentation. */
+  integration?: { pluginId: string; preview?: "external" };
   /** General Game's explicit Web preview opt-in; missing means disabled. */
   webPreviewEnabled?: boolean;
   /** Directory, relative to the workspace root, in which the Web Game preview starts. */
@@ -892,6 +896,7 @@ export interface CreateProjectRequest {
   viewport?: Viewport;
   /** Absolute path returned by the desktop directory picker. */
   workspacePath?: string;
+  pluginId?: string;
 }
 /** `reasoningLevel` is for a Pi model and `nativeReasoningLevel` for a coding agent's. */
 export interface CreateConversationRequest {
@@ -939,6 +944,10 @@ export interface ConversationCapabilities {
     description: string;
     marketplaceId: string;
     marketplaceDisplayName: string;
+    icon?: import("./plugins.js").PluginIcon;
+    iconRevision?: string;
+    projectTypes?: ProjectType[];
+    integration?: import("./plugin-integration.js").PluginIntegrationDefinition;
   }>;
   skills: Array<{
     name: string;

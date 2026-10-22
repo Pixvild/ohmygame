@@ -86,6 +86,7 @@ import type { NodeCodebaseDetail, NodeCodebaseUpdate } from "../shared/playable-
 import type { PlayableAddedNode, PlayablePresetSummary, PlayableProjectValidationResult as PlayableProjectValidation, PlayableThumbnailManifest } from "../shared/playable-editor.js";
 import type { InstallPluginRequest, PluginCatalog, PluginDetail, PluginInstallInspection, PluginSettings, PluginSkillContent } from "../shared/plugins.js";
 import type { UpdateWebSearchSettings, WebSearchSettings } from "../shared/web-search.js";
+import type { ExternalAgentClientId, ExternalAgentSettings, UpdateExternalAgentSettings } from "../shared/external-mcp.js";
 import type { DesktopClipboardFile } from "../shared/file-transfer.js";
 import type { WebGamePlayerBridge } from "../shared/web-game-player.js";
 import type { NetworkConnectionTest, NetworkSettings, NetworkSettingsState } from "../shared/network-settings.js";
@@ -538,6 +539,22 @@ export async function getWebSearchSettings(): Promise<WebSearchSettings> {
 
 export async function updateWebSearchSettings(input: UpdateWebSearchSettings): Promise<WebSearchSettings> {
   return request("/settings/web-search", { method: "PUT", body: JSON.stringify(input) });
+}
+
+export async function getExternalAgentSettings(): Promise<ExternalAgentSettings> {
+  return request("/settings/external-agents");
+}
+
+export async function updateExternalAgentSettings(input: UpdateExternalAgentSettings): Promise<ExternalAgentSettings> {
+  return request("/settings/external-agents", { method: "PUT", body: JSON.stringify(input) });
+}
+
+export async function connectExternalAgent(id: ExternalAgentClientId): Promise<ExternalAgentSettings> {
+  return request(`/settings/external-agents/clients/${id}`, { method: "PUT" });
+}
+
+export async function disconnectExternalAgent(id: ExternalAgentClientId): Promise<ExternalAgentSettings> {
+  return request(`/settings/external-agents/clients/${id}`, { method: "DELETE" });
 }
 
 export async function listExploreGames(accessToken?: string, options: CommunityGamesQuery = {}): Promise<CommunityGame[]> {
@@ -1491,4 +1508,20 @@ export async function releasePreview(projectId: string, leaseId: string): Promis
 }
 export async function inspectProjectPreview(projectId: string, settings: ProjectRunSettings): Promise<{ mode?: string; manager?: string; source?: string; error?: string }> {
   return request(`/projects/${projectId}/preview/inspect`, { method: "POST", body: JSON.stringify(settings) });
+}
+
+export function getPluginIntegration(pluginId: string, projectId?: string): Promise<import("../shared/plugin-integration.js").PluginIntegrationState> {
+  return request(`/plugins/${encodeURIComponent(pluginId)}/integration${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`);
+}
+export function runPluginIntegration(pluginId: string, action: import("../shared/plugin-integration.js").PluginIntegrationAction, projectId?: string, remoteProjectId?: string): Promise<import("../shared/plugin-integration.js").PluginIntegrationState> {
+  return request(`/plugins/${encodeURIComponent(pluginId)}/integration${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, { method: "POST", body: JSON.stringify({ action, ...(remoteProjectId ? { projectId: remoteProjectId } : {}) }) });
+}
+export function cancelPluginIntegration(pluginId: string, projectId?: string): Promise<{ ok: true }> {
+  return request(`/plugins/${encodeURIComponent(pluginId)}/integration${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, { method: "DELETE" });
+}
+export function clearProjectIntegration(projectId: string): Promise<ProjectState> {
+  return request(`/projects/${encodeURIComponent(projectId)}/integration`, { method: "DELETE" });
+}
+export function setProjectIntegration(projectId: string, pluginId: string): Promise<ProjectState> {
+  return request(`/projects/${encodeURIComponent(projectId)}/integration`, { method: "PUT", body: JSON.stringify({ pluginId }) });
 }

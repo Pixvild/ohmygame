@@ -4,6 +4,8 @@ Design and Asset Canvas share a project directory the agent edits with its ordin
 The canvas renders those files and autosaves user edits into the same sources.
 The agent can initialize a canvas when design or asset work needs it, without
 requiring the user to open Design first.
+The agent shows final media deliverables on the relevant board, reusing existing
+nodes and asset IDs. Local media can reference existing project-relative paths.
 
 ```text
 canvas/
@@ -96,7 +98,9 @@ removable chat context. The agent reads current files before making changes.
 Concurrent edits to different fields merge; competing edits require the user
 to choose a version. A node type change is adopted as a whole when the other
 version of that node is unchanged; competing edits during a type change require
-a version choice. Invalid external edits leave the last valid canvas
+a version choice. If combined edits create invalid node references, the editor
+also requires a version choice and preserves the local recovery draft.
+Invalid external edits leave the last valid canvas
 visible with diagnostics. External node changes enter the canvas undo history.
 
 Asset Canvas has **Canvas** and **Code** navigation. Code shows the workspace

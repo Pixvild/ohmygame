@@ -33,9 +33,12 @@ import { sandboxedPath, sessionCaches, toolchainRoots } from "./environment.js";
 import type { AgentContextUsage } from "../../shared/contracts.js";
 import { runtimeStartupError } from "./compatibility.js";
 import { importCodexImage } from "./codex-images.js";
+import { BRIDGE_SERVER_NAME } from "./tool-bridge.js";
+import { EXTERNAL_MCP_SERVER_NAME } from "../../shared/external-mcp.js";
 
 /** A turn on a shared server must stop on its own: the process outlives the conversation. */
 const INTERRUPT_TIMEOUT_MS = 5_000;
+const TOOL_PREFIX = `${BRIDGE_SERVER_NAME}_`;
 
 interface CodexTurn {
   sink: NativeTurnSink;
@@ -241,14 +244,6 @@ export class CodexDriver implements NativeDriver {
       developerInstructions: this.context.instructions,
       config: await this.#config(server),
     };
-    // Dynamic tools are fixed when the thread starts, and a thread that starts
-    // in planning continues after the plan is approved.
-    const tools = this.context.bridge.list("all").map((tool) => ({
-      type: "function",
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-    }));
     if (this.#threadId) {
       try {
         const resumed = await server.request<{
@@ -271,6 +266,14 @@ export class CodexDriver implements NativeDriver {
         throw cause;
       }
     }
+    // Dynamic tools are fixed when the thread starts, including in planning.
+    // Names such as mcp are reserved by Codex, so prefix the host's tools.
+    const tools = this.context.bridge.list("all").map((tool) => ({
+      type: "function",
+      name: `${TOOL_PREFIX}${tool.name}`,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+    }));
     const started = await server.request<{
       thread?: { id?: string };
       activePermissionProfile?: { id?: string };
@@ -356,21 +359,28 @@ export class CodexDriver implements NativeDriver {
         GIT_CONFIG_GLOBAL: await privateGitConfig(temporary, this.context.env),
       },
     };
-    if (!this.context.isolateUserConfig) return config;
-    config.notify = [];
+    let servers: Record<string, unknown>;
     try {
       const read = await server.request<{ config?: Record<string, unknown> }>(
         "config/read",
         { cwd: this.context.workspacePath },
       );
-      const servers = record(read.config?.mcp_servers) ?? {};
-      for (const name of Object.keys(servers))
-        config[`mcp_servers.${name}.enabled`] = false;
+      servers = record(read.config?.mcp_servers) ?? {};
     } catch {
+      if (!this.context.isolateUserConfig) return config;
       throw new Error(
         "Codex configuration could not be checked. Retry, or explicitly enable your own CLI configuration in Settings.",
       );
     }
+    if (!this.context.isolateUserConfig) {
+      // The person's own configuration may connect Codex to OhMyGame from outside.
+      if (servers[EXTERNAL_MCP_SERVER_NAME])
+        config[`mcp_servers.${EXTERNAL_MCP_SERVER_NAME}.enabled`] = false;
+      return config;
+    }
+    config.notify = [];
+    for (const name of Object.keys(servers))
+      config[`mcp_servers.${name}.enabled`] = false;
     // Codex has no way to leave out the person's Skills, plugins and AGENTS.md from its own folder.
     return config;
   }
@@ -512,7 +522,7 @@ export class CodexDriver implements NativeDriver {
       case "dynamicToolCall":
         sink.toolCall(
           id,
-          String(item.tool ?? "tool"),
+          this.#bridgeToolName(item.tool ?? "tool"),
           record(item.arguments) ?? {},
         );
         sink.toolStarted(id);
@@ -661,6 +671,12 @@ export class CodexDriver implements NativeDriver {
     }
   }
 
+  #bridgeToolName(tool: unknown): string {
+    const name = String(tool ?? "");
+    // Existing native threads may still call the original unprefixed names.
+    return name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name;
+  }
+
   async #request(
     method: string,
     params: Record<string, unknown>,
@@ -670,7 +686,7 @@ export class CodexDriver implements NativeDriver {
       if (!turn || turn.signal.aborted) throw new Error("No turn is running");
       const callId = String(params.callId ?? "");
       const outcome = await this.context.bridge.call(
-        String(params.tool ?? ""),
+        this.#bridgeToolName(params.tool),
         params.arguments,
         callId,
         turn?.signal,

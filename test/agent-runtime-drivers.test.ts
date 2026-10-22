@@ -141,13 +141,14 @@ function recordingSink(
 
 async function context(
   overrides: Partial<DriverContext> = {},
+  toolName = "echo_tool",
 ): Promise<DriverContext> {
   const privateDirectory = await mkdtemp(
     path.join(tmpdir(), "ohmygame-agent-"),
   );
   cleanup.push(() => rm(privateDirectory, { recursive: true, force: true }));
   const echo = defineTool({
-    name: "echo_tool",
+    name: toolName,
     label: "Echo",
     description: "Echo a value",
     parameters: Type.Object({ value: Type.String() }),
@@ -937,6 +938,10 @@ describe("Claude Code adapter", () => {
       ]),
     );
     expect(clis[0]!.args).not.toContain("--strict-mcp-config");
+    // The person's own configuration may connect Claude Code to OhMyGame from outside.
+    expect(clis[0]!.args).toEqual(
+      expect.arrayContaining(["--disallowedTools", "mcp__ohmygame-studio"]),
+    );
   });
 });
 
@@ -1114,7 +1119,7 @@ describe("Codex adapter", () => {
       ).toEqual({ status: "completed" });
     expect(threads).toHaveLength(1);
     expect(threads[0]!.dynamicTools).toEqual([
-      expect.objectContaining({ name: "echo_tool" }),
+      expect.objectContaining({ name: "ohmygame_echo_tool" }),
     ]);
   });
 
@@ -1165,6 +1170,53 @@ describe("Codex adapter", () => {
       ":danger-full-access",
     ]);
     expect(profiles.at(-1)).toMatch(/^ohmygame-.*-read$/);
+  });
+
+  it("leaves out an external OhMyGame connection from the person's own configuration", async () => {
+    let config: Record<string, unknown> = {};
+    fakeCli((message, cli) => {
+      if (typeof message.method !== "string" || message.id === undefined)
+        return;
+      const params = message.params as Record<string, unknown>;
+      if (message.method === "thread/start")
+        config = params.config as Record<string, unknown>;
+      cli.send({
+        id: message.id,
+        result:
+          message.method === "config/read"
+            ? {
+                config: {
+                  mcp_servers: {
+                    personal: { command: "x" },
+                    "ohmygame-studio": { command: "ohmygame-mcp" },
+                  },
+                },
+              }
+            : message.method === "thread/start"
+              ? {
+                  thread: { id: "thread-1" },
+                  activePermissionProfile: { id: params.permissions },
+                }
+              : {},
+      });
+      if (message.method === "turn/start")
+        setTimeout(() =>
+          cli.send({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          }),
+        );
+    });
+    const driver = new CodexDriver(await context({ isolateUserConfig: false }));
+    cleanup.push(() => driver.dispose());
+    await driver.runTurn(
+      { text: "hi", images: [], readOnly: false },
+      recordingSink().sink,
+      new AbortController().signal,
+    );
+    expect(config["mcp_servers.ohmygame-studio.enabled"]).toBe(false);
+    expect(config).not.toHaveProperty("mcp_servers.personal.enabled");
+    expect(config).not.toHaveProperty("notify");
   });
 
   it("denies the shared temporary folders Codex's minimal access would read", async () => {
@@ -1543,7 +1595,20 @@ describe("Codex adapter", () => {
     expect(recorded.asked).toEqual([]);
   });
 
-  it("runs a turn on a thread with OhMyGame's tools and asks before anything its sandbox would stop", async () => {
+  it.each([
+    { toolName: "echo_tool", enabled: true },
+    { toolName: "mcp", enabled: true },
+    { toolName: "mcp", enabled: false },
+  ])("runs $toolName (enabled: $enabled) with sandbox approvals", async ({ toolName, enabled }) => {
+    const toolResult = {
+      contentItems: [
+        {
+          type: "inputText",
+          text: enabled ? "echo y" : `Tool ${toolName} is not available`,
+        },
+      ],
+      success: enabled,
+    };
     const requests: Array<{ method: string; params: Record<string, unknown> }> =
       [];
     const pending = new Map<
@@ -1612,7 +1677,7 @@ describe("Codex adapter", () => {
         item: {
           type: "dynamicToolCall",
           id: "call-1",
-          tool: "echo_tool",
+          tool: `ohmygame_${toolName}`,
           arguments: { value: "y" },
         },
       });
@@ -1620,21 +1685,17 @@ describe("Codex adapter", () => {
         await fromServer(cli, "item/tool/call", {
           ...turn,
           callId: "call-1",
-          tool: "echo_tool",
+          tool: `ohmygame_${toolName}`,
           arguments: { value: "y" },
         }),
-      ).toEqual({
-        contentItems: [{ type: "inputText", text: "echo y" }],
-        success: true,
-      });
+      ).toEqual(toolResult);
       notify(cli, "item/completed", {
         ...turn,
         item: {
           type: "dynamicToolCall",
           id: "call-1",
-          tool: "echo_tool",
-          contentItems: [{ type: "inputText", text: "echo y" }],
-          success: true,
+          tool: `ohmygame_${toolName}`,
+          ...toolResult,
         },
       });
       notify(cli, "item/started", {
@@ -1677,7 +1738,9 @@ describe("Codex adapter", () => {
         turn: { id: "turn-1", status: "completed" },
       });
     });
-    const driver = new CodexDriver(await context({ model: "gpt-5.6-sol" }));
+    const driverContext = await context({ model: "gpt-5.6-sol" }, toolName);
+    driverContext.bridge.setActive(enabled ? [toolName] : []);
+    const driver = new CodexDriver(driverContext);
     cleanup.push(() => driver.dispose());
     const recorded = recordingSink();
     const outcome = await driver.runTurn(
@@ -1710,7 +1773,7 @@ describe("Codex adapter", () => {
       },
     });
     expect(thread.dynamicTools).toEqual([
-      expect.objectContaining({ type: "function", name: "echo_tool" }),
+      expect.objectContaining({ type: "function", name: `ohmygame_${toolName}` }),
     ]);
     const turn = requests.find(
       (request) => request.method === "turn/start",
@@ -1727,17 +1790,19 @@ describe("Codex adapter", () => {
     expect(recorded.calls).toEqual([
       "text:msg-1:Working",
       "textDone:msg-1:Working",
-      'toolCall:call-1:echo_tool:{"value":"y"}',
+      `toolCall:call-1:${toolName}:{"value":"y"}`,
       "toolStarted:call-1",
-      "toolResult:call-1:false",
+      `toolResult:call-1:${!enabled}`,
       'toolCall:cmd-1:bash:{"command":"touch /tmp/workspace/a"}',
       "toolStarted:cmd-1",
       "toolResult:cmd-1:true",
       "usage:10:5:400000:35",
     ]);
-    expect(recorded.results.get("call-1")?.result.details).toEqual({
-      artifact: { type: "image", path: "art.png", mediaType: "image/png" },
-    });
+    expect(recorded.results.get("call-1")?.result.details).toEqual(
+      enabled ? {
+        artifact: { type: "image", path: "art.png", mediaType: "image/png" },
+      } : undefined,
+    );
     expect(recorded.asked).toEqual([]);
     expect(turn).not.toHaveProperty("sandboxPolicy");
     expect(turn.permissions).toBe(thread.permissions);
