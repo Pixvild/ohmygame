@@ -616,6 +616,8 @@ const en = {
     confirmRemove:
       "Remove “{{name}}” from OhMyGame? Files in “{{path}}” will remain on disk.",
     confirmDelete: "Delete “{{name}}”? This cannot be undone.",
+    import: "Import project",
+    importTooLarge: "Choose a project archive up to 10 GB",
   },
   home: {
     title: "What are we making today?",
@@ -804,6 +806,8 @@ const en = {
     editedHours: "Edited {{count}}h ago",
     editedDays: "Edited {{count}}d ago",
     editedOn: "Edited {{date}}",
+    export: "Export project",
+    exporting: "Exporting…",
   },
   conversations: {
     history: "Conversation history",
