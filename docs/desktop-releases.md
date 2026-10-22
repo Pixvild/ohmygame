@@ -82,6 +82,18 @@ controls are separate from the native per-phase progress controls that NSIS
 and Nsis7z reset. Keep the patch and installer smoke test working when upgrading
 electron-builder.
 
+## Windows installer messages
+
+The installer is built in English and Simplified Chinese
+(`nsis.installerLanguages`); other systems get English. Messages used by
+`build/installer.nsh` live in `build/messages.yml`, with `en` and `zh_CN` for
+each. electron-builder reads only its own bundled `messages.yml`, so the same
+`app-builder-lib` patch also merges ours, replacing bundled messages with the
+same name. A message missing from an installer language fails the Windows
+package build. `test/desktop-installer-contract.test.ts` runs electron-builder's
+message generation to catch that before a release. The progress smoke test
+defines its own messages and does not cover this path.
+
 On Windows, run `bun run test:installer-progress` after the NSIS toolchain has
 been cached by a desktop package build. It compiles and runs isolated native
 wizard fixtures, extracts a real archive, and checks byte progress, 64-bit
