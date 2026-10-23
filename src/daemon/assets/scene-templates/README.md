@@ -1,7 +1,9 @@
 # Last Bus template artwork
 
-These stills come from the supplied `末班 (项目).zip` project. They are resized
-to 1280 × 720 WebP at quality 80; the source project is not needed at runtime.
+Source: the user-supplied Last Bus (`末班`) project archive, `末班 (项目).zip`.
+
+These stills are resized to 1280 × 720 WebP at quality 80; the source project
+is not needed at runtime.
 
 | File                | Original project file           | Templates    |
 | ------------------- | ------------------------------- | ------------ |
