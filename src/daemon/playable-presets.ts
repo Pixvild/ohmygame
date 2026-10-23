@@ -37,6 +37,8 @@ export interface PlayablePreset {
   source: (title: string, id?: string) => { html: string; css: string; javascript: string; files?: Record<string, string> };
   /** Shared files the source imports, keyed by workspace path. Added only when the project lacks them. */
   sharedFiles?: Record<string, string>;
+  /** Bundled binary files to copy once, keyed by workspace path. */
+  sharedFileCopies?: Record<string, string>;
 }
 
 export function playablePreset(id: string): PlayablePreset | undefined {
@@ -70,7 +72,7 @@ const BASE_PLAYABLE_PRESETS: PlayablePreset[] = [
     story: { hidden: true },
     source: (title) => ({
       html: [
-        '<main class="stage is-left has-backdrop">',
+        '<main class="stage is-right has-backdrop">',
         '  <div class="backdrop is-warm" data-media="backdrop"></div>',
         '  <p class="eyebrow rise">Last service</p>',
         `  <h1 class="title is-display rise" style="--delay: 0.15s">${escapeHtml(title)}</h1>`,
@@ -101,8 +103,8 @@ const BASE_PLAYABLE_PRESETS: PlayablePreset[] = [
       css: [
         STYLE_IMPORT,
         "/* Keep the menu on the empty side of the Last Bus illustration. */",
-        ".stage.is-left { place-content: center end; }",
-        ".stage.is-left > .title { font-size: 7cqw; }",
+        ".stage.is-right { place-content: center end; justify-items: start; text-align: start; }",
+        ".stage.is-right > .title { font-size: 7cqw; }",
         "",
         "/* Load and Settings open over the menu, between the black bars. */",
         ".menu-panel {",

@@ -461,6 +461,38 @@ describe("Playable codebase", () => {
     expect((await readNodeCodebaseDetail(workspace)).revision).toBe(before.revision);
   });
 
+  it("copies missing binary resources lazily and leaves the graph unchanged when a copy cannot be read", async () => {
+    const workspace = await temporaryWorkspace();
+    await createNodeCodebase(workspace, createStarterCodebaseWithScene("Story", { width: 1280, height: 720 }));
+    const binary = Buffer.from([0, 255, 128, 13, 10, 0]);
+    const source = path.join(workspace, "bundled.webp");
+    const destination = "shared/templates/lastbus/example.webp";
+    await writeFile(source, binary);
+    await changeNodeCodebase(workspace, (codebase) => ({
+      ...codebase,
+      missingFileCopies: { [destination]: source },
+    }));
+    expect(await readFile(path.join(workspace, destination))).toEqual(binary);
+
+    const missing = path.join(workspace, "missing.webp");
+    // An existing author-owned image must not even read its bundled source again.
+    await changeNodeCodebase(workspace, (codebase) => ({
+      ...codebase,
+      missingFileCopies: { [destination]: missing },
+    }));
+    expect(await readFile(path.join(workspace, destination))).toEqual(binary);
+
+    const before = await readNodeCodebaseDetail(workspace);
+    await expect(changeNodeCodebase(workspace, (codebase) => ({
+      ...codebase,
+      graph: { ...codebase.graph, title: "Must not be saved" },
+      missingFiles: { "shared/templates/new.css": "/* Must not be saved */" },
+      missingFileCopies: { "shared/templates/lastbus/new.webp": missing },
+    }))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readNodeCodebaseDetail(workspace)).toEqual(before);
+    await expect(readFile(path.join(workspace, "shared/templates/new.css"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("writes a file in a Node's own folder, and nothing outside the Nodes' folders", async () => {
     const workspace = await temporaryWorkspace();
     await createNodeCodebase(workspace, createStarterCodebaseWithScene("Story", { width: 1280, height: 720 }));

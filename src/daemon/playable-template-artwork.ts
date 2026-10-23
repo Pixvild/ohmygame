@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { PlayablePreset } from "./playable-presets.js";
 
@@ -14,35 +13,48 @@ const PICTURES = {
   "visual-novel": "station",
 } as const;
 
-/** Keep the illustration in project-owned CSS, copied only when first needed. */
+/** Copy a separate illustration on first use and keep the project CSS readable. */
 export function withPlayableTemplateArtwork(
   preset: PlayablePreset,
 ): PlayablePreset {
   const picture = PICTURES[preset.id];
   const file = `shared/templates/lastbus-${picture}.css`;
-  const image = readFileSync(
-    path.join(import.meta.dirname, "assets/scene-templates", `${picture}.webp`),
-  ).toString("base64");
+  const scope = `[data-template-artwork="lastbus-${picture}"]`;
   return {
     ...preset,
     source: (title, id) => {
       const source = preset.source(title, id);
-      return { ...source, css: `@import "../../${file}";\n${source.css}` };
+      return {
+        ...source,
+        html: source.html.replace(
+          "<main ",
+          `<main data-template-artwork="lastbus-${picture}" `,
+        ),
+        css: `@import "../../${file}";\n${source.css}`,
+      };
+    },
+    sharedFileCopies: {
+      ...preset.sharedFileCopies,
+      [`shared/templates/lastbus/${picture}.webp`]: path.join(
+        import.meta.dirname,
+        "assets/scene-templates",
+        `${picture}.webp`,
+      ),
     },
     sharedFiles: {
       ...preset.sharedFiles,
       [file]: `/* Last Bus template artwork. Setting a background in the editor replaces it. */
-.has-backdrop {
+${scope} {
   --letterbox: 0cqw;
 }
 
-.has-backdrop .backdrop[data-media="backdrop"]:not([data-asset]) {
+${scope} .backdrop[data-media="backdrop"]:not([data-asset]) {
   background: linear-gradient(rgb(0 0 0 / 0.18), rgb(0 0 0 / 0.35)),
-    url("data:image/webp;base64,${image}") center / cover no-repeat;
+    url("./lastbus/${picture}.webp") center / cover no-repeat;
 }
 
 /* Hide the former placeholder figure or window, including in existing projects. */
-.has-backdrop .backdrop[data-media="backdrop"]:not([data-asset])::before {
+${scope} .backdrop[data-media="backdrop"]:not([data-asset])::before {
   display: none;
 }
 `,
