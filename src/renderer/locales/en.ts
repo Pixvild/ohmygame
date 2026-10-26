@@ -1290,6 +1290,7 @@ const en = {
     copyCommand: "Copy command",
     copied: "Copied",
     installGuide: "Installation guide",
+    sandboxGuide: "Windows sandbox guide",
     diagnostics: "Problems",
     configuration: "Configuration",
     permissions: "Permissions",
@@ -1312,6 +1313,7 @@ const en = {
       "chatgpt-app": "Bundled with ChatGPT",
     },
     diagnostic: {
+      codexWindowsSandbox: "Codex’s unelevated Windows sandbox cannot enforce OhMyGame’s file access restrictions. Set up the elevated sandbox in Codex, or use MXC with a supported device and CLI, then check again.",
       notInstalled: "OhMyGame could not find the {{name}} CLI. If it is installed, specify its executable path or check again.",
       invalidExecutable: "The selected executable is missing or cannot be executed. Correct the path, or clear it and save to restore automatic detection.",
       runtimeIncompatible: "{{name}} does not support a required CLI capability. Update it and check again.",
