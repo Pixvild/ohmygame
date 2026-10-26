@@ -885,6 +885,7 @@ const en = {
     viewport: {
       tablet: "Tablet · 768px",
       mobile: "Mobile · 375px",
+      mobileLandscape: "Mobile landscape · 667 × 375",
     },
     previewTitle: "{{name}} preview",
     project: "Project",
@@ -1009,6 +1010,7 @@ const en = {
       fit: "Fit",
       tablet: "Tablet",
       mobile: "Mobile",
+      mobileLandscape: "Mobile landscape",
     },
     cleanup: "Background cleanup",
     stopAfter: "Stop unused preview after",
