@@ -1524,8 +1524,6 @@ const en = {
     images: "Attached images",
     files: "Attached files",
     remove: "Remove {{name}}",
-    attachImages: "Attach images",
-    imageName: "Image {{number}}",
     imageTypes: "Use PNG, JPEG, WebP, or GIF images",
     readFailed: "Could not read {{name}}",
   },
