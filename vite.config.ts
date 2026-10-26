@@ -39,7 +39,7 @@ export default defineConfig({
     outDir: "dist/renderer",
     emptyOutDir: true,
     sourcemap: sentryAuthToken ? "hidden" : false,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: path.resolve(import.meta.dirname, "index.html"),
         webGameHost: path.resolve(import.meta.dirname, "web-game-host.html"),
@@ -49,11 +49,13 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.test.{ts,tsx}"],
-    setupFiles: ["test/provider-environment.ts"],
+    setupFiles: ["test/provider-environment.ts", "test/dom-environment.ts"],
     // Real compiler builds and grammar initialization need bounded parallelism on Bun.
     maxWorkers: 4,
     // Playable build tests run real esbuild/vite builds and exceed the 5s default under parallel load.
     testTimeout: 30_000,
+    // Polls that wait for spawned processes need more than the 1s default under parallel load.
+    expect: { poll: { timeout: 10_000 } },
   },
   server: {
     strictPort: true,

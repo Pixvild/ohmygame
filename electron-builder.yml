@@ -28,6 +28,8 @@ files:
   # Renderer source maps go to Sentry, not into the package, even if their upload failed.
   - "!dist/renderer/**/*.map"
   - "!node_modules/typebox/build/**/*.mjs"
+  # recheck falls back without its Java backend, which cannot run from the ASAR.
+  - "!node_modules/recheck-jar/**"
   - from: .runtime/typebox
     to: node_modules/typebox/build
 
