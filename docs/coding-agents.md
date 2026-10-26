@@ -116,6 +116,14 @@ The latest report is kept in `agent-runtimes/limits.json`, and a window whose
 reset time has passed shows as empty. OpenCode bills each model provider and
 has no quota of its own.
 
+When a turn stops at a usage limit (such as Claude Code's "You've hit your
+session limit") and an exhausted window reports its reset time, the composer
+shows that time with **Continue after reset**. Opting in sends one English
+`Continue where you left off.` 30 seconds after the last exhausted window
+resets; sending a message yourself or choosing **Cancel** clears it. The
+schedule lives in the open conversation only, so OhMyGame must stay open, and
+it never retries on its own.
+
 ![Claude Code and Codex quotas labeled as used (sample data)](assets/agent-usage-used-label.png)
 
 ![Compact quota percentages in the slash menu (sample data)](assets/agent-usage-compact.png)

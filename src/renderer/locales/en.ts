@@ -1485,6 +1485,12 @@ const en = {
     referencedDesign: "Referenced game design",
     removeDesign: "Remove game design reference",
     droppedFolder: "Could not read dropped folder: {{error}}",
+    resume: {
+      available: "Usage limit reached. It resets at {{time}}.",
+      armed: "Continues automatically at {{time}}. Keep OhMyGame open.",
+      arm: "Continue after reset",
+      cancel: "Cancel",
+    },
     placeholder: {
       review: "Review the plan above",
       executing: "Executing plan",

@@ -961,6 +961,7 @@ export function ProjectShell({
             plan={activePlan}
             planMode={state.plan.mode}
             notice={state.connection === "reconnecting" ? t("projectShell.reconnecting") : state.notice}
+            limitReached={!currentConversationBusy && items.findLast((item) => item.type === "agentMessage")?.error?.code === "quota_exceeded"}
             models={modelCatalog.models}
             modelStatus={modelCatalog.status}
             model={effectiveModel}
