@@ -459,6 +459,15 @@ const modelRefSchema = {
 } as const;
 
 const setConversationModelSchema = { body: modelRefSchema } as const;
+const nativeReasoningLevelSchema = { type: "string", minLength: 1, maxLength: 100 } as const;
+const agentDefaultsSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    required: ["model"],
+    properties: { model: modelRefSchema, reasoningLevel: { enum: AGENT_REASONING_LEVELS }, nativeReasoningLevel: nativeReasoningLevelSchema },
+  },
+} as const;
 const setConversationReasoningSchema = {
   body: {
     type: "object",
@@ -2141,10 +2150,7 @@ export function createApp(options: AppOptions = {}) {
     };
   });
 
-  app.put<{ Body: UpdateAgentDefaultsRequest }>("/models/default", async (request, reply) => {
-    if (!isUpdateAgentDefaultsRequest(request.body)) {
-      return reply.code(400).send({ error: "Invalid agent defaults" });
-    }
+  app.put<{ Body: UpdateAgentDefaultsRequest }>("/models/default", { schema: agentDefaultsSchema }, async (request, reply) => {
     if (isAgentRuntimeId(request.body.model.provider)) {
       if (request.body.reasoningLevel !== undefined) return reply.code(400).send({ error: "Use nativeReasoningLevel for a coding agent's model" });
       const native = await agentRuntimes.model(request.body.model.provider, request.body.model.id);
@@ -2358,8 +2364,7 @@ export function createApp(options: AppOptions = {}) {
     ["image-models", "image", providerImages], ["video-models", "video", providerVideos], ["model3d-models", "3d", providerModels3D],
   ] as const) {
     app.get(`/${path}/catalog`, async () => generator.catalog());
-    app.put<{ Body: AgentModelRef }>(`/${path}/default`, async (request, reply) => {
-      if (!isAgentModelRef(request.body)) return reply.code(400).send({ error: "Invalid media model" });
+    app.put<{ Body: AgentModelRef }>(`/${path}/default`, { schema: { body: modelRefSchema } }, async (request, reply) => {
       const catalog = await generator.catalog();
       if (!catalog.models.some((model) => model.provider === request.body.provider && model.id === request.body.id)) return reply.code(400).send({ error: "Media model is not available" });
       await providerModelSettings.setDefaultMediaModel(usage, request.body);
@@ -2384,8 +2389,7 @@ export function createApp(options: AppOptions = {}) {
       throw cause;
     }
   });
-  app.get<{ Querystring: { provider: string; id: string } }>("/model3d-balance", async (request, reply) => {
-    if (!isAgentModelRef(request.query)) return reply.code(400).send({ error: "Choose a 3D connection" });
+  app.get<{ Querystring: { provider: string; id: string } }>("/model3d-balance", { schema: { querystring: modelRefSchema } }, async (request, reply) => {
     try { return await providerModels3D.balance(request.query); }
     catch (cause) { if (cause instanceof Error && "statusCode" in cause) return reply.code(Number(cause.statusCode)).send({ error: cause.message }); throw cause; }
   });
@@ -2395,6 +2399,7 @@ export function createApp(options: AppOptions = {}) {
     async (request, reply) => {
       const project = projects.get(request.params.projectId);
       if (!project) return reply.code(404).send({ error: "Project not found" });
+      // A new conversation may be created with no body at all, which a body schema would refuse.
       if (!isCreateConversationRequest(request.body)) {
         return reply.code(400).send({ error: "Invalid conversation request" });
       }
@@ -3370,14 +3375,6 @@ function isCreateConversationRequest(value: unknown): value is CreateConversatio
   if (body.reasoningLevel !== undefined && !AGENT_REASONING_LEVELS.includes(body.reasoningLevel as AgentReasoningLevel)) return false;
   if (body.model === undefined) return true;
   return isAgentModelRef(body.model);
-}
-
-function isUpdateAgentDefaultsRequest(value: unknown): value is UpdateAgentDefaultsRequest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const body = value as Record<string, unknown>;
-  if (body.nativeReasoningLevel !== undefined && (typeof body.nativeReasoningLevel !== "string" || !body.nativeReasoningLevel || body.nativeReasoningLevel.length > 100)) return false;
-  return Object.keys(body).every((key) => key === "model" || key === "reasoningLevel" || key === "nativeReasoningLevel") &&
-    isAgentModelRef(body.model) && (body.reasoningLevel === undefined || AGENT_REASONING_LEVELS.includes(body.reasoningLevel as AgentReasoningLevel));
 }
 
 function isAgentModelRef(value: unknown): value is AgentModelRef {
