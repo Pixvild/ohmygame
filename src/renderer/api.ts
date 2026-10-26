@@ -206,8 +206,28 @@ export async function listProjects(): Promise<ProjectState[]> {
   return request("/projects");
 }
 
-export async function listProjectActivity(signal?: AbortSignal): Promise<ProjectActivitySnapshot> {
-  return request("/projects/activity", { signal });
+/** Follows project activity, reconnecting after a service restart; each connection starts with the current snapshot. */
+export async function streamProjectActivity(signal: AbortSignal, onSnapshot: (snapshot: ProjectActivitySnapshot) => void): Promise<void> {
+  while (!signal.aborted) {
+    const connection = new AbortController();
+    const unsubscribe = subscribeRuntimeConnection(() => connection.abort());
+    const connectionSignal = AbortSignal.any([signal, connection.signal]);
+    try {
+      if (runtimeConnection().status !== "ready") throw new Error(t("api.serviceUnavailable"));
+      const response = await fetch(apiUrl("/projects/activity/events"), {
+        headers: { accept: "text/event-stream", ...runtimeHeaders() },
+        signal: connectionSignal,
+      });
+      if (!response.ok || !response.body) throw new ApiError(`Activity stream failed with ${response.status}`, response.status);
+      await consumeServerEvents(response.body, (data) => onSnapshot(JSON.parse(data) as ProjectActivitySnapshot), connectionSignal);
+    } catch {
+      // Keep the last state during a temporary runtime disconnect.
+    } finally {
+      unsubscribe();
+    }
+    if (signal.aborted) return;
+    await reconnectDelay(signal);
+  }
 }
 
 export async function listExamples(): Promise<ExampleSummary[]> {
@@ -1413,6 +1433,28 @@ async function consumeEventStream(
         const event = parseRuntimeEvent(block);
         if (!event) continue;
         onEvent(event);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** Passes the data of each event in a stream that only sends data. */
+async function consumeServerEvents(body: ReadableStream<Uint8Array>, onData: (data: string) => void, signal: AbortSignal): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart());
+        if (data.length) onData(data.join("\n"));
       }
     }
   } finally {

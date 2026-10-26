@@ -927,12 +927,18 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   useEffect(() => {
     if (phase !== "ready" || conflicted || resolving || closing) return;
     let pending = false;
-    const timer = window.setInterval(() => {
-      if (pending) return;
+    // A hidden window shows nobody the external changes, so it syncs again on return instead.
+    const run = () => {
+      if (pending || window.document.hidden) return;
       pending = true;
       void sync().catch(() => {}).finally(() => { pending = false; });
-    }, 2500);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(run, 2500);
+    window.document.addEventListener("visibilitychange", run);
+    return () => {
+      window.clearInterval(timer);
+      window.document.removeEventListener("visibilitychange", run);
+    };
   }, [sync, phase, conflicted, resolving, closing]);
 
   useEffect(() => {

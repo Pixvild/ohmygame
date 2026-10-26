@@ -1473,10 +1473,45 @@ export function createApp(options: AppOptions = {}) {
 
   app.get("/projects", async () => projects.list());
 
-  app.get("/projects/activity", async () => ({
+  const projectActivity = () => ({
     activity: agents.projectActivity(),
     names: projects.list().map(({ id, name, nameSource }) => ({ id, name, nameSource })),
-  }));
+  });
+
+  app.get("/projects/activity", async () => projectActivity());
+
+  // Project lists follow activity here instead of polling for it. The snapshot is sent when it changes: runtime events
+  // prompt a check, and a short in-memory check also catches changes that publish no event, such as a cancel starting.
+  app.get("/projects/activity/events", async (request, reply) => {
+    for (const [name, value] of Object.entries(reply.getHeaders())) {
+      if (value !== undefined) reply.raw.setHeader(name, value);
+    }
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    let sent = "";
+    let scheduled: NodeJS.Timeout | undefined;
+    const send = () => {
+      scheduled = undefined;
+      const snapshot = JSON.stringify(projectActivity());
+      if (snapshot === sent) return;
+      sent = snapshot;
+      reply.raw.write(`event: activity\ndata: ${snapshot}\n\n`);
+    };
+    send();
+    const unsubscribe = events.subscribeAll(() => { scheduled ??= setTimeout(send, 50); });
+    const check = setInterval(send, 1_000);
+    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
+    request.raw.once("close", () => {
+      unsubscribe();
+      clearTimeout(scheduled);
+      clearInterval(check);
+      clearInterval(heartbeat);
+    });
+  });
 
   app.get("/examples", async () => examples.list());
 
