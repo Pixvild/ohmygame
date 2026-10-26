@@ -36,12 +36,11 @@ export async function checkCodexCompatibility(
     { cwd: directory },
     timeoutMs,
   );
-  // Windows' unelevated sandbox cannot enforce `:minimal` filesystem read
-  // restrictions, so the compatibility probe omits them there. The regular
-  // conversation still applies the saved permission profile.
+  // Windows' sandbox requires `:root` read access; `:minimal` is rejected.
+  // The regular conversation applies the same Windows adjustment.
   const filesystemPermissions: Record<string, unknown> =
     process.platform === "win32"
-      ? { ":workspace_roots": { ".": "read" } }
+      ? { ":root": "read", ":workspace_roots": { ".": "read" } }
       : { ":minimal": "read", ":workspace_roots": { ".": "read" } };
   const config: Record<string, unknown> = {
     default_permissions: profile,
