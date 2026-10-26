@@ -33,7 +33,11 @@ describe("desktop runtime packaging", () => {
         const relative = `dist/daemon/assets/scene-templates/${name}`;
         await mkdir(path.dirname(path.join(directory, relative)), { recursive: true });
         await writeFile(path.join(directory, relative), contents);
-        return { relative, contents };
+        return {
+          archivePath: path.join("dist", "daemon", "assets", "scene-templates", name),
+          relative,
+          contents,
+        };
       }));
       const destination = path.join(directory, "app");
       const matchers = getFileMatchers(config, "files", destination, {
@@ -49,8 +53,8 @@ describe("desktop runtime packaging", () => {
       // ASAR's promise can resolve before its output stream has finished writing.
       await vi.waitFor(() => {
         expect(extractFile(archive, path.join("dist", "story-web", "resources.json")).toString()).toBe("story resources");
-        for (const { relative, contents } of notices) {
-          expect(extractFile(archive, relative)).toEqual(contents);
+        for (const { archivePath, contents } of notices) {
+          expect(extractFile(archive, archivePath)).toEqual(contents);
         }
       });
     } finally {
