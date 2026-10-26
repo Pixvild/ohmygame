@@ -64,6 +64,11 @@ describe("Interactive Story project export", () => {
     expect(methods["shared/templates/lastbus/station.webp"]).toBe(0);
     expect(methods["shared/templates/lastbus-station.css"]).toBe(8);
     const files = await unzip(archive);
+    for (const name of ["NOTICE.txt", "LICENSE.txt"]) {
+      expect(files[`shared/templates/lastbus/${name}`]).toEqual(
+        await readFile(path.join(import.meta.dirname, "../src/daemon/assets/scene-templates", name)),
+      );
+    }
     expect(files["portrait.PNG"]!.toString()).toBe("image bytes");
     expect(files["assets/library/clip.mp4"]!.toString()).toBe("video bytes");
     expect(files["shared/templates/lastbus/station.webp"]).toEqual(

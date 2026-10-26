@@ -319,6 +319,13 @@ letterbox to that Scene; other Scenes keep their own Project Style. Replacing
 the WebP changes the illustration without editing CSS. Setting an image or
 video background in the editor replaces the illustration.
 
+The artwork was generated and developed by the OhMyGame team and is provided
+under Apache License 2.0. Template creation also copies `NOTICE.txt` and
+`LICENSE.txt` into `shared/templates/lastbus/`; project archives retain these
+files. Keep the applicable notices when redistributing the artwork. Adding
+another Template supplies missing notices to an existing project without
+overwriting its existing files.
+
 Project Style is how two different screens, such as the Ash Club menu and
 archive, stay recognizably part of one game.
 

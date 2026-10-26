@@ -35,6 +35,10 @@ export function withPlayableTemplateArtwork(
     },
     sharedFileCopies: {
       ...preset.sharedFileCopies,
+      ...Object.fromEntries(["NOTICE.txt", "LICENSE.txt"].map((name) => [
+        `shared/templates/lastbus/${name}`,
+        path.join(import.meta.dirname, "assets/scene-templates", name),
+      ])),
       [`shared/templates/lastbus/${picture}.webp`]: path.join(
         import.meta.dirname,
         "assets/scene-templates",
