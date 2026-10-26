@@ -89,12 +89,12 @@ export function checkRuntimeVersionRequirement(
 export function cliProbeError(name: string, detail: string): Error {
   if (
     name === "Codex" &&
-    /windows unelevated restricted-token sandbox cannot enforce split filesystem read restrictions/i.test(
+    /windows (?:unelevated restricted-token|elevated) sandbox cannot enforce (?:split )?filesystem read restrictions/i.test(
       detail,
     )
   )
     return new AgentRuntimeCompatibilityError(
-      "Codex's unelevated Windows sandbox cannot enforce OhMyGame's filesystem read restrictions. Configure Codex's elevated sandbox, or MXC on a supported device and CLI, then check again in Settings. See https://learn.chatgpt.com/docs/windows/windows-sandbox",
+      "Codex's Windows sandbox cannot enforce OhMyGame's filesystem read restrictions. Configure Codex's elevated sandbox, or MXC on a supported device and CLI, then check again in Settings. See https://learn.chatgpt.com/docs/windows/windows-sandbox",
       "Windows sandbox filesystem read restrictions",
     );
   return /unknown (?:argument|option|command)|unrecognized (?:argument|option|command)|unexpected argument|method not found|unsupported (?:method|control request)/i.test(

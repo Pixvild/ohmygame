@@ -262,6 +262,16 @@ describe("coding agent routes", () => {
         })
       ).status,
     ).toBe(400);
+    // Codex shims resolve to the packaged native executable, so they are allowed.
+    const codexShim = path.join(tmpdir(), "codex.cmd");
+    await writeFile(codexShim, "@echo shim\r\n");
+    expect(
+      (
+        await call("PATCH", "/agent-runtimes/codex-cli", {
+          binaryPath: codexShim,
+        })
+      ).status,
+    ).toBe(200);
     expect(
       (await call("PATCH", "/agent-runtimes/unknown-cli", { enabled: false }))
         .status,

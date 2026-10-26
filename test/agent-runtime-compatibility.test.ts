@@ -73,6 +73,17 @@ it("identifies Windows sandbox read restrictions without misclassifying transien
   );
 });
 
+it("identifies elevated Windows sandbox read restrictions", () => {
+  const cause = cliProbeError(
+    "Codex",
+    "error creating thread: windows elevated sandbox cannot enforce filesystem read restrictions; root read permission required",
+  );
+  expect(cause).toBeInstanceOf(AgentRuntimeCompatibilityError);
+  expect(cause).toMatchObject({
+    capability: "Windows sandbox filesystem read restrictions",
+  });
+});
+
 it("uses Claude's documented sandbox requirement only for modes that rely on it", () => {
   expect(() =>
     checkRuntimeVersionRequirement(
