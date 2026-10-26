@@ -272,14 +272,17 @@ export class CodexImageProvider {
         REQUEST_TIMEOUT,
       );
       const profile = "ohmygame-image";
+      // Windows' unelevated sandbox cannot enforce `:minimal` filesystem read
+      // restrictions, so the image thread omits them there.
+      const filesystemPermissions: Record<string, unknown> =
+        process.platform === "win32"
+          ? { ":workspace_roots": { ".": "read" } }
+          : { ":minimal": "read", ":workspace_roots": { ".": "read" } };
       const config: Record<string, unknown> = {
         default_permissions: profile,
         permissions: {
           [profile]: {
-            filesystem: {
-              ":minimal": "read",
-              ":workspace_roots": { ".": "read" },
-            },
+            filesystem: filesystemPermissions,
             network: { enabled: true },
           },
         },

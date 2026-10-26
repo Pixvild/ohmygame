@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   AgentRuntimeCompatibilityError,
   checkRuntimeVersionRequirement,
+  cliProbeError,
 } from "../src/daemon/agent-runtimes/compatibility.js";
 import { AgentRuntimeService } from "../src/daemon/agent-runtimes/service.js";
 
@@ -52,6 +53,25 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     : m.method === "model/list" ? {data:[{id:"fixture-model"}]} : {};
   console.log(JSON.stringify({id:m.id,result}));
 });`;
+
+it("identifies Windows sandbox read restrictions without misclassifying transient failures", () => {
+  const cause = cliProbeError(
+    "Codex",
+    "error creating thread: windows unelevated restricted-token sandbox cannot enforce split filesystem read restrictions directly; refusing to run unsandboxed",
+  );
+  expect(cause).toBeInstanceOf(AgentRuntimeCompatibilityError);
+  expect(cause).toMatchObject({
+    capability: "Windows sandbox filesystem read restrictions",
+  });
+  expect(cause.message).toContain("elevated");
+  expect(cause.message).toContain("MXC");
+  expect(cliProbeError("Codex", "Connection timed out")).not.toBeInstanceOf(
+    AgentRuntimeCompatibilityError,
+  );
+  expect(cliProbeError("Claude Code", cause.message)).not.toBeInstanceOf(
+    AgentRuntimeCompatibilityError,
+  );
+});
 
 it("uses Claude's documented sandbox requirement only for modes that rely on it", () => {
   expect(() =>

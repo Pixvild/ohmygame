@@ -1263,6 +1263,7 @@ const zhCN: typeof en = {
     copyCommand: "复制命令",
     copied: "已复制",
     installGuide: "安装指南",
+    sandboxGuide: "Windows 沙箱指南",
     diagnostics: "问题",
     configuration: "配置",
     permissions: "权限",
@@ -1285,6 +1286,7 @@ const zhCN: typeof en = {
       "chatgpt-app": "ChatGPT 桌面版内置",
     },
     diagnostic: {
+      codexWindowsSandbox: "Codex 的 unelevated Windows 沙箱无法执行 OhMyGame 的文件访问限制。请在 Codex 中配置 elevated 沙箱，或在支持的设备和 CLI 上使用 MXC，然后重新检查。",
       notInstalled: "OhMyGame 未找到 {{name}} CLI。如果已经安装，请指定可执行文件路径或重新检查。",
       invalidExecutable: "指定的可执行文件不存在或无法执行。请修正路径，或清空并保存以恢复自动检测。",
       runtimeIncompatible: "{{name}} 不支持所需的 CLI 能力，请更新后重新检查。",
