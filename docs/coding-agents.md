@@ -42,6 +42,9 @@ On Windows, discovery also checks Codex's versioned desktop installations under
 on PATH or in the usual npm folder. Selecting an npm `codex.cmd` or `codex.ps1`
 path resolves its adjacent package's native executable; the shell shim is never
 executed. Both current platform packages and older `vendor/` layouts are supported.
+Other `.cmd`, `.bat`, and `.ps1` scripts are rejected before settings are saved.
+A Codex shim whose native package is missing is reported as an unavailable
+manual installation and is never executed or replaced with another installation.
 
 An undetected CLI is not necessarily uninstalled. Choose its absolute executable
 path for a custom installation, or leave the path field empty and save to restore
@@ -54,15 +57,21 @@ guarantee that its version supports OhMyGame's integration.
 
 If Codex is found and signed in but offers no models, check the diagnostics on
 its detail page. Model discovery first verifies the permission profile by
-starting an ephemeral thread without a prompt. Windows' legacy `unelevated`
-sandbox cannot enforce the filesystem read restrictions this requires, so
-thread creation can fail before the model catalog is requested. OhMyGame reports
-this as a Windows sandbox compatibility issue and links to the
+starting an ephemeral thread without a prompt. On Windows, the probe,
+conversations, and image generation use `:root` read access because the elevated
+sandbox rejects `:minimal` access. Protected paths remain explicitly denied.
+If thread creation still reports `elevated Windows sandbox requires effective
+:root read access`, OhMyGame identifies a compatibility failure before requesting
+the model catalog; update Codex and check its sandbox configuration.
+Windows' legacy `unelevated` sandbox can also reject filesystem read restrictions.
+OhMyGame reports this as a Windows sandbox compatibility issue and links to the
 [Codex Windows sandbox guide](https://learn.chatgpt.com/docs/windows/windows-sandbox).
-Configure the `elevated` sandbox in Codex (including its administrator-approved
-setup), or use MXC with a supported device and CLI, then choose **Check again**.
-OhMyGame does not change the saved sandbox configuration or relax its file
-access restrictions to make the probe pass. A successful model probe still
+For the legacy sandbox error, configure the `elevated` sandbox in Codex
+(including its administrator-approved setup), or use MXC with a supported device
+and CLI, then choose **Check again**.
+OhMyGame does not change the saved sandbox configuration. The Windows profile
+permits general filesystem reads while preserving explicit protected-path denies
+and workspace write restrictions. A successful model probe still
 requires a real conversation test on the target Windows installation.
 
 ![Codex settings showing the desktop-bundled executable and automatic detection](assets/codex-cli-discovery.png)

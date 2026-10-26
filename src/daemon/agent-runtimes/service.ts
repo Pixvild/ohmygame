@@ -27,6 +27,7 @@ import {
 } from "./compatibility.js";
 import {
   privateFolder,
+  isCodexNpmShim,
   probeAuth,
   probeModels,
   probeVersion,
@@ -278,10 +279,10 @@ export class AgentRuntimeService {
     const isCodexShim =
       id === "codex-cli" &&
       request.binaryPath &&
-      /\.(?:cmd|ps1)$/i.test(request.binaryPath);
+      isCodexNpmShim(request.binaryPath);
     if (
       request.binaryPath &&
-      /\.(?:cmd|bat)$/i.test(request.binaryPath) &&
+      /\.(?:cmd|bat|ps1)$/i.test(request.binaryPath) &&
       !isCodexShim
     )
       throw new Error(

@@ -1,7 +1,10 @@
 import { AgentProcess, processFailure } from "./process.js";
 import type { AgentUsageLimit } from "../../shared/contracts.js";
 import { record } from "./driver-context.js";
-import { AgentRuntimeCompatibilityError } from "./compatibility.js";
+import {
+  AgentRuntimeCompatibilityError,
+  cliProbeError,
+} from "./compatibility.js";
 
 export const CODEX_APPROVAL_POLICY = {
   granular: {
@@ -234,7 +237,7 @@ export class CodexAppServer {
     const error = record(message.error);
     if (error)
       pending.reject(
-        new Error(String(error.message ?? "Codex request failed")),
+        cliProbeError("Codex", String(error.message ?? "Codex request failed")),
       );
     else pending.resolve(message.result);
   }

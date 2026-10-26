@@ -51,6 +51,14 @@ export interface ResolvedBinary {
   signature: string;
 }
 
+/** Only these Windows npm shims can be resolved without executing a script. */
+export function isCodexNpmShim(binaryPath: string): boolean {
+  return (
+    process.platform === "win32" &&
+    /^codex\.(?:cmd|ps1)$/i.test(path.basename(binaryPath))
+  );
+}
+
 /**
  * Finds a CLI's executable: the one the person chose, or else the newest of
  * those on PATH, the login shell's PATH, the usual install folders and the
@@ -64,6 +72,12 @@ export async function resolveBinary(
   override?: string,
   recheck = false,
 ): Promise<ResolvedBinary | undefined> {
+  if (
+    override &&
+    /\.(?:cmd|bat|ps1)$/i.test(override) &&
+    !(id === "codex-cli" && isCodexNpmShim(override))
+  )
+    return undefined;
   if (recheck) await loginShellPath(true);
   if (recheck)
     for (const key of versionCache.keys())
@@ -85,11 +99,9 @@ export async function resolveBinary(
   // npm exposes a shell shim on Windows, but ships the native CLI inside the
   // package. Resolve that known layout without running the shim through cmd.
   if (id === "codex-cli" && process.platform === "win32") {
-    if (
-      override &&
-      /^codex\.(?:cmd|ps1)$/i.test(path.basename(override)) &&
-      (await stat(override).catch(() => undefined))?.isFile()
-    ) {
+    if (override && isCodexNpmShim(override)) {
+      if (!(await stat(override).catch(() => undefined))?.isFile())
+        return undefined;
       candidates.splice(
         0,
         candidates.length,
