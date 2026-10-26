@@ -1811,7 +1811,7 @@ describe("Codex adapter", () => {
     ).toMatchObject({
       [String(thread.permissions)]: {
         filesystem: {
-          ":minimal": "read",
+          [process.platform === "win32" ? ":root" : ":minimal"]: "read",
           [canonicalPath("/tmp/secrets")]: "deny",
           ":workspace_roots": { ".": "write" },
         },
