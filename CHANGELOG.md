@@ -4,7 +4,7 @@ User-visible changes are collected here when maintainers prepare a release.
 Older versions are documented in
 [GitHub Releases](https://github.com/WhiteTowerAI/ohmygame/releases).
 
-## [0.0.0-beta.5] - 2026-10-26
+## [0.0.0-beta.4.14] - 2026-10-26
 
 ### Added
 
