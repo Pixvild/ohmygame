@@ -193,7 +193,11 @@ describe("addPlayableNode", () => {
     expect(await readFile(path.join(workspacePath, "nodes/carriage/index.html"), "utf8"))
       .toContain("The carriage");
     // Only the chosen Template's picture is copied on first use.
-    expect(await readdir(path.join(workspacePath, "shared/templates/lastbus"))).toEqual(["phone.webp"]);
+    expect((await readdir(path.join(workspacePath, "shared/templates/lastbus"))).sort()).toEqual(["LICENSE.txt", "NOTICE.txt", "phone.webp"]);
+    for (const name of ["LICENSE.txt", "NOTICE.txt"]) {
+      expect(await readFile(path.join(workspacePath, "shared/templates/lastbus", name)))
+        .toEqual(await readFile(path.join(import.meta.dirname, "../src/daemon/assets/scene-templates", name)));
+    }
     // The new Node compiles alongside the rest of the project.
     const validation = await validatePlayableProject(workspacePath, "draft");
     expect(validation.issues).toEqual([]);
@@ -230,7 +234,7 @@ describe("addPlayableNode", () => {
       expect(compiled.nodes[id]!.css).toContain("data:image/webp;base64,");
       expect(compiled.nodes[id]!.css).toContain(':not([data-asset])');
     }
-    expect(await readdir(path.join(workspacePath, "shared/templates/lastbus"))).toHaveLength(8);
+    expect((await readdir(path.join(workspacePath, "shared/templates/lastbus"))).filter((name) => name.endsWith(".webp"))).toHaveLength(8);
 
     const illustration = "shared/templates/lastbus-station.css";
     const authored = "/* Author's replacement artwork */\n.backdrop { background: navy; }\n";
@@ -238,10 +242,17 @@ describe("addPlayableNode", () => {
     const imagePath = path.join(workspacePath, "shared/templates/lastbus/station.webp");
     const replacement = await readFile(path.join(workspacePath, "shared/templates/lastbus/cover.webp"));
     await writeFile(imagePath, replacement);
+    const noticePath = path.join(workspacePath, "shared/templates/lastbus/NOTICE.txt");
+    const authoredNotice = "Author's additional attribution\n";
+    await writeFile(noticePath, authoredNotice);
+    const licensePath = path.join(workspacePath, "shared/templates/lastbus/LICENSE.txt");
+    await rm(licensePath);
     const existingScene = await readFile(path.join(workspacePath, "nodes/story-map/style.css"), "utf8");
     await addPlayableNode(workspacePath, { preset: "visual-novel", id: "chapter-2" });
     expect(await readFile(path.join(workspacePath, illustration), "utf8")).toBe(authored);
     expect(await readFile(imagePath)).toEqual(replacement);
+    expect(await readFile(noticePath, "utf8")).toBe(authoredNotice);
+    expect(await readFile(licensePath)).toEqual(await readFile(path.join(import.meta.dirname, "../src/daemon/assets/scene-templates/LICENSE.txt")));
     expect(await readFile(path.join(workspacePath, "nodes/story-map/style.css"), "utf8")).toBe(existingScene);
   });
 
