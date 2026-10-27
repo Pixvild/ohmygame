@@ -459,13 +459,12 @@ const modelRefSchema = {
 } as const;
 
 const setConversationModelSchema = { body: modelRefSchema } as const;
-const nativeReasoningLevelSchema = { type: "string", minLength: 1, maxLength: 100 } as const;
 const agentDefaultsSchema = {
   body: {
     type: "object",
     additionalProperties: false,
     required: ["model"],
-    properties: { model: modelRefSchema, reasoningLevel: { enum: AGENT_REASONING_LEVELS }, nativeReasoningLevel: nativeReasoningLevelSchema },
+    properties: { model: modelRefSchema, reasoningLevel: { enum: AGENT_REASONING_LEVELS }, nativeReasoningLevel: { type: "string", minLength: 1, maxLength: 100 } },
   },
 } as const;
 const setConversationReasoningSchema = {
@@ -1428,22 +1427,9 @@ export function createApp(options: AppOptions = {}) {
   app.get("/projects/activity", async () => projectActivity());
 
   // Event streams stay open until the client leaves, so app.close() would wait on them. Closing ends each stream
-  // and releases its subscription and timers before the server stops.
+  // and releases its subscription and heartbeat before the server stops.
   const eventStreams = new Set<() => void>();
-  const trackEventStream = (request: FastifyRequest, reply: FastifyReply, release: () => void) => {
-    const close = () => {
-      if (!eventStreams.delete(close)) return;
-      release();
-      reply.raw.end();
-    };
-    eventStreams.add(close);
-    request.raw.once("close", close);
-  };
-  app.addHook("preClose", async () => { for (const close of [...eventStreams]) close(); });
-
-  // Project lists follow activity here instead of polling for it. The snapshot is sent when it changes: runtime events
-  // prompt a check, and a short in-memory check also catches changes that publish no event, such as a cancel starting.
-  app.get("/projects/activity/events", async (request, reply) => {
+  const openEventStream = (request: FastifyRequest, reply: FastifyReply) => {
     for (const [name, value] of Object.entries(reply.getHeaders())) {
       if (value !== undefined) reply.raw.setHeader(name, value);
     }
@@ -1453,6 +1439,26 @@ export function createApp(options: AppOptions = {}) {
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
+    reply.raw.write(": connected\n\n");
+    /** Keeps the stream alive until either side closes it, then calls release. */
+    return (release: () => void) => {
+      const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
+      const close = () => {
+        if (!eventStreams.delete(close)) return;
+        clearInterval(heartbeat);
+        release();
+        reply.raw.end();
+      };
+      eventStreams.add(close);
+      request.raw.once("close", close);
+    };
+  };
+  app.addHook("preClose", async () => { for (const close of [...eventStreams]) close(); });
+
+  // Project lists follow activity here instead of polling for it. The snapshot is sent when it changes: runtime events
+  // prompt a check, and a short in-memory check also catches changes that publish no event, such as a cancel starting.
+  app.get("/projects/activity/events", async (request, reply) => {
+    const keepOpen = openEventStream(request, reply);
     let sent = "";
     let scheduled: NodeJS.Timeout | undefined;
     const send = () => {
@@ -1465,12 +1471,10 @@ export function createApp(options: AppOptions = {}) {
     send();
     const unsubscribe = events.subscribeAll(() => { scheduled ??= setTimeout(send, 50); });
     const check = setInterval(send, 1_000);
-    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-    trackEventStream(request, reply, () => {
+    keepOpen(() => {
       unsubscribe();
       clearTimeout(scheduled);
       clearInterval(check);
-      clearInterval(heartbeat);
     });
   });
 
@@ -3249,41 +3253,19 @@ export function createApp(options: AppOptions = {}) {
     if (!events.canReplay(project.id, cursor)) {
       return reply.code(409).send({ error: "Event cursor expired" });
     }
-    const headers = reply.getHeaders();
-    for (const [name, value] of Object.entries(headers)) {
-      if (value !== undefined) reply.raw.setHeader(name, value);
-    }
-    reply.hijack();
-    reply.raw.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-    });
-    reply.raw.write(": connected\n\n");
+    const keepOpen = openEventStream(request, reply);
     const send = (event: RuntimeEvent) => {
       reply.raw.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     };
     for (const event of events.since(project.id, cursor)) send(event);
-    const unsubscribe = events.subscribe(project.id, send);
-    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-    trackEventStream(request, reply, () => { clearInterval(heartbeat); unsubscribe(); });
+    keepOpen(events.subscribe(project.id, send));
   });
 
   app.get<{ Params: { operationId: string }; Querystring: { cursor?: string } }>("/settings/model-auth/:operationId/events", async (request, reply) => {
     const cursor = Number(request.query.cursor ?? request.headers["last-event-id"] ?? 0) || 0;
     try {
       const history = modelAuth.eventsSince(request.params.operationId, cursor);
-      const headers = reply.getHeaders();
-      for (const [name, value] of Object.entries(headers)) {
-        if (value !== undefined) reply.raw.setHeader(name, value);
-      }
-      reply.hijack();
-      reply.raw.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-      });
-      reply.raw.write(": connected\n\n");
+      const keepOpen = openEventStream(request, reply);
       const send = (event: ReturnType<typeof modelAuth.eventsSince>[number]) => {
         reply.raw.write(`id: ${event.id}\nevent: model-auth\ndata: ${JSON.stringify(event)}\n\n`);
         if (event.type === "completed" || event.type === "cancelled" || event.type === "error") reply.raw.end();
@@ -3292,9 +3274,7 @@ export function createApp(options: AppOptions = {}) {
         send(event);
         if (reply.raw.writableEnded) return;
       }
-      const unsubscribe = modelAuth.subscribe(request.params.operationId, send);
-      const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-      trackEventStream(request, reply, () => { clearInterval(heartbeat); unsubscribe(); });
+      keepOpen(modelAuth.subscribe(request.params.operationId, send));
     } catch (cause) {
       if (cause instanceof ModelAuthError) return reply.code(cause.statusCode).send({ error: cause.message });
       throw cause;

@@ -12,7 +12,6 @@ export function useProjectActivity(enabled: boolean, setProjects?: Dispatch<SetS
     if (!enabled) return;
     const controller = new AbortController();
     void streamProjectActivity(controller.signal, ({ activity: current, names }) => {
-      if (controller.signal.aborted) return;
       setActivity((previous) => (
         previous.size === current.length && current.every(({ projectId, status }) => previous.get(projectId) === status)
           ? previous : new Map(current.map(({ projectId, status }) => [projectId, status]))
