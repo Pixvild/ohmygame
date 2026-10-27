@@ -101,8 +101,6 @@ Each Scene card shows:
   ([Variables](#variables));
 - a **Start** badge on the Scene the player starts in (**Set as Start**
   moves it);
-- an **Ending** badge on a Scene included in the [Story map](#story-map)
-  that counts as an ending;
 - an issue marker when the Scene fails to build, emits an undeclared Signal,
   or has an Exit that goes nowhere.
 
@@ -438,20 +436,19 @@ lead to it, and branches spread side by side. What it leaves out:
 - Exits with **Allow Back** lead to side screens, such as an archive, and
   Navigation Exits lead around the game, so neither is a step in the story;
 - connections back up the story, such as retrying after a failed QTE;
-- Scenes marked off the map. Main menu and Story map Scenes start off it.
-  The Scenes before and after one are joined, so a menu between two Scenes
-  links them directly.
+- Scenes the Story map Scene lists as off the map: by default the Main menu
+  and itself, by their Template IDs. The Scenes before and after one are
+  joined, so a menu between two Scenes links them directly.
 
 Players see the Scenes they have reached, by name, and the Scenes one step
 past them as locked **???**, with a line for each way they went and a count
 of Scenes and endings found. What they have seen lasts across new games.
 
-The author decides only what the map cannot guess, from a Scene's context
-menu: **On Story map**, and **Ending**. A Scene with no Exits other than
-Navigation ones is guessed to be an ending. The Agent can set both, and the
-name players see when it should differ from the Scene's title. Asking the
-Agent changes how the map looks, since it is the Scene's own code.
-Map inclusion is shown in the context menu, without a badge on the Scene card.
+A Scene with no Exits other than Navigation ones is guessed to be an ending.
+Everything the map cannot guess, such as which Scenes are off it, which are
+endings, and names players should see instead of titles, is the Story map
+Scene's own code, like how it looks: the author asks the Agent. The canvas
+shows none of it; OhMyGame keeps only what the player has seen.
 
 The Workbench previews a Story map Scene with everything seen, so the author
 sees the whole map while editing; Playtest shows what they have played.
@@ -655,30 +652,30 @@ The same capture is attached to Agent requests about that Scene.
 
 Picking (**Select**), in-place editing (**Text**), and moving (**Move**) are editor tooling
 implemented by the editor bridge the preview injects into the story's page,
-not by node code. A published game never has them.
+not by Scene code. A published game never has them.
 
 1. **Select**, **Text**, or **Move** puts the preview into pick mode. The bridge
-   draws a hover outline inside the node's surface and blocks node input.
-2. With **Select**, clicking returns a **picked element** description: node
-   ID, source location when known, CSS path within the node root, tag,
+   draws a hover outline inside the Scene's surface and blocks its input.
+2. With **Select**, clicking returns a **picked element** description: Scene
+   ID, source location when known, CSS path within the Scene's root, tag,
    visible text excerpt, bounding box, and the Exit (`data-signal`) it
    belongs to. Shift-, ⌘- or Ctrl-click adds it to the picks.
 3. Preview builds add an inert `data-ohmygame-source="index.html:12:5"`
-   attribute to every element written in the node's HTML. Elements created by
+   attribute to every element written in the Scene's HTML. Elements created by
    JavaScript have no such attribute; the description then gives the source
    location of the nearest element around it that was written in the HTML,
    and the Agent finds the element from there. An element with none, such as
-   one a script adds straight to the node's root, cannot be picked with
+   one a script adds straight to the Scene's root, cannot be picked with
    **Select** or edited with **Text**: **Select** shows no hover outline for
    it and a click does nothing.
 4. With **Text**, clicking makes the element editable. On Enter the host
    reports the text before and after, and whether the element holds only text
-   and came from the node's HTML. The editor then replaces that element's
+   and came from the Scene's HTML. The editor then replaces that element's
    text in the source file, only if the file still reads the old text;
    anything else goes to the Agent.
 5. With **Move**, dragging moves the element with an inline `translate`
    added to the one it had. On release the host reports the element and its
-   new offset in cqw and cqh, and whether it came from the node's HTML with
+   new offset in cqw and cqh, and whether it came from the Scene's HTML with
    no animation of its own that overrides `translate`. The editor then sets
    `translate` in that element's `style` attribute, only if the source still
    has the same tag there; anything else goes to the Agent. The Project
@@ -747,13 +744,13 @@ does not reduce the download size. Custom media helpers are preserved.
 The Agent can also trim it: “Keep 3.2 through 8.75 seconds of this Scene's
 background video.” No new video is generated or transcoded.
 
-### Multi-node Agent changes
+### Multi-Scene Agent changes
 
 The Agent may create several Scenes and Exits in one turn. The turn
 review below is not built yet.
 
 - Before each Agent turn, the editor records a checkpoint of `graph.json`,
-  `editor/layout.json`, and the node and `shared/` source files.
+  `editor/layout.json`, and the Scene and `shared/` source files.
 - After the turn, the canvas highlights the change set: new Scenes and
   connections marked **New**, changed Scenes marked **Edited**, removed ones
   listed in a
