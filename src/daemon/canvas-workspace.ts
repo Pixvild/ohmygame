@@ -86,7 +86,7 @@ async function ensureCanvasIndex(workspace: string): Promise<CanvasWorkspaceInde
   for (const legacy of ["design", "canvas.json"]) {
     try { await lstat(path.join(workspace, legacy)); }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code === "ENOENT") continue; throw cause; }
-    throw new CanvasError("This project uses the previous canvas format. Stop OhMyGame and run scripts/migrate-canvas-workspaces.ts against its data directory before opening it.", 409);
+    throw new CanvasError("This project uses the previous canvas format. Stop OhMyGame and run scripts/migrate-canvas-workspaces.ts from an OhMyGame source checkout against its data directory (see docs/canvas-agent.md) before opening it.", 409);
   }
   try {
     await lstat(path.join(workspace, "canvas"));

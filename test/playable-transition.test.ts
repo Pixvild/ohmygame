@@ -242,7 +242,8 @@ it("keeps incoming controls and media inactive until outgoing async cleanup fini
       });
     },
   );
-  const originalMount = host.mountNode.bind(host);
+  // Spying again reuses setup's spy, so wrap its implementation rather than the spy itself.
+  const originalMount = vi.mocked(host.mountNode).getMockImplementation()!;
   let finishCleanup!: () => void;
   const pendingCleanup = new Promise<void>((resolve) => {
     finishCleanup = resolve;

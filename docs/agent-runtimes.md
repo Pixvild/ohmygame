@@ -1,16 +1,7 @@
 # Agent Runtime integration specification
 
-Status: reviewed integration design. The implementation first merged in
-[PR #289](https://github.com/WhiteTowerAI/ohmygame/pull/289), was reverted by
-[#290](https://github.com/WhiteTowerAI/ohmygame/pull/290) pending acceptance,
-and is reintroduced with review fixes. Native runtimes are optional and
-disabled by default; implementation, automated coverage, and real acceptance
-are distinct milestones.
-
-This document records the architecture and delivery decisions from
-[PR #258](https://github.com/WhiteTowerAI/ohmygame/pull/258). It replaces the
-initial transport examples and phased proposal with the boundary used by the
-reviewed implementation. The implementation guide is
+Native runtimes are optional and disabled by default. This document records
+the architecture and the accepted design decisions. The implementation guide is
 [coding-agents.md](coding-agents.md); shared types and tests remain the source
 of truth for individual protocol fields.
 
@@ -455,7 +446,7 @@ not a conversation: they are cached per runtime, persisted, and shown in
 Settings → Agents rather than in the composer. Add UI text in both English
 and Chinese; prompts sent to agents remain English.
 
-## Delivery status and release gate
+## Scope and release gate
 
 The three adapters have Full integration scope: OhMyGame tools, approval UI,
 resume/rebuild, manual/native compaction, queued continuation, usage where
@@ -464,69 +455,18 @@ promise of identical native features or completed platform acceptance. There
 is no generic Basic tier: adding a declarative entry alone cannot run another
 CLI.
 
-The implementation covers shared infrastructure, all three
-drivers, plugin/Skill bridging, settings/model selection, approvals, and
-lifecycle recovery. Its focused fixtures covered branch invalidation, expired resume,
-queue checkpoints, cancellation races, token revocation, SSE loss, model/default
-migration, planning writes, child approvals, staged Skill boundaries, and
-verified orphan recovery. No rewrite of the runtime architecture is required.
-
-Current OpenCode v2 acceptance and its validation boundaries are recorded in
-[coding agent acceptance](coding-agents.md#compatibility-and-real-acceptance).
-
-Earlier validation recorded during review on macOS:
-
-- Public local checks: 2,916 tests passed and 23 skipped; typecheck, renderer
-  build, Node startup/build, plugin preparation, and changelog checks passed.
-  Private cloud contracts remain skipped where unavailable.
-- Historical real Codex 0.163.0-alpha.10.2 and OpenCode 1.18.33 acceptance passed: file
-  edits, shared tool use, continuation, daemon restart, compaction, message edit,
-  checkpoint restore, external dummy-file denial, approval history, and
-  cancellation during an executing shell command.
-- Actual Codex sandbox commands additionally verified workspace read/write,
-  denied external/protected/symlink reads, and denied planning writes. Actual
-  OpenCode read a staged Skill reference without manual approval.
-- Native effort selection/reload was exercised in the browser. Fixture/API
-  approval tests passed; an extra real Codex browser approval click scenario
-  did not complete and is not counted as passed.
-
-Real Claude Code 2.1.302 / Sonnet 5.5 acceptance passed on macOS for the
-reintroduced implementation: the same workflow as above (cancellation in
-619 ms), loading a staged Skill without approval, and a planning turn that
-searched with read-only commands, recorded its plan with `update_plan` and left
-the workspace unchanged. OpenCode 1.18.33 / `mimo-v2.6-flash-free` passed the
-same extended workflow after its fixes. That acceptance found and fixed: tools never shown as
-running, subagents and shells that ran in the background past the turn, Claude's
-own plan-file workflow in place of `update_plan`, planning that could not
-search, OhMyGame tools deferred behind Claude's tool search, OpenCode
-subagents refused in planning, and bare OpenCode rejections that ended the
-planning loop. Codex 0.163.0 / `gpt-6-luna` passed the same extended workflow after
-one more fix: it reads `AGENTS.md` from every folder between the Git root and
-the workspace through the permission profile, so a workspace inside another
-repository failed to start a thread. `project_root_markers = []` makes the
-workspace its own root, so only the workspace's `AGENTS.md` is read, as for
-OhMyGame's own agent. The same run showed that the profile's minimal system
-access left the person's toolchains unreadable, so Node, npm, Git and Python
-could not start inside Codex's sandbox. Profiles now grant the folders on the
-commands' PATH and their installations (never the home folder), the macOS
-command-line tools, session-private package caches, and a Git configuration
-with only the person's identity; the live acceptance runs `npm install` and Git
-for every runtime. Codex's minimal access also reads `/tmp` and `/var/tmp`,
-which a run with its workspace there showed; profiles deny both, and a
-workspace inside one keeps its narrower grant. Linux/Windows real CLI acceptance,
-Electron-specific native lifecycle acceptance, paid media/game-playtest flows,
-and universal OS confinement are not established by these checks. On Windows,
-discovery finds `.exe` programs only: Node cannot start the `.cmd` shims npm
-installs without a shell. Keep native
-runtimes opt-in and require real acceptance on a target platform before
-advertising it as validated. Latest-head CI must pass before merging; earlier
-local evidence or an old green check does not satisfy that gate.
+Fixture coverage, accepted CLI versions, and the live acceptance workflow are
+listed in [coding agent acceptance](coding-agents.md#compatibility-and-real-acceptance).
+Linux/Windows real CLI acceptance, Electron-specific native lifecycle
+acceptance, paid media/game-playtest flows, and universal OS confinement are not
+established by those checks. Keep native runtimes opt-in and require real
+acceptance on a target platform before advertising it as validated.
 
 Deferred work includes a generic Basic adapter, stronger cross-runtime OS
 isolation, explicit API-key environment profiles, and maintenance/migration of
 version-specific transports. New runtime support needs a driver plus protocol
-and real acceptance tests. This boundary is the long-term design; CLI wire
-protocols and capability floors remain maintained compatibility code.
+and real acceptance tests. CLI wire protocols and capability floors remain
+maintained compatibility code.
 
 ## Related contracts
 

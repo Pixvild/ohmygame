@@ -471,9 +471,12 @@ naming requests leave the project eligible for a later message. Manual names,
 duplicates and legacy projects are preserved; a delayed AI result cannot replace
 a manual rename. The optional `nameSource` field in `project.json` records
 `default`, `ai` or `manual`; an absent field is treated as legacy data.
-Project lists use the existing two-second activity poll to receive names, even
-after a short turn finishes. `/projects/activity` returns `{ activity, names }`;
-`names` contains only each project's `id`, `name` and optional `nameSource`.
+Project lists receive names from the project activity stream, even after a
+short turn finishes. `/projects/activity` returns `{ activity, names }`, and
+`/projects/activity/events` streams the same snapshot as an `activity` SSE event
+whenever it changes; `names` contains only each project's `id`, `name` and
+optional `nameSource`. Stopping the daemon ends this and the other SSE streams
+first, so an open Projects page does not hold shutdown open.
 
 ## Project navigation
 

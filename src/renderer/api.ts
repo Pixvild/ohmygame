@@ -206,8 +206,31 @@ export async function listProjects(): Promise<ProjectState[]> {
   return request("/projects");
 }
 
-export async function listProjectActivity(signal?: AbortSignal): Promise<ProjectActivitySnapshot> {
-  return request("/projects/activity", { signal });
+/** Follows project activity, reconnecting after a service restart; each connection starts with the current snapshot. */
+export async function streamProjectActivity(signal: AbortSignal, onSnapshot: (snapshot: ProjectActivitySnapshot) => void): Promise<void> {
+  while (!signal.aborted) {
+    const connection = new AbortController();
+    const unsubscribe = subscribeRuntimeConnection(() => connection.abort());
+    const connectionSignal = AbortSignal.any([signal, connection.signal]);
+    try {
+      if (runtimeConnection().status !== "ready") throw new Error(t("api.serviceUnavailable"));
+      const response = await fetch(apiUrl("/projects/activity/events"), {
+        headers: { accept: "text/event-stream", ...runtimeHeaders() },
+        signal: connectionSignal,
+      });
+      if (!response.ok || !response.body) throw new ApiError(`Activity stream failed with ${response.status}`, response.status);
+      await readEventBlocks(response.body, (block) => {
+        const data = eventData(block);
+        if (data) onSnapshot(JSON.parse(data) as ProjectActivitySnapshot);
+      }, connectionSignal);
+    } catch {
+      // Keep the last state during a temporary runtime disconnect.
+    } finally {
+      unsubscribe();
+    }
+    if (signal.aborted) return;
+    await reconnectDelay(signal);
+  }
 }
 
 export async function listExamples(): Promise<ExampleSummary[]> {
@@ -1323,8 +1346,9 @@ async function streamProjectEvents(
         throw new ApiError(`Event stream failed with ${response.status}`, response.status);
       }
       handlers.onOpen();
-      await consumeEventStream(response.body, (event) => {
-        if (event.id <= cursor) return;
+      await readEventBlocks(response.body, (block) => {
+        const event = parseRuntimeEvent(block);
+        if (!event || event.id <= cursor) return;
         cursor = Math.max(cursor, event.id);
         handlers.onEvent(event);
       }, connectionSignal);
@@ -1351,7 +1375,11 @@ async function streamModelAuthEvents(
         signal,
       });
       if (!response.ok || !response.body) throw new ApiError(`Authentication stream failed with ${response.status}`, response.status);
-      const finished = await consumeModelAuthStream(response.body, (event) => {
+      let finished = false;
+      await readEventBlocks(response.body, (block) => {
+        const event = parseModelAuthEvent(block);
+        if (!event) return;
+        if (event.type === "completed" || event.type === "cancelled" || event.type === "error") finished = true;
         if (event.id <= cursor) return;
         cursor = Math.max(cursor, event.id);
         handlers.onEvent(event);
@@ -1365,15 +1393,11 @@ async function streamModelAuthEvents(
   }
 }
 
-async function consumeModelAuthStream(
-  body: ReadableStream<Uint8Array>,
-  onEvent: (event: ModelAuthEvent) => void,
-  signal: AbortSignal,
-): Promise<boolean> {
+/** Passes each complete event of a server-sent event stream until it ends or the signal aborts. */
+async function readEventBlocks(body: ReadableStream<Uint8Array>, onBlock: (block: string) => void, signal: AbortSignal): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let finished = false;
   try {
     while (!signal.aborted) {
       const { done, value } = await reader.read();
@@ -1382,42 +1406,20 @@ async function consumeModelAuthStream(
       const blocks = buffer.split(/\r?\n\r?\n/);
       buffer = blocks.pop() ?? "";
       for (const block of blocks) {
-        const event = parseModelAuthEvent(block);
-        if (!event) continue;
-        onEvent(event);
-        if (event.type === "completed" || event.type === "cancelled" || event.type === "error") finished = true;
+        if (signal.aborted) return;
+        onBlock(block);
       }
     }
   } finally {
     reader.releaseLock();
   }
-  return finished;
 }
 
-async function consumeEventStream(
-  body: ReadableStream<Uint8Array>,
-  onEvent: (event: RuntimeEvent) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() ?? "";
-      for (const block of blocks) {
-        const event = parseRuntimeEvent(block);
-        if (!event) continue;
-        onEvent(event);
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+function eventData(block: string): string {
+  return block.split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
 }
 
 function parseRuntimeEvent(block: string): RuntimeEvent | undefined {
@@ -1442,10 +1444,7 @@ function parseRuntimeEvent(block: string): RuntimeEvent | undefined {
 }
 
 function parseModelAuthEvent(block: string): ModelAuthEvent | undefined {
-  const data = block.split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart())
-    .join("\n");
+  const data = eventData(block);
   if (!data) return undefined;
   try {
     return JSON.parse(data) as ModelAuthEvent;

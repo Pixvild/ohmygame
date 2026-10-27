@@ -1491,8 +1491,6 @@ const zhCN: typeof en = {
     images: "已添加的图片",
     files: "已添加的文件",
     remove: "移除 {{name}}",
-    attachImages: "添加图片",
-    imageName: "图片 {{number}}",
     imageTypes: "请使用 PNG、JPEG、WebP 或 GIF 图片",
     readFailed: "无法读取 {{name}}",
   },
