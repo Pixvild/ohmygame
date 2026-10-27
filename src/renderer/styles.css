@@ -15598,6 +15598,11 @@ button {
   font-weight: 600;
 }
 
+.playable-node-stale.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
+  color: var(--danger);
+}
+
 .playable-node-issue {
   position: absolute;
   right: 8px;

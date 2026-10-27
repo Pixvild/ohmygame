@@ -23,6 +23,9 @@ export interface PlayableThumbnailSnapshot {
   web?: true;
 }
 
+/** How one Node thumbnail capture ended: stored, or why not. */
+export type NodeThumbnailResult = { captured: true } | { captured: false; error: string };
+
 // `available: false` marks an Interactive Story project whose graph.json is missing.
 export type NodeRuntimeResponse =
   | {
