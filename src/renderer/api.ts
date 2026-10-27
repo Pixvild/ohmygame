@@ -507,10 +507,6 @@ export async function updateMinimaxApiKey(providerId: string, apiKey: string): P
   });
 }
 
-export async function getVolcengineTtsSettings(): Promise<{ configured: boolean; defaultVoiceId?: string }> {
-  return request("/settings/models/providers/volcengine-tts");
-}
-
 export async function updateVolcengineTtsApiKey(apiKey: string): Promise<{ configured: boolean; defaultVoiceId?: string }> {
   const result = await request<{ configured: boolean; defaultVoiceId?: string }>("/settings/models/providers/volcengine-tts", {
     method: "PUT",
@@ -1604,4 +1600,16 @@ export function clearProjectIntegration(projectId: string): Promise<ProjectState
 }
 export function setProjectIntegration(projectId: string, pluginId: string): Promise<ProjectState> {
   return request(`/projects/${encodeURIComponent(projectId)}/integration`, { method: "PUT", body: JSON.stringify({ pluginId }) });
+}
+
+export interface DoubaoVoiceConnection { ttsConfigured: boolean; seedConfigured: boolean; distinctKeys: boolean; defaultVoiceId?: string }
+export function getDoubaoVoiceSettings(): Promise<DoubaoVoiceConnection> { return request("/settings/models/providers/doubao-voice"); }
+export async function updateDoubaoVoiceApiKey(apiKey: string): Promise<DoubaoVoiceConnection> {
+  const result = await request<DoubaoVoiceConnection>("/settings/models/providers/doubao-voice", { method: "PUT", body: JSON.stringify({ apiKey }) });
+  notifyAgentModelsChanged(); return result;
+}
+export async function previewSeedAudio(prompt: string): Promise<Blob> {
+  const response = await fetch(apiUrl("/settings/models/providers/volcengine-seed-audio/preview"), { method: "POST", headers: { ...runtimeHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ prompt, durationSeconds: 2 }) });
+  if (!response.ok) throw await responseError(response);
+  return response.blob();
 }

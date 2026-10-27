@@ -442,7 +442,7 @@ export interface ProjectActivitySnapshot {
   names: Pick<ProjectState, "id" | "name" | "nameSource">[];
 }
 
-export type AssetCanvasNodeType = "text" | "image" | "video" | "speech" | "sound-effect" | "music" | "model-3d" | "animate-3d" | "asset" | "document" | "table" | "file";
+export type AssetCanvasNodeType = "text" | "image" | "video" | "speech" | "sound-effect" | "music" | "audio-scene" | "model-3d" | "animate-3d" | "asset" | "document" | "table" | "file";
 
 export interface AssetCanvasPosition {
   x: number;
@@ -526,7 +526,7 @@ export type AssetCanvasNode = (
     referenceMentions?: Record<string, AssetCanvasReference>;
     assetId?: string;
   } }
-  | { id: string; type: "speech"; position: AssetCanvasPosition; data: {
+  | { id: string; type: "speech"; position: AssetCanvasPosition; data: import("./audio.js").AudioCanvasSettings & {
     /** Script text to synthesize; also accepts a linked text/document node as promptSource. */
     text: string;
     promptSource?: AssetCanvasTextReference;
@@ -537,7 +537,7 @@ export type AssetCanvasNode = (
     speed?: number;
     assetId?: string;
   } }
-  | { id: string; type: "sound-effect"; position: AssetCanvasPosition; data: {
+  | { id: string; type: "sound-effect"; position: AssetCanvasPosition; data: import("./audio.js").AudioCanvasSettings & {
     prompt: string;
     promptSource?: AssetCanvasTextReference;
     model?: ModelRef;
@@ -546,7 +546,7 @@ export type AssetCanvasNode = (
     negativePrompt?: string;
     assetId?: string;
   } }
-  | { id: string; type: "music"; position: AssetCanvasPosition; data: {
+  | { id: string; type: "music"; position: AssetCanvasPosition; data: import("./audio.js").AudioCanvasSettings & {
     prompt: string;
     promptSource?: AssetCanvasTextReference;
     model?: ModelRef;
@@ -555,6 +555,9 @@ export type AssetCanvasNode = (
     durationSeconds?: number;
     loop?: boolean;
     assetId?: string;
+  } }
+  | { id: string; type: "audio-scene"; position: AssetCanvasPosition; data: import("./audio.js").AudioCanvasSettings & {
+    prompt: string; promptSource?: AssetCanvasTextReference; model?: ModelRef; durationSeconds?: number; assetId?: string;
   } }
   | { id: string; type: "model-3d"; position: AssetCanvasPosition; data: {
     operation?: Exclude<Model3DOperation, "animate">;
@@ -983,6 +986,7 @@ export type LibraryAssetOrigin = "generated" | "uploaded" | "workspace" | "built
 export type LibraryAssetPurpose = "asset" | "reference";
 
 export interface LibraryAsset {
+  audio?: import("./audio.js").AudioAssetData;
   model3d?: Model3DMetadata;
   id: string;
   name: string;
@@ -1143,7 +1147,7 @@ export interface Model3DGenerationConfig {
   pbr: boolean;
 }
 
-export const TOOL_IDS = ["generate-image", "image-to-3d", "generate-video", "animate-3d", "generate-speech", "generate-sound-effect", "generate-music"] as const;
+export const TOOL_IDS = ["generate-image", "image-to-3d", "generate-video", "animate-3d", "generate-speech", "generate-sound-effect", "generate-music", "generate-audio"] as const;
 export type ToolId = (typeof TOOL_IDS)[number];
 
 interface RunSizedImageToolRequest {
@@ -1205,9 +1209,10 @@ export interface RunAnimate3DToolRequest {
 }
 
 export type RunToolRequest = RunImageToolRequest | Run3DToolRequest | RunVideoToolRequest | RunAnimate3DToolRequest
-  | import("./audio.js").RunSpeechToolRequest | import("./audio.js").RunSoundEffectToolRequest | import("./audio.js").RunMusicToolRequest;
+  | import("./audio.js").RunSpeechToolRequest | import("./audio.js").RunSoundEffectToolRequest | import("./audio.js").RunMusicToolRequest | import("./audio.js").RunSceneAudioToolRequest;
 
 export interface ToolRunFile {
+  role?: "audio" | "subtitles" | "metadata";
   name: string;
   mediaType: string;
   assetId?: string;

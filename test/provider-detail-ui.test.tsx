@@ -17,7 +17,39 @@ const model = (id: string, visible = true) => ({
   visible,
   custom: false,
 });
+const audioProviders: ProviderSummary[] = [
+  {
+    id: "volcengine-tts",
+    name: "Doubao Voice",
+    configured: true,
+    enabled: true,
+    status: "connected",
+    capabilities: ["audio"],
+    methods: [],
+  },
+  {
+    id: "volcengine-seed-audio",
+    name: "Doubao Seed Audio",
+    configured: true,
+    enabled: true,
+    status: "connected",
+    capabilities: ["audio"],
+    methods: [],
+  },
+];
 const api = {
+  listProviders: vi.fn(async () => audioProviders),
+  getDoubaoVoiceSettings: vi.fn(async () => ({
+    ttsConfigured: true,
+    seedConfigured: true,
+    distinctKeys: false,
+    defaultVoiceId: "zh_female_vv_uranus_bigtts",
+  })),
+  listAudioModelCatalog: vi.fn(async () => ({ models: [], providers: [] })),
+  setProviderEnabled: vi.fn(async (id: string, enabled: boolean) => ({
+    ...audioProviders.find((provider) => provider.id === id)!,
+    enabled,
+  })),
   getOpenAIEndpointSettings: vi.fn(async () => ({
     baseUrl: "https://api.openai.com/v1",
   })),
@@ -80,11 +112,11 @@ const openai: ProviderSummary = {
   ],
 };
 
-async function render(onViewChange = vi.fn()) {
+async function render(onViewChange = vi.fn(), provider = openai) {
   await act(async () =>
     root.render(
       <ModelsSettings
-        view={{ page: "provider", provider: openai }}
+        view={{ page: "provider", provider }}
         onViewChange={onViewChange}
         onOpenAgents={() => {}}
       />,
@@ -130,6 +162,41 @@ it("confirms before removing the provider", async () => {
   await act(async () => host.querySelector<HTMLButtonElement>(".settings-provider-detail-header .settings-provider-delete")!.click());
   await act(async () => button("Delete provider")!.click());
   expect(api.removeProvider).toHaveBeenCalledWith("openai");
+});
+
+it("keeps Doubao actions in the shared header and targets the selected service", async () => {
+  await render(vi.fn(), audioProviders[0]!);
+  const header = () => host.querySelector(".settings-provider-detail-header")!;
+  const toggle = () =>
+    header().querySelector<HTMLInputElement>('[role="switch"]')!;
+  const remove = () =>
+    header().querySelector<HTMLButtonElement>(".settings-provider-delete")!;
+  expect(toggle().getAttribute("aria-label")).toBe("Enable Speech synthesis");
+  expect(host.querySelectorAll(".settings-provider-delete")).toHaveLength(1);
+  expect(
+    host.querySelector('.settings-provider-filters [role="switch"]'),
+  ).toBeNull();
+  // One panel like the other providers, with no nested service panels.
+  expect(host.querySelectorAll(".settings-panel")).toHaveLength(1);
+  expect(
+    host.querySelector<HTMLSelectElement>("#volcengine-tts-voice-select")!
+      .value,
+  ).toBe("zh_female_vv_uranus_bigtts");
+  await act(async () => toggle().click());
+  expect(api.setProviderEnabled).toHaveBeenCalledWith("volcengine-tts", false);
+  await act(async () => remove().click());
+  expect(
+    host.querySelector(".settings-provider-delete-confirmation"),
+  ).toBeTruthy();
+  expect(api.removeProvider).not.toHaveBeenCalled();
+  await act(async () => button("Audio generation")!.click());
+  expect(
+    host.querySelector(".settings-provider-delete-confirmation"),
+  ).toBeNull();
+  expect(toggle().getAttribute("aria-label")).toBe("Enable Audio generation");
+  await act(async () => remove().click());
+  await act(async () => button("Delete provider")!.click());
+  expect(api.removeProvider).toHaveBeenCalledWith("volcengine-seed-audio");
 });
 
 it("puts the default model first and keeps hidden models behind a toggle", async () => {

@@ -17,7 +17,7 @@ import { registerPluginCapabilityRoutes } from "./plugin-capability-routes.js";
 import { sniffImageType } from "./image-format.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { OnboardingStore } from "./onboarding.js";
 import type { UpdateOnboardingRequest } from "../shared/onboarding.js";
 import path from "node:path";
@@ -97,12 +97,12 @@ import { modelUsageList } from "../shared/custom-models.js";
 import { ToolRunner, ToolRunError } from "./tools.js";
 import type { VideoGenerator } from "./video-generation.js";
 import { ProviderVideos } from "./provider-videos.js";
-import { ProviderAudio, type AudioGenerator } from "./audio-generation.js";
+import { AudioGenerationError, ProviderAudio, type AudioGenerator } from "./audio-generation.js";
+import { AUDIO_SETTINGS_PROPERTIES } from "../shared/audio-schema.js";
+import { DoubaoVoiceSettingsStore } from "./doubao-voice-settings.js";
 import { VolcengineTtsProvider } from "./volcengine-tts-provider.js";
-import { VolcengineTtsSettingsStore } from "./volcengine-tts-settings.js";
 import { VolcengineSeedAudioProvider } from "./volcengine-seed-audio-provider.js";
-import { VolcengineSeedAudioSettingsStore } from "./volcengine-seed-audio-settings.js";
-import { AUDIO_OUTPUT_FORMATS, AUDIO_SAMPLE_RATES, AUDIO_VOICE_ID_MAX_LENGTH, AUDIO_VOICE_ID_PATTERN, DOUBAO_SEED_AUDIO_PROVIDER_NAME, DOUBAO_SPEECH_PROVIDER_NAME, availableAudioOperations, type AudioOperation } from "../shared/audio.js";
+import { AUDIO_REFERENCE_ID_PATTERN, DOUBAO_SEED_AUDIO_PROVIDER_NAME, DOUBAO_SPEECH_PROVIDER_NAME, availableAudioOperations, type AudioOperation } from "../shared/audio.js";
 import { SEEDANCE_PROVIDER_IDS, SEEDANCE_PROVIDERS } from "./seedance-models.js";
 import { SeedanceSettingsStore } from "./seedance-settings.js";
 import { MINIMAX_PROVIDER_IDS, MINIMAX_PROVIDERS } from "./minimax-models.js";
@@ -493,24 +493,11 @@ const toolRunSchema = {
       outputs: { type: "integer", enum: [...IMAGE_OUTPUT_COUNTS] },
       duration: { type: "integer", minimum: 1, maximum: 30 },
       durationSeconds: { type: "number", minimum: 0.1, maximum: 600 },
-      voiceId: { type: "string", minLength: 1, maxLength: AUDIO_VOICE_ID_MAX_LENGTH, pattern: AUDIO_VOICE_ID_PATTERN },
-      language: { type: "string", minLength: 1, maxLength: 40 },
-      style: { type: "string", minLength: 1, maxLength: 2_000 },
-      speed: { type: "number", minimum: -50, maximum: 100 },
       loop: { type: "boolean" },
       instrumental: { type: "boolean" },
       lyrics: { type: "string", maxLength: 20_000 },
       negativePrompt: { type: "string", maxLength: 4_000 },
       referenceAssetId: { type: "string", minLength: 1, maxLength: 100 },
-      output: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          format: { enum: [...AUDIO_OUTPUT_FORMATS], description: "Must be supported by the selected model; Doubao Speech supports mp3 only." },
-          sampleRate: { type: "integer", enum: [...AUDIO_SAMPLE_RATES] },
-          channels: { type: "integer", enum: [1, 2] },
-        },
-      },
       referenceMode: { enum: ["frame", "reference"] },
       targetPolycount: { type: "integer", minimum: 100, maximum: MODEL_3D_MAX_POLYCOUNT },
       texture: { type: "boolean" },
@@ -551,11 +538,13 @@ const toolRunSchema = {
           additionalProperties: false,
           required: ["type", "assetId"],
           properties: {
+            id: { type: "string", pattern: AUDIO_REFERENCE_ID_PATTERN, maxLength: 120 },
             type: { enum: ["image", "video", "audio"] },
             assetId: { type: "string", minLength: 1, maxLength: 100 },
           },
         },
       },
+      ...AUDIO_SETTINGS_PROPERTIES,
     },
   },
 } as const;
@@ -598,8 +587,7 @@ export function createApp(options: AppOptions = {}) {
   const native3DProviders = [["meshy", "Meshy", meshySettings], ["tripo", "Tripo", tripoSettings], ["hyper3d", "Hyper3D", hyper3dSettings]] as const;
   const seedanceSettings = new SeedanceSettingsStore(dataDirectory);
   const minimaxSettings = new MinimaxSettingsStore(dataDirectory);
-  const volcengineTtsSettings = new VolcengineTtsSettingsStore(dataDirectory);
-  const volcengineSeedAudioSettings = new VolcengineSeedAudioSettingsStore(dataDirectory);
+  const doubaoVoiceSettings = new DoubaoVoiceSettingsStore(dataDirectory);
   const providerModelSettings = new ProviderModelSettingsStore(dataDirectory, piAgentDirectory);
   // Coding agents reach OhMyGame's tools over loopback only when they cannot take them over their own pipe.
   const agentRuntimes = new AgentRuntimeService(dataDirectory, () => {
@@ -707,19 +695,23 @@ export function createApp(options: AppOptions = {}) {
     isEnabled: providerEnabled, request: options.model3DFetch, defaultModel: () => providerModelSettings.defaultModel3D(), cloud: cloudModels,
   });
   const volcengineTtsProvider = new VolcengineTtsProvider(
-    () => volcengineTtsSettings.key(),
+    () => doubaoVoiceSettings.key("volcengine-tts"),
     options.audioFetch,
     undefined,
     () => providerEnabled("volcengine-tts"),
-    () => volcengineTtsSettings.defaultVoiceId(),
+    () => doubaoVoiceSettings.defaultVoiceId(),
   );
   const volcengineSeedAudioProvider = new VolcengineSeedAudioProvider(
-    () => volcengineSeedAudioSettings.key(),
+    () => doubaoVoiceSettings.key("volcengine-seed-audio"),
     options.audioFetch,
     undefined,
     () => providerEnabled("volcengine-seed-audio"),
   );
-  const providerAudio = new ProviderAudio([volcengineTtsProvider, volcengineSeedAudioProvider]);
+  const providerAudio = new ProviderAudio([volcengineTtsProvider, volcengineSeedAudioProvider], async (assetId) => {
+    const content = await library.content(assetId);
+    if (content.asset.size > 10 * 1024 * 1024) throw new AudioGenerationError("Reference assets must be 10 MB or smaller", 400);
+    return { bytes: await readFile(content.absolutePath), mediaType: content.asset.contentType };
+  });
   const tools = new ToolRunner(
     dataDirectory,
     options.imageGenerator ?? providerImages,
@@ -732,7 +724,7 @@ export function createApp(options: AppOptions = {}) {
       if (projectId && !project) throw new ToolRunError("Project not found", 404);
       const audioOperation: AudioOperation | undefined = toolId === "generate-speech" ? "speech"
         : toolId === "generate-sound-effect" ? "sound-effect"
-          : toolId === "generate-music" ? "music" : undefined;
+          : toolId === "generate-music" ? "music" : toolId === "generate-audio" ? "audio-scene" : undefined;
       if (audioOperation) {
         const explicit = (input as { model?: AgentModelRef }).model;
         const selected = providerAudio.resolveModel(audioOperation, explicit);
@@ -966,7 +958,7 @@ export function createApp(options: AppOptions = {}) {
       const audioOperations = availableAudioOperations(providerAudio.catalog().models);
       const enabledTools = TOOL_IDS.filter((toolId) => toolId === "generate-speech" ? audioOperations.has("speech")
         : toolId === "generate-sound-effect" ? audioOperations.has("sound-effect")
-          : toolId === "generate-music" ? audioOperations.has("music") : true);
+          : toolId === "generate-music" ? audioOperations.has("music") : toolId === "generate-audio" ? audioOperations.has("audio-scene") : true);
       return projectPiToolNames(mode, enabledTools, registered, webSearch.enabled());
     },
     onRunFinished: async (project, conversationId) => {
@@ -1055,7 +1047,7 @@ export function createApp(options: AppOptions = {}) {
     await onboarding.load().catch((err) => app.log.warn({ err }, "Could not load onboarding state"));
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
-    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), volcengineTtsSettings.load(), volcengineSeedAudioSettings.load(), providerModelSettings.load(), externalMcp.load(), externalClients.load(), agentRuntimes.load().catch((err) => app.log.warn({ err }, "Could not load coding agent settings"))]);
+    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), doubaoVoiceSettings.load(), providerModelSettings.load(), externalMcp.load(), externalClients.load(), agentRuntimes.load().catch((err) => app.log.warn({ err }, "Could not load coding agent settings"))]);
     await Promise.all(projects.list().map(async (project) => { projectWrites.initialize(project.id, await readWorkspaceVersion(project)); }));
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     // Updates the Skill and launcher path in connected clients without holding up startup.
@@ -2243,20 +2235,20 @@ export function createApp(options: AppOptions = {}) {
     }), {
       id: "volcengine-tts",
       name: DOUBAO_SPEECH_PROVIDER_NAME,
-      configured: volcengineTtsSettings.get().configured,
+      configured: Boolean(doubaoVoiceSettings.key("volcengine-tts")),
       enabled: providerEnabled("volcengine-tts"),
       custom: false,
-      status: volcengineTtsSettings.get().configured ? "connected" as const : "not_configured" as const,
+      status: doubaoVoiceSettings.key("volcengine-tts") ? "connected" as const : "not_configured" as const,
       methods: [{ type: "api_key" as const, label: `${DOUBAO_SPEECH_PROVIDER_NAME} API key` }],
       credentialType: "api_key" as const,
       capabilities: ["audio"] as const,
     }, {
       id: "volcengine-seed-audio",
       name: DOUBAO_SEED_AUDIO_PROVIDER_NAME,
-      configured: volcengineSeedAudioSettings.get().configured,
+      configured: Boolean(doubaoVoiceSettings.key("volcengine-seed-audio")),
       enabled: providerEnabled("volcengine-seed-audio"),
       custom: false,
-      status: volcengineSeedAudioSettings.get().configured ? "connected" as const : "not_configured" as const,
+      status: doubaoVoiceSettings.key("volcengine-seed-audio") ? "connected" as const : "not_configured" as const,
       methods: [{ type: "api_key" as const, label: `${DOUBAO_SEED_AUDIO_PROVIDER_NAME} API key` }],
       credentialType: "api_key" as const,
       capabilities: ["audio"] as const,
@@ -2347,11 +2339,12 @@ export function createApp(options: AppOptions = {}) {
     openAIEndpoint,
     seedanceSettings,
     minimaxSettings,
-    volcengineTtsSettings,
-    volcengineSeedAudioSettings,
+    doubaoVoiceSettings,
     syncOpenAIEndpoint,
     openAIImages,
     volcengineTtsProvider,
+    volcengineSeedAudioProvider,
+    providerEnabled,
     cloudModels,
     modelAuth,
   });
