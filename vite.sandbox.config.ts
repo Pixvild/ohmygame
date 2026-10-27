@@ -13,8 +13,5 @@ export default defineConfig({
       name: "OhMyGamePlayableSandbox",
       fileName: () => "assets/playable-sandbox.js",
     },
-    rollupOptions: {
-      output: { inlineDynamicImports: true },
-    },
   },
 });

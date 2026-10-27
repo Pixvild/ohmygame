@@ -22,10 +22,8 @@ enables a CLI.
 agent comes first: it uses the models set up in Providers & Models, and its row
 links there. The coding agent CLIs follow, under **Coding agent CLIs on this
 computer**; **Rescan** checks for them again. Each row shows whether the CLI
-was found and its version; the detail page shows its account, billing, and a
-verified version for reference. The verified version records a real acceptance
-run and is not a minimum version. The agent whose model new conversations start with is
-marked **Default**.
+was found and its version; the detail page provides account and permission
+controls. The agent whose model new conversations start with is marked **Default**.
 Agents are off by default. Enabling the switch offers their models in the conversation model picker; the
 detail page signs in, checks again, chooses the executable and permissions, and
 explains that the CLI loads the person's existing configuration.
@@ -118,11 +116,105 @@ The latest report is kept in `agent-runtimes/limits.json`, and a window whose
 reset time has passed shows as empty. OpenCode bills each model provider and
 has no quota of its own.
 
+When a turn stops at a usage limit (such as Claude Code's "You've hit your
+session limit") and an exhausted window reports its reset time, the composer
+shows that time with **Continue after reset**. Opting in sends one English
+`Continue where you left off.` 30 seconds after the last exhausted window
+resets. That time is fixed when you opt in. Sending a message yourself,
+choosing **Cancel**, or the conversation starting another turn clears it. The
+schedule lives in the open conversation only, so OhMyGame must stay open, and
+it never retries on its own.
+
 ![Claude Code and Codex quotas labeled as used (sample data)](assets/agent-usage-used-label.png)
 
 ![Compact quota percentages in the slash menu (sample data)](assets/agent-usage-compact.png)
 
 ![Codex conversation with a denied read, a cancelled turn, and Medium effort selected](assets/coding-agent-native-effort.png)
+
+## Account configurations (Claude Code and Codex)
+
+Both CLIs support a separate configuration/state directory for each sign-in:
+
+| Agent | Official environment setting | What stays separate |
+| --- | --- | --- |
+| Claude Code | `CLAUDE_CONFIG_DIR` | CLI configuration, sign-in and native history |
+| Codex | `CODEX_HOME` | CLI configuration, credential store, sessions and state |
+
+In **Settings → Agents → Claude Code/Codex → Accounts**, click **+**, enter a
+name and click **Add** to create a private configuration and start the official
+sign-in flow. **Use an existing directory** expands an optional import field for
+an absolute configuration path; importing does not start another sign-in.
+System default's own directory (`CLAUDE_CONFIG_DIR` or `~/.claude`, `CODEX_HOME`
+or `~/.codex`) cannot be imported: naming it explicitly would give Claude a
+separate Keychain entry and global configuration file while sharing its settings.
+A managed Codex directory is created before its CLI starts and uses
+`cli_auth_credentials_store = "file"` in its own `config.toml`. The directory is
+private, and Codex manages its sign-in in `auth.json`. Imported configurations
+keep their own native credential-storage settings. OhMyGame stores profile names
+and directory references; it never copies tokens between accounts or implements
+its own OAuth flow. Each account row has a sign-in action. Use the refresh icon
+after the official browser flow completes if the status has not updated.
+The sign-in action starts the CLI's official login flow directly; OhMyGame does
+not log out first, delete the account configuration or clear conversation history.
+Completing authorization lets the CLI update credentials in that configuration.
+
+![Compact account list with a default selection and sign-in actions](assets/coding-agent-accounts.png)
+
+**System default** retains the existing CLI environment and sign-in. New profiles
+have independent CLI settings, hooks, MCP servers, Skills and native history.
+Select an account row's radio button to make it the default for new chats. Existing chats retain
+their own selections; switching between Claude Code and Codex in a chat retains
+each agent's selection. With multiple profiles, the chat header offers an account
+menu showing the selected account name. Picking another account switches it
+without an additional confirmation. Wait for the current request to finish before switching.
+Choosing the account the chat already uses changes nothing. When the selected
+account's model catalog does not offer the chat's model, the chat moves to the
+new-chat default model if that account offers it, otherwise to the first model
+the account lists, and the timeline records the model change. A catalog that
+cannot be read in time leaves the model unchanged. The next
+message creates a context for the selected account, with a bounded history
+handoff if it has not seen this chat; switching back before a message on the
+other account resumes the earlier context instead. `/compact` waits for that
+first message on the selected account. Other chats keep their accounts. No automatic
+rotation at usage limits is provided.
+
+Use an account row's delete action to remove a profile after confirmation. The
+confirmation states whether its files will be removed: app-created profiles delete
+their managed configuration directory (including sign-in and native history),
+while imported profiles only disconnect from OhMyGame and keep their files.
+System default cannot be deleted. Deleting the new-chat default resets it to
+System default. Existing chats, including restored branches, fall back to System
+default when next read and discard the deleted account's native resume context;
+the shared conversation history remains available for a fresh handoff. Deletion
+is refused during a turn or session startup; finish or cancel the work first.
+Idle sessions and pending sign-in processes stop before managed files are removed.
+A managed profile is then signed out with the CLI's own command (`claude auth
+logout` or `codex logout`) in its directory, so Claude's macOS Keychain entry for
+that directory does not outlive it; a missing CLI or failed sign-out does not keep
+the directory. Imported profiles are not signed out.
+
+![Account removal confirmation stating that managed files will be deleted (sample data)](assets/coding-agent-account-delete.png)
+
+Switching saves the selection locally and reads previously reported usage without
+creating a native session. It reads the selected account's model catalog to check
+the chat's model. Model catalogs are cached per account for ten minutes;
+a valid catalog is returned without another auth probe. A cold or expired catalog
+can query the CLI for models, account information and limits, which may contact
+the provider. Switching does not start sign-in, force a token refresh or send a
+model turn; the CLI session is created when it is needed for a message.
+
+Authentication, models and usage caches are separate per runtime and profile.
+Codex app servers may be shared only when executable, environment (including
+`CODEX_HOME`) and staged Skills match. Different account homes never share a
+server. Explicit Claude profiles omit an ambient `CLAUDE_CODE_OAUTH_TOKEN` so it
+cannot override the selected sign-in. Codex Image and external MCP client
+configuration continue using System default independently of chat selections.
+
+See the official [Claude account configuration guide](https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts),
+[Codex state directory reference](https://learn.chatgpt.com/docs/config-file/environment-variables)
+and [Codex credential storage reference](https://learn.chatgpt.com/docs/auth).
+Directory isolation does not establish whether combining subscription allowances
+is permitted by a provider's terms.
 
 ## Codex as an image provider
 
@@ -239,9 +331,15 @@ OpenCode's SSE stream fails the pending turn. Standalone startup also reclaims
 verified orphan process groups from `agent-runtimes/processes`, checking both
 the daemon and child's executable/birth identity before killing anything.
 Private folders carry the daemon's ownership identity as well: startup reclaims
-verified orphans while preserving another live daemon's folders. Configuration
-and Skills are removed only after the CLI stops. Unverifiable identities and
-subprocesses that escape their group cannot be reclaimed this way.
+verified orphans while preserving another live daemon's folders. Identity queries
+run asynchronously, one at a time, and concurrent requests for the same PID share
+a query. Ownership records are written in the background so starting a CLI or
+image job does not wait for PowerShell. Startup recovery still waits for identity
+checks before reclaiming anything. A crash before records are written can leave
+unrecorded folders or processes that startup recovery preserves.
+Removing a private folder cancels a pending lease and waits for an active write.
+Configuration and Skills are removed only after the CLI stops. Unverifiable
+identities and subprocesses that escape their group cannot be reclaimed this way.
 
 OhMyGame's tools are the handlers Pi uses (`createAgentTools`), offered through
 `ToolBridge`. Plugin MCP servers reach the agent through the same `mcp` tool
@@ -443,6 +541,9 @@ back to the defaults. Credentials remain in the CLI's own store.
 | `GET /agent-runtimes`                                     | Status of every agent; `?recheck=1` probes again                       |
 | `PATCH /agent-runtimes/:id`                               | `enabled`, `permissionMode`, `binaryPath`         |
 | `POST /agent-runtimes/:id/recheck`                        | Probe one agent again                                                  |
+| `GET /agent-runtimes/:id/profiles`, `POST /agent-runtimes/:id/profiles` | List or add Claude Code/Codex account configurations |
+| `DELETE /agent-runtimes/:id/profiles/:profileId` | Remove an account; managed files are deleted, imported files kept |
+| `PUT /projects/:p/conversations/:c/account-profile` | Select an account for the conversation |
 | `POST /agent-runtimes/:id/login`                          | Start the CLI's sign-in; returns a browser URL or a command            |
 | `PUT /projects/:p/conversations/:c/reasoning`             | Select a native effort/variant string                                  |
 | `PUT /models/default`, `POST /projects/:p/conversations`  | Take `nativeReasoningLevel` for a native model, never `reasoningLevel` |

@@ -38,6 +38,21 @@ describe("daemon", () => {
     apps.push(app);
     const activity = async () => (await app.inject({ method: "GET", url: "/projects/activity" })).json().activity;
     expect(await activity()).toEqual([]);
+    // Project lists follow the same activity as a stream of changed snapshots.
+    const streaming = new AbortController();
+    const base = await app.listen({ host: "127.0.0.1", port: 0 });
+    const stream = await fetch(`${base}/projects/activity/events`, { signal: streaming.signal });
+    const streamed: unknown[] = [];
+    void (async () => {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for await (const chunk of stream.body!) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop()!;
+        for (const block of blocks) if (block.startsWith("event: activity")) streamed.push(JSON.parse(block.split("data: ")[1]!).activity);
+      }
+    })().catch(() => {});
     const project = (await app.inject({ method: "POST", url: "/projects", payload: {} })).json();
     const conversation = (await app.inject({ method: "POST", url: `/projects/${project.id}/conversations` })).json();
     try {
@@ -52,10 +67,27 @@ describe("daemon", () => {
       expect((await app.inject({ method: "GET", url: "/projects" })).json()).toEqual([expect.objectContaining({ id: project.id })]);
       await app.inject({ method: "POST", url: `/projects/${project.id}/conversations/${conversation.id}/turns/${response.json().turnId}/cancel` });
       expect(await activity()).toEqual([{ projectId: project.id, status: "cancelling" }]);
+      // A cancel starting publishes no event; the stream's in-memory check reports it.
+      await vi.waitFor(() => expect(streamed.at(-1)).toEqual([{ projectId: project.id, status: "cancelling" }]), { timeout: 3_000 });
     } finally {
       finish();
     }
     await vi.waitFor(async () => expect(await activity()).toEqual([]));
+    try {
+      await vi.waitFor(() => expect(streamed).toEqual([
+        [],
+        [{ projectId: project.id, status: "running" }],
+        [{ projectId: project.id, status: "cancelling" }],
+        [],
+      ]), { timeout: 3_000 });
+      // Closing the daemon ends streams that clients still hold open instead of waiting for them.
+      await fetch(`${base}/projects/${project.id}/events`, { signal: streaming.signal });
+      apps.splice(apps.indexOf(app), 1);
+      const closed = app.close().then(() => "closed");
+      expect(await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 1_000, "waiting"))])).toBe("closed");
+    } finally {
+      streaming.abort();
+    }
   });
 
   it("creates an empty isolated Web Game project", async () => {
@@ -260,25 +292,27 @@ describe("daemon", () => {
     expect(configured.statusCode).toBe(200);
     expect(configured.json()).toMatchObject({ startupDirectory: "apps/game", preview: { status: "stopped" } });
 
-    const runSettings = await app.inject({
-      method: "PUT",
-      url: `/projects/${project.id}/settings/run`,
-      payload: {
+    for (const previewViewport of ["mobile", "mobile-landscape"]) {
+      const runSettings = await app.inject({
+        method: "PUT",
+        url: `/projects/${project.id}/settings/run`,
+        payload: {
+          startupDirectory: "apps/game",
+          startupScript: "dev",
+          packageManager: "pnpm",
+          previewPath: "/play",
+          previewViewport,
+          ...(type === "general" ? { webPreviewEnabled: true } : {}),
+        },
+      });
+      expect(runSettings.statusCode).toBe(200);
+      expect(runSettings.json()).toMatchObject({
         startupDirectory: "apps/game",
-        startupScript: "dev",
         packageManager: "pnpm",
         previewPath: "/play",
-        previewViewport: "mobile",
-        ...(type === "general" ? { webPreviewEnabled: true } : {}),
-      },
-    });
-    expect(runSettings.statusCode).toBe(200);
-    expect(runSettings.json()).toMatchObject({
-      startupDirectory: "apps/game",
-      packageManager: "pnpm",
-      previewPath: "/play",
-      previewViewport: "mobile",
-    });
+        previewViewport,
+      });
+    }
 
     const invalid = await app.inject({
       method: "PUT",

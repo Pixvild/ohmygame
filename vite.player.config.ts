@@ -5,12 +5,12 @@ import { defineConfig } from "vite";
 export default defineConfig({
   root: "player",
   base: "./",
-  publicDir: "../public",
+  publicDir: false,
   plugins: [react()],
   build: {
     outDir: "../dist/player",
     emptyOutDir: true,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: path.resolve(import.meta.dirname, "player/index.html"),
         playableSandbox: path.resolve(import.meta.dirname, "player/playable-sandbox.html"),

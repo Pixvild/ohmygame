@@ -180,6 +180,11 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     && builtDefinitionState.codeRevision === codeRevision
     ? builtDefinitionState.definition : undefined;
   const [thumbnails, setThumbnails] = useState<PlayableThumbnailManifest>();
+  // Failed captures by Node, with the hash they ran. That version is not
+  // captured again until the Node changes or the project is opened again.
+  const [thumbnailFailures, setThumbnailFailures] = useState<Record<string, { hash: string; error: string }>>({});
+  const thumbnailFailuresRef = useRef(thumbnailFailures);
+  thumbnailFailuresRef.current = thumbnailFailures;
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
   const [building, setBuilding] = useState(false);
   const [playtesting, setPlaytesting] = useState(false);
@@ -339,6 +344,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
 
   useEffect(() => {
     setThumbnails(undefined);
+    setThumbnailFailures({});
   }, [projectId]);
 
   // Submit every missing thumbnail; the desktop limits hidden windows, while
@@ -357,7 +363,9 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
       if (!capture || !builtDefinition) return;
       const pending = builtDefinition.graph.nodes.flatMap((node) => {
         const hash = playableThumbnailHash(builtDefinition, node.id);
-        return hash && manifest[node.id]?.hash !== hash ? [{ nodeId: node.id, hash }] : [];
+        return hash && manifest[node.id]?.hash !== hash && thumbnailFailuresRef.current[node.id]?.hash !== hash
+          ? [{ nodeId: node.id, hash }]
+          : [];
       });
       if (!pending.length) return;
       capturing = true;
@@ -375,8 +383,14 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
         }
       }
       await Promise.all(pending.map(async ({ nodeId, hash }) => {
-        const captured = await capture(projectId, nodeId, builtDefinition.graph.viewport, batchId).catch(() => false);
-        if (!captured || disposed) return;
+        const result = await capture(projectId, nodeId, builtDefinition.graph.viewport, batchId)
+          .catch((cause: unknown) => ({ captured: false as const, error: errorMessage(cause) }));
+        if (disposed) return;
+        if (!result.captured) {
+          const { error } = result;
+          setThumbnailFailures((failures) => ({ ...failures, [nodeId]: { hash, error } }));
+          return;
+        }
         const updated = await listPlayableThumbnails(projectId);
         if (disposed || updated[nodeId]?.hash !== hash) return;
         setThumbnails((cached) => ({ ...cached, [nodeId]: updated[nodeId]! }));
@@ -1084,7 +1098,10 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
       // Without a successful build the current hash is unknown, so a cached
       // thumbnail is not called stale; a failing Node is dimmed instead.
       const hash = builtDefinition ? playableThumbnailHash(builtDefinition, node.id) : undefined;
-      const coverAssetId = node.data.node.assets.find((id) => graphMeta?.assets[id]?.type === "image");
+      const thumbnailError = hash && thumbnailFailures[node.id]?.hash === hash ? thumbnailFailures[node.id]!.error : undefined;
+      // A video-only Scene shows its video's first frame.
+      const coverAssetId = node.data.node.assets.find((id) => graphMeta?.assets[id]?.type === "image")
+        ?? node.data.node.assets.find((id) => graphMeta?.assets[id]?.type === "video");
       return {
         ...node,
         data: {
@@ -1095,11 +1112,12 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
           connected: connected.get(node.id) ?? {},
           failed: failed.has(node.id),
           ...(cached ? { thumbnail: { capturedAt: cached.capturedAt, stale: Boolean(hash && hash !== cached.hash) } } : {}),
+          ...(thumbnailError ? { thumbnailError } : {}),
           ...(coverAssetId ? { coverAsset: graphMeta!.assets[coverAssetId] } : {}),
         },
       };
     });
-  }, [nodes, edges, selectedEdgeId, issues, graphMeta, codebase, thumbnails, builtDefinition]);
+  }, [nodes, edges, selectedEdgeId, issues, graphMeta, codebase, thumbnails, thumbnailFailures, builtDefinition]);
   const canvasPlayer = useMemo(() => ({ projectId, onRenameNode: renameNode, onSelectEdge: selectEdge, onOpenNode: openNode }), [projectId]);
   const projectIssues = issues.filter((issue) => !issue.surfaceId && !nodeIdForIssuePath(issue.path, nodes));
   const tabs: WorkspaceTabOption<"canvas" | "design" | "code">[] = [

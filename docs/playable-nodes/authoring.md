@@ -649,8 +649,13 @@ web story's are taken from its own page, opened at the Scene without sound.
 - A thumbnail records the hash of the Scene's compiled output. When the source
   changes, the card keeps the old image with a _stale_ marker until the next
   capture replaces it.
+- A capture that fails is remembered with the hash it ran. The card shows a
+  _capture failed_ marker whose tooltip gives the reason, the desktop log
+  records it, and that version is not captured again until the Scene changes
+  or the project is opened again. A cancelled capture is not a failure.
 - A Scene that has no thumbnail yet, or whose run fails, shows its first
-  declared image asset, or a neutral card with its title.
+  declared image asset, else the first frame of its first video, else a
+  neutral card with its title.
 - A Scene that fails to build shows its last good thumbnail dimmed with an
   error marker; opening it shows the error in the Workbench.
 - When the capture capability is unavailable (for example in the browser
