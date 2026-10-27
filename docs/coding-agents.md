@@ -322,9 +322,15 @@ OpenCode's SSE stream fails the pending turn. Standalone startup also reclaims
 verified orphan process groups from `agent-runtimes/processes`, checking both
 the daemon and child's executable/birth identity before killing anything.
 Private folders carry the daemon's ownership identity as well: startup reclaims
-verified orphans while preserving another live daemon's folders. Configuration
-and Skills are removed only after the CLI stops. Unverifiable identities and
-subprocesses that escape their group cannot be reclaimed this way.
+verified orphans while preserving another live daemon's folders. Identity queries
+run asynchronously, one at a time, and concurrent requests for the same PID share
+a query. Ownership records are written in the background so starting a CLI or
+image job does not wait for PowerShell. Startup recovery still waits for identity
+checks before reclaiming anything. A crash before records are written can leave
+unrecorded folders or processes that startup recovery preserves.
+Removing a private folder cancels a pending lease and waits for an active write.
+Configuration and Skills are removed only after the CLI stops. Unverifiable
+identities and subprocesses that escape their group cannot be reclaimed this way.
 
 OhMyGame's tools are the handlers Pi uses (`createAgentTools`), offered through
 `ToolBridge`. Plugin MCP servers reach the agent through the same `mcp` tool
