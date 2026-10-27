@@ -26,7 +26,9 @@ export type PlayableFlowData = {
   failed: boolean;
   /** The cached screenshot of the Node, and whether its source changed since. */
   thumbnail?: { capturedAt: string; stale: boolean };
-  /** Shown instead of a thumbnail before the Node was ever previewed. */
+  /** Why the current version of the Node could not be captured. */
+  thumbnailError?: string;
+  /** Shown instead of a thumbnail before the Node was ever previewed: its first image, else its first video. */
   coverAsset?: PlayableAssetDefinition;
 };
 

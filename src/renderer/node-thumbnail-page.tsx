@@ -1,4 +1,4 @@
-import { workspaceVersion } from "./workspace-version.js";
+import { observeWorkspaceVersion, workspaceVersion } from "./workspace-version.js";
 import { useEffect, useRef, useState } from "react";
 import { playableThumbnailHash } from "../shared/playable-editor.js";
 import type { NodePlayerDefinition, PlayablePreviewOptions } from "../shared/playable-player-protocol.js";
@@ -39,11 +39,12 @@ export function NodeThumbnailPage({
   const done = useRef(false);
   const timer = useRef<number | undefined>(undefined);
 
-  function finish(captured: boolean): void {
+  /** Reports the capture once: stored, or the reason it was not. */
+  function finish(error?: string): void {
     if (done.current) return;
     done.current = true;
     window.clearTimeout(timer.current);
-    void window.ohMyGameDesktop?.finishNodeThumbnail?.(captured);
+    void window.ohMyGameDesktop?.finishNodeThumbnail?.(error === undefined, error);
   }
 
   useEffect(() => {
@@ -53,8 +54,12 @@ export function NodeThumbnailPage({
       : getNodeRuntime(projectId);
     void runtime.then(async (result) => {
       const hash = result.available ? playableThumbnailHash(result.definition, nodeId) : undefined;
-      if (!result.available || !hash) return finish(false);
+      if (!result.available || !hash) return finish("The Scene is not in the current build.");
       const version = "version" in result && typeof result.version === "string" ? result.version : workspaceVersion(projectId);
+      // The shared snapshot skips the read that would teach this new window
+      // the workspace version, and once a restore changed it, a write from
+      // version "0" is refused as stale.
+      observeWorkspaceVersion(projectId, version);
       if (result.web) {
         const { url } = await ensureProjectPreview(projectId);
         setPlayable({ definition: result.definition, assets: {}, page: url, hash, version });
@@ -68,7 +73,7 @@ export function NodeThumbnailPage({
         assets: Object.fromEntries(node.assets.map((id) => [id, graph.assets[id]!])),
       });
       setPlayable({ definition: result.definition, assets, hash, version });
-    }).catch(() => finish(false));
+    }).catch((cause: unknown) => finish(errorMessage(cause)));
   }, [projectId, nodeId]);
 
   useEffect(() => {
@@ -82,13 +87,14 @@ export function NodeThumbnailPage({
           const status = stage.current?.querySelector(
             ".playable-player-status",
           );
-          if (!frame || status) return finish(false);
+          if (!frame || status) return finish(status?.textContent?.trim() || "The player did not show the Scene.");
           const image = await captureElementImage(frame, NODE_THUMBNAIL_WIDTH);
-          if (cancelled || done.current || !image) return finish(false);
+          if (cancelled || done.current) return finish("The capture was cancelled.");
+          if (!image) return finish("The screenshot could not be taken.");
           await setPlayableThumbnail(projectId, nodeId, runningHash, image, playable?.version);
-          finish(true);
+          finish();
         })
-        .catch(() => finish(false));
+        .catch((cause: unknown) => finish(errorMessage(cause)));
     }, NODE_THUMBNAIL_DELAY_MS);
     return () => {
       cancelled = true;
@@ -100,7 +106,7 @@ export function NodeThumbnailPage({
   function onSnapshot(snapshot: NodeRuntimeSnapshot): void {
     if (done.current || !playable) return;
     if (snapshot.errors.length || snapshot.status === "failed")
-      return finish(false);
+      return finish(snapshot.errors[0]?.message ?? "The Scene failed to start.");
     if (snapshot.status !== "running" || snapshot.currentNodeId !== nodeId)
       return;
     setRunningHash(playable.hash);
@@ -125,6 +131,10 @@ export function NodeThumbnailPage({
 
 /** Diagnostics are the Workbench's to show; the capture only needs a clean run. */
 function ignoreDiagnostic(): void {}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 /** Lets React remove its loading cover and Chromium present the ready frame. */
 function waitForPaint(): Promise<void> {

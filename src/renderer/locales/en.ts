@@ -2892,6 +2892,8 @@ const en = {
     endingTitle: "Counted as an ending on the Story map",
     staleTitle: "The Scene changed since this picture was taken.",
     stale: "Stale",
+    captureFailedTitle: "This version of the Scene could not be captured. It is tried again after the Scene changes or the project is reopened.",
+    captureFailed: "Capture failed",
     openEditor: "Open Scene editor",
     noExits: "No exits yet",
     unconnected:
