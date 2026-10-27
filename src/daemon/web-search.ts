@@ -361,12 +361,17 @@ export function parseMcpSearchResponse(body: string): string | undefined {
   return result ? contentText(result.content) : undefined;
 }
 
+/** Join SSE data fields within each event before decoding its MCP payload. */
 function parseMcpResult(body: string): Record<string, unknown> | undefined {
   const direct = parseMcpPayload(body.trim());
   if (direct) return direct;
-  for (const line of body.split("\n")) {
-    if (!line.startsWith("data:")) continue;
-    const content = parseMcpPayload(line.slice(5).trim());
+  const events = body.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n\n");
+  for (const event of events) {
+    const payload = event.split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, ""))
+      .join("\n");
+    const content = parseMcpPayload(payload.trim());
     if (content) return content;
   }
   return undefined;

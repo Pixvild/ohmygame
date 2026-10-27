@@ -3,7 +3,7 @@ import type { PublishCommunityGame, PublishDeployment } from "./publish-v1.js";
 import type { WebSearchToolMetadata } from "./web-search.js";
 import type { DiffHunk } from "./line-diff.js";
 import type { MediaContentType } from "./media-files.js";
-import type { AgentRuntimeAuthStatus, AgentRuntimeId, ApprovalDecision, ApprovalRequestDetails } from "./agent-runtimes.js";
+import type { AccountProfileIds, AgentRuntimeAuthStatus, AgentRuntimeId, ApprovalDecision, ApprovalRequestDetails } from "./agent-runtimes.js";
 
 export type PreviewStatus = "waiting" | "stopped" | "starting" | "ready" | "error";
 export type AgentStatus = "idle" | "running" | "cancelling" | "error";
@@ -11,7 +11,7 @@ export const PROJECT_TYPE_IDS = ["general", "web-game", "interactive-story", "as
 export type ProjectType = (typeof PROJECT_TYPE_IDS)[number];
 export const PROJECT_PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"] as const;
 export type ProjectPackageManager = (typeof PROJECT_PACKAGE_MANAGERS)[number];
-export const PREVIEW_VIEWPORTS = ["fit", "tablet", "mobile"] as const;
+export const PREVIEW_VIEWPORTS = ["fit", "tablet", "mobile", "mobile-landscape"] as const;
 export type PreviewViewport = (typeof PREVIEW_VIEWPORTS)[number];
 export const PROJECT_FILE_OPEN_MODES = ["default", "reveal", "vscode", "zed", "text-editor"] as const;
 export type ProjectFileOpenMode = (typeof PROJECT_FILE_OPEN_MODES)[number];
@@ -924,6 +924,7 @@ export type SetConversationModelRequest = AgentModelRef;
 /** Validated against the selected model: Pi enum or native effort/variant. */
 export interface SetConversationReasoningRequest { level: string }
 export interface ConversationAgentSettings {
+  accountProfiles?: AccountProfileIds;
   model?: AgentModelRef;
   reasoningLevel?: AgentReasoningLevel;
   nativeReasoningLevel?: string;
