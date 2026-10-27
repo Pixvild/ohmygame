@@ -119,8 +119,9 @@ export function Composer({
   const [runtimeUsage, setRuntimeUsage] = useState<AgentContextUsage>();
   const contextPercent = runtimeUsage?.percent == null ? undefined : Math.round(Math.max(0, Math.min(100, runtimeUsage.percent)));
   const [mentionCursor, setMentionCursor] = useState(0);
-  const [resumeArmed, setResumeArmed] = useState(false);
-  const resumeAt = limitReached && isAgentRuntimeId(model?.provider) ? limitResumeAt(runtimeUsage?.limits) : undefined;
+  // Opting in pins the time, so later renders (a reset passing, a usage refresh) cannot drop the schedule.
+  const [resumeArmedAt, setResumeArmedAt] = useState<number>();
+  const resumeAt = resumeArmedAt ?? (limitReached && isAgentRuntimeId(model?.provider) ? limitResumeAt(runtimeUsage?.limits) : undefined);
   const textarea = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!initialDraft) return;
@@ -137,7 +138,7 @@ export function Composer({
     const value = formatComposerPrompt(selectedSkill, selectedPlugin, prompt.trim());
     if (!conversationReady || (!value && attachments.length === 0) || stopping || draftSession.getSnapshot().submitting || !projectId) return;
     setAttachmentError(undefined);
-    setResumeArmed(false);
+    setResumeArmedAt(undefined);
     updateDraft({ submitting: true });
     try {
       const batchId = crypto.randomUUID();
@@ -331,15 +332,16 @@ export function Composer({
   }, [showCompactCommand, running, modelStatus, model?.provider, model?.id, conversationId, accountProfileId, contextMenu.open]);
 
   useEffect(() => {
-    if (!resumeArmed) return;
-    if (resumeAt === undefined) { setResumeArmed(false); return; }
+    if (resumeArmedAt === undefined) return;
+    // The conversation moved on (a new turn started or the failure is no longer last), so the offer no longer applies.
+    if (!limitReached) { setResumeArmedAt(undefined); return; }
     const timer = window.setTimeout(() => {
-      setResumeArmed(false);
+      setResumeArmedAt(undefined);
       if (!conversationReady || running || stopping) return;
       void onSubmit(LIMIT_RESUME_PROMPT, [], [], "normal", [], [], []);
-    }, Math.max(0, resumeAt - Date.now()));
+    }, Math.max(0, resumeArmedAt - Date.now()));
     return () => window.clearTimeout(timer);
-  }, [resumeArmed, resumeAt, conversationReady, running, stopping]);
+  }, [resumeArmedAt, limitReached, conversationReady, running, stopping]);
 
   useEffect(() => {
     if (planMode === "planning") updateDraft({ planning: true });
@@ -437,8 +439,8 @@ export function Composer({
       />
       {notice || attachmentError ? <p className="composer-error" role="alert">{attachmentError ?? notice}</p> : null}
       {resumeAt !== undefined && !running ? <div className="composer-resume" role="status">
-        <span>{t(resumeArmed ? "composer.resume.armed" : "composer.resume.available", { time: new Date(resumeAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) })}</span>
-        <button type="button" disabled={!resumeArmed && !conversationReady} onClick={() => setResumeArmed(!resumeArmed)}>{t(resumeArmed ? "composer.resume.cancel" : "composer.resume.arm")}</button>
+        <span>{t(resumeArmedAt !== undefined ? "composer.resume.armed" : "composer.resume.available", { time: new Date(resumeAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) })}</span>
+        <button type="button" disabled={resumeArmedAt === undefined && !conversationReady} onClick={() => setResumeArmedAt(resumeArmedAt === undefined ? resumeAt : undefined)}>{t(resumeArmedAt !== undefined ? "composer.resume.cancel" : "composer.resume.arm")}</button>
       </div> : null}
       <PromptBox
         actions={<ComposerActions

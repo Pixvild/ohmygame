@@ -160,6 +160,27 @@ describe("composer usage limit resume", () => {
     expect(props.onSubmit).toHaveBeenCalledExactlyOnceWith(LIMIT_RESUME_PROMPT, [], [], "normal", [], [], []);
   });
 
+  it("keeps the scheduled continue through renders after the reset until the conversation moves on", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(now);
+    const props = await render({ model: { provider: "claude-code-cli", id: "default" }, initialDraft: undefined, limitReached: true, onContextUsage: usage(now / 1000 + 60) });
+    const button = () => container.querySelector<HTMLButtonElement>(".composer-resume button")!;
+    await act(async () => button().click());
+    // The window resets at 60 s; an ordinary render inside the margin must not drop the 90 s schedule.
+    await act(async () => { vi.advanceTimersByTime(61_000); });
+    await act(async () => root.render(<Composer {...props} notice="Reconnecting" />));
+    expect(container.querySelector(".composer-resume")?.textContent).toContain("Continues automatically");
+    await act(async () => { vi.advanceTimersByTime(LIMIT_RESUME_MARGIN_MS); });
+    expect(props.onSubmit).toHaveBeenCalledExactlyOnceWith(LIMIT_RESUME_PROMPT, [], [], "normal", [], [], []);
+
+    vi.mocked(props.onSubmit).mockClear();
+    await act(async () => root.render(<Composer {...props} onContextUsage={usage(Date.now() / 1000 + 60)} model={{ provider: "claude-code-cli", id: "other" }} />));
+    await act(async () => button().click());
+    await act(async () => root.render(<Composer {...props} onContextUsage={usage(Date.now() / 1000 + 60)} model={{ provider: "claude-code-cli", id: "other" }} limitReached={false} />));
+    await act(async () => { vi.advanceTimersByTime(3600_000); });
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
   it("cancels the scheduled continue", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     vi.setSystemTime(now);

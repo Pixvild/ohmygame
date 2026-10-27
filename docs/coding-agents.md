@@ -120,7 +120,8 @@ When a turn stops at a usage limit (such as Claude Code's "You've hit your
 session limit") and an exhausted window reports its reset time, the composer
 shows that time with **Continue after reset**. Opting in sends one English
 `Continue where you left off.` 30 seconds after the last exhausted window
-resets; sending a message yourself or choosing **Cancel** clears it. The
+resets. That time is fixed when you opt in. Sending a message yourself,
+choosing **Cancel**, or the conversation starting another turn clears it. The
 schedule lives in the open conversation only, so OhMyGame must stay open, and
 it never retries on its own.
 
