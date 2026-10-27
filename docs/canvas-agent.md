@@ -155,7 +155,8 @@ Three tools supplement ordinary file editing:
   history, materializes output in the project, and writes the output ID back
   to the node. Changing a file does not start generation. When the node is
   already generating, for example after the user pressed Generate, the call
-  waits for that job instead of failing. When the node's current output came
+  waits for that job instead of failing; stopping the agent then ends only its
+  wait and leaves that job running. When the node's current output came
   from identical resolved settings, it returns that output without another paid
   run; `regenerate: true` asks for a new variation. The canvas Generate button
   always starts a new run.

@@ -385,12 +385,19 @@ describe("Markdown design workspace", () => {
   });
   it("lets agent generation follow a running job and reuse output from unchanged settings", async () => {
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let gate = new Promise<void>((resolve) => { release = resolve; });
     const generate = vi.fn(async () => { await gate; return { bytes: Buffer.from("image"), mediaType: "image/png" as const }; });
     const { store, project, boardId, node, tools, projects } = await runtime({ generate }, "asset-canvas");
     const tool = createAgentTools(project, tools, projects, undefined, undefined, undefined, undefined, store).find((tool) => tool.name === "generate_canvas_media")!;
     const manual = await store.generateNode(project.id, boardId, node.id);
     await expect(store.generateNode(project.id, boardId, node.id)).rejects.toThrow("This node is already generating");
+    // Stopping an agent that followed the user's run ends only its wait.
+    const stopped = new AbortController();
+    const abandoned = tool.execute("stopped", { boardId, nodeId: node.id }, stopped.signal, undefined, {} as never);
+    await expect.poll(() => generate.mock.calls.length).toBe(1);
+    stopped.abort();
+    await expect(abandoned).rejects.toThrow();
+    expect((await store.jobs(project.id)).find((job) => job.id === manual.id)).toMatchObject({ status: "running" });
     const followed = tool.execute("follow", { boardId, nodeId: node.id }, undefined, undefined, {} as never);
     await expect.poll(() => generate.mock.calls.length).toBe(1);
     release();
@@ -409,6 +416,15 @@ describe("Markdown design workspace", () => {
     await tool.execute("variation", { boardId, nodeId: node.id, regenerate: true }, undefined, undefined, {} as never);
     expect(generate).toHaveBeenCalledTimes(3);
     expect((await store.jobs(project.id))[0]).not.toHaveProperty("inputRevision");
+    // A run the agent started itself is still cancelled when the agent stops.
+    gate = new Promise<void>((resolve) => { release = resolve; });
+    const owned = new AbortController();
+    const ownRun = tool.execute("owned", { boardId, nodeId: node.id, regenerate: true }, owned.signal, undefined, {} as never);
+    await expect.poll(() => generate.mock.calls.length).toBe(4);
+    owned.abort();
+    await expect(ownRun).rejects.toThrow();
+    await expect.poll(async () => (await store.jobs(project.id)).find((job) => job.status === "running" || job.status === "cancelled")?.status).toBe("cancelled");
+    release();
   });
   it("exports current file contents and retries video inputs using project asset IDs", async () => {
     const { store, project, boardId, tools, library } = await runtime();
