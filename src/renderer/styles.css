@@ -11789,6 +11789,27 @@ button {
   line-height: 1.4;
 }
 
+.composer-resume {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 2px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.composer-resume button {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+}
+
 .prompt-box {
   position: relative;
   display: grid;

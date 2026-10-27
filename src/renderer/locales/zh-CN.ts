@@ -1452,6 +1452,12 @@ const zhCN: typeof en = {
     referencedDesign: "引用的游戏设计",
     removeDesign: "移除游戏设计引用",
     droppedFolder: "无法读取拖入的文件夹：{{error}}",
+    resume: {
+      available: "已达到用量上限，将在 {{time}} 重置。",
+      armed: "将在 {{time}} 自动继续，请保持 OhMyGame 打开。",
+      arm: "重置后自动继续",
+      cancel: "取消",
+    },
     placeholder: {
       review: "请查看上方的计划",
       executing: "正在执行计划",
