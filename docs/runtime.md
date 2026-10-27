@@ -197,6 +197,26 @@ it and remains inert until the greeting ends. Failed saves stay in setup with a
 retry action; ordinary launches do not replay the greeting. Reduced-motion
 preferences bypass the animation, including when changed during the greeting.
 
+## Web search
+
+**Settings → Web Search** selects Auto, Exa, Parallel, or Custom MCP. Auto assigns
+each session to Exa or Parallel and can retry with the other public provider.
+An explicitly selected provider never falls back to another service.
+
+Custom MCP supports HTTP endpoints that accept `tools/list` and `tools/call`
+without an MCP initialization handshake. The selected tool must declare a string
+`query` property in its input schema. Search sends that query and, only when
+declared as a number or integer, `numResults` or `max_results` (in that order).
+The result count defaults to 8 and is clamped to the declared minimum/maximum.
+Other optional properties use the server's defaults; additional required
+parameters produce a compatibility error before the search is sent.
+
+Tool discovery supports JSON and SSE responses and paginated tool lists. Its
+schema is cached for five minutes for the current endpoint, tool, and bearer
+token. Discovery and search share a 25-second timeout and the caller's
+cancellation signal. A failed discovery is reported rather than sending guessed
+arguments. The optional bearer token is used for both discovery and search.
+
 ## Network proxy
 
 **Settings → Network** configures the application's network connection. Pi's
