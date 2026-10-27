@@ -452,7 +452,8 @@ Project lists receive names from the project activity stream, even after a
 short turn finishes. `/projects/activity` returns `{ activity, names }`, and
 `/projects/activity/events` streams the same snapshot as an `activity` SSE event
 whenever it changes; `names` contains only each project's `id`, `name` and
-optional `nameSource`.
+optional `nameSource`. Stopping the daemon ends this and the other SSE streams
+first, so an open Projects page does not hold shutdown open.
 
 ## Project navigation
 

@@ -1427,6 +1427,20 @@ export function createApp(options: AppOptions = {}) {
 
   app.get("/projects/activity", async () => projectActivity());
 
+  // Event streams stay open until the client leaves, so app.close() would wait on them. Closing ends each stream
+  // and releases its subscription and timers before the server stops.
+  const eventStreams = new Set<() => void>();
+  const trackEventStream = (request: FastifyRequest, reply: FastifyReply, release: () => void) => {
+    const close = () => {
+      if (!eventStreams.delete(close)) return;
+      release();
+      reply.raw.end();
+    };
+    eventStreams.add(close);
+    request.raw.once("close", close);
+  };
+  app.addHook("preClose", async () => { for (const close of [...eventStreams]) close(); });
+
   // Project lists follow activity here instead of polling for it. The snapshot is sent when it changes: runtime events
   // prompt a check, and a short in-memory check also catches changes that publish no event, such as a cancel starting.
   app.get("/projects/activity/events", async (request, reply) => {
@@ -1452,7 +1466,7 @@ export function createApp(options: AppOptions = {}) {
     const unsubscribe = events.subscribeAll(() => { scheduled ??= setTimeout(send, 50); });
     const check = setInterval(send, 1_000);
     const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-    request.raw.once("close", () => {
+    trackEventStream(request, reply, () => {
       unsubscribe();
       clearTimeout(scheduled);
       clearInterval(check);
@@ -3252,7 +3266,7 @@ export function createApp(options: AppOptions = {}) {
     for (const event of events.since(project.id, cursor)) send(event);
     const unsubscribe = events.subscribe(project.id, send);
     const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-    request.raw.once("close", () => { clearInterval(heartbeat); unsubscribe(); });
+    trackEventStream(request, reply, () => { clearInterval(heartbeat); unsubscribe(); });
   });
 
   app.get<{ Params: { operationId: string }; Querystring: { cursor?: string } }>("/settings/model-auth/:operationId/events", async (request, reply) => {
@@ -3280,7 +3294,7 @@ export function createApp(options: AppOptions = {}) {
       }
       const unsubscribe = modelAuth.subscribe(request.params.operationId, send);
       const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-      request.raw.once("close", () => { clearInterval(heartbeat); unsubscribe(); });
+      trackEventStream(request, reply, () => { clearInterval(heartbeat); unsubscribe(); });
     } catch (cause) {
       if (cause instanceof ModelAuthError) return reply.code(cause.statusCode).send({ error: cause.message });
       throw cause;

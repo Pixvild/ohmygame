@@ -40,7 +40,8 @@ describe("daemon", () => {
     expect(await activity()).toEqual([]);
     // Project lists follow the same activity as a stream of changed snapshots.
     const streaming = new AbortController();
-    const stream = await fetch(`${await app.listen({ host: "127.0.0.1", port: 0 })}/projects/activity/events`, { signal: streaming.signal });
+    const base = await app.listen({ host: "127.0.0.1", port: 0 });
+    const stream = await fetch(`${base}/projects/activity/events`, { signal: streaming.signal });
     const streamed: unknown[] = [];
     void (async () => {
       const decoder = new TextDecoder();
@@ -72,12 +73,21 @@ describe("daemon", () => {
       finish();
     }
     await vi.waitFor(async () => expect(await activity()).toEqual([]));
-    await vi.waitFor(() => expect(streamed).toEqual([
-      [],
-      [{ projectId: project.id, status: "running" }],
-      [{ projectId: project.id, status: "cancelling" }],
-      [],
-    ]), { timeout: 3_000 }).finally(() => streaming.abort());
+    try {
+      await vi.waitFor(() => expect(streamed).toEqual([
+        [],
+        [{ projectId: project.id, status: "running" }],
+        [{ projectId: project.id, status: "cancelling" }],
+        [],
+      ]), { timeout: 3_000 });
+      // Closing the daemon ends streams that clients still hold open instead of waiting for them.
+      await fetch(`${base}/projects/${project.id}/events`, { signal: streaming.signal });
+      apps.splice(apps.indexOf(app), 1);
+      const closed = app.close().then(() => "closed");
+      expect(await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 1_000, "waiting"))])).toBe("closed");
+    } finally {
+      streaming.abort();
+    }
   });
 
   it("creates an empty isolated Web Game project", async () => {
