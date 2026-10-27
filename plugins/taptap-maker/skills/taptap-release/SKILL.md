@@ -16,7 +16,7 @@ The CLI ships its own Skills. Read them before acting instead of relying on memo
 ## Maker specifics
 
 - Find the app that holds this project's Maker packages; duplicate empty drafts can exist and only the web console deletes them.
-- Store bindings use Spark versions, not Maker builds. A build alone may not add one: after `maker_build_current_directory`, generate a test QR code with the Maker MCP, then confirm the new Spark version appears in the CLI package list before binding it.
+- Bind the intended Spark version. If it is missing, explain that Maker's test QR tool builds and uploads a test version; run it only with explicit user approval, then verify the version in the CLI package list before binding.
 - A Maker build can push its own follow-up commit; pull it before editing again.
 - Screenshots and gameplay video must be real game captures, never generated images. Icons and banners may be generated; remove watermarks and any text the field rules forbid.
 - Upload files with ASCII names; Chinese file names have returned HTTP 500 `ambiguous_outcome`. After any ambiguous outcome, read the resource back before retrying.
