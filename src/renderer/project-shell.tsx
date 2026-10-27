@@ -191,14 +191,14 @@ export function ProjectShell({
   const timeline = useRef<HTMLDivElement>(null);
   const followTimeline = useRef(true);
 
-  // Godot has no Preview, so its workspace opens on Design unless the user hid it,
-  // since Design keeps the workspace shown.
+  // Apply project defaults on load, preserving later manual pane toggles.
   const godotDefaultViewApplied = useRef(false);
   useEffect(() => {
+    if (state.project?.type === "general" || state.project?.type === "godot-game") setAgentCollapsed(false);
     if (state.project?.type !== "godot-game") return;
-    setAgentCollapsed(false);
     if (godotDefaultViewApplied.current) return;
     godotDefaultViewApplied.current = true;
+    // Godot has no Preview, so keep its workspace visible on Design.
     if (view !== "design" && godotWorkspaceOpen) changeWorkspaceView(true, { replace: true });
   }, [state.project?.id, state.project?.type]);
 

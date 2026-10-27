@@ -286,8 +286,11 @@ the daemon's other settings (`OHMYGAME_*`, `DAEMON_HOST`, `DAEMON_PORT`).
 
 ## Agent game use
 
-General Game projects open on Design as engine-independent workspaces with
-Code, Design, Assets and Web preview. The bundled Game Studio plugin provides game production,
+General Game projects open on Design with the conversation pane expanded, as
+engine-independent workspaces with Code, Design, Assets and Web preview.
+The conversation pane can still be collapsed manually; see the
+[workspace example](assets/general-game-conversation.png).
+The bundled Game Studio plugin provides game production,
 architecture, and verification Skills for General Game, Godot, and Interactive
 Story projects. Web Game keeps its independent Web Game Studio plugin and
 existing creation instructions. Plugins are enabled by default; a saved disabled

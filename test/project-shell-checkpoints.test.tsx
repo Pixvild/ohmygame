@@ -100,7 +100,7 @@ async function openProject(
     ComponentProps<
       typeof import("../src/renderer/project-shell.js").ProjectShell
     >,
-    "initialPrompt" | "onInitialPromptHandled" | "onOpenConversation"
+    "initialPrompt" | "onInitialPromptHandled" | "onOpenConversation" | "view"
   >> = {},
 ) {
   Object.defineProperty(window, "ohMyGameDesktop", {
@@ -242,6 +242,36 @@ async function click(name: string) {
   await act(async () => button(name)!.click());
   await settle();
 }
+
+describe("project shell layout", () => {
+  it("opens General Game Design with chat expanded and preserves manual toggles across project updates", async () => {
+    vi.doMock(CODING_WORKSPACE, () => ({ CodingWorkspace: () => null }));
+    const daemon = await openProject(() => undefined, detail("live-turn"), {
+      view: "design",
+    });
+    const collapsed = () =>
+      container
+        .querySelector(".workspace-shell")!
+        .classList.contains("workspace-shell-agent-collapsed");
+
+    expect(collapsed()).toBe(false);
+    expect(button("Hide agent")).toBeDefined();
+    await click("Hide agent");
+    expect(collapsed()).toBe(true);
+
+    await act(async () =>
+      daemon.send(1, "workspace.restored", {
+        version: "restored",
+        changed: [],
+      }),
+    );
+    await settle();
+    expect(collapsed()).toBe(true);
+
+    await click("Show agent");
+    expect(collapsed()).toBe(false);
+  });
+});
 
 describe("checkpoints in the project shell", () => {
   it.each(["claude-code-cli", "codex-cli"] as const)("switches the selected %s chat account without changing its model or other chats", async (runtime) => {
