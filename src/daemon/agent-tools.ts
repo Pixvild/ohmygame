@@ -571,9 +571,13 @@ export function createAgentTools(
     execute: async (_toolCallId, input, signal) => {
       signal?.throwIfAborted();
       const job = await canvasStore.generateNode(project.id, input.boardId, input.nodeId, !input.regenerate);
+      // Stopping the agent cancels only a run this call started. A followed run belongs to whoever started it,
+      // so aborting just ends this wait.
       const cancel = () => { void canvasStore.cancel(project.id, job.id).catch(() => {}); };
-      signal?.addEventListener("abort", cancel, { once: true });
-      if (signal?.aborted) cancel();
+      if (!job.reused) {
+        signal?.addEventListener("abort", cancel, { once: true });
+        if (signal?.aborted) cancel();
+      }
       try {
         let current = job;
         while (current.status === "running") {
