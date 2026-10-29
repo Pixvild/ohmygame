@@ -119,7 +119,7 @@ export function registerLibraryRoutes(app: FastifyInstance, { projects, library 
     const derivedFrom = trimSource === undefined && trimStart === undefined && trimEnd === undefined
       ? undefined
       : { assetId: trimSource ?? "", trim: { start: Number(trimStart), end: Number(trimEnd) } };
-    if (derivedFrom && (!mediaType.startsWith("video/") || !isLibraryAssetDerivation(derivedFrom) || !library.get(derivedFrom.assetId))) {
+    if (derivedFrom && (!mediaType.startsWith("video/") && !mediaType.startsWith("audio/") || !isLibraryAssetDerivation(derivedFrom) || !library.get(derivedFrom.assetId))) {
       return reply.code(400).send({ error: "Invalid trim source" });
     }
     try {

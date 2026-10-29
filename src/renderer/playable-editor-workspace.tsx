@@ -4,6 +4,7 @@ import {
   Clapperboard,
   Code2,
   FileText,
+  Layers3,
   LoaderCircle,
   PanelToggle,
   Share2,
@@ -37,7 +38,6 @@ import {
   type PlayableNode,
 } from "../shared/playable-nodes.js";
 import { setPlayableElementTranslate } from "../shared/playable-move.js";
-import { isPlayableStoryEnding, withPlayableStoryOption } from "../shared/playable-story-map.js";
 import type { NodePlayerDefinition, PlayableMove, PlayableTextEdit } from "../shared/playable-player-protocol.js";
 import { parsePlayableSourceLocation, replacePlayableElementText, replacePlayableLineText } from "../shared/playable-text-edit.js";
 import { clearPlayableBackdrop, playableBackdrop, setPlayableBackdrop, setPlayableBackdropClip, type PlayableBackdropDetails } from "../shared/playable-backdrop.js";
@@ -64,14 +64,12 @@ import {
   listPlayableThumbnails,
   updateNodeCodebase,
   copyStoryLibraryMedia,
-  keepStoryUpgrade,
-  undoStoryUpgrade,
   upgradeStory,
 } from "./api.js";
 import { CanvasNotice } from "./canvas-notice.js";
 import type { StoryUpgradeStatus } from "../shared/story-web.js";
 import { PublishDialog, type PublishDetails } from "./publish-dialog.js";
-import { WorkspaceCodeView } from "./coding-workspace.js";
+import { WorkspaceAssetsView, WorkspaceCodeView } from "./coding-workspace.js";
 import { playtestHash } from "./routes.js";
 import { PlayableNodeWorkbench, type PlayableAssetRequest } from "./playable-node-workbench.js";
 import { PlayableProjectSettingsDialog } from "./playable-project-settings-dialog.js";
@@ -147,6 +145,10 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   const [writeVersion] = useState(() => workspaceVersion(projectId));
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [upgrade, setUpgrade] = useState<StoryUpgradeStatus>();
+  /** Why upgrading a story from before web stories failed, until it is tried again. */
+  const [upgradeError, setUpgradeError] = useState<string>();
+  /** The project the editor already upgraded, so a reload does not start it twice. */
+  const upgrading = useRef<string | undefined>(undefined);
   const [notice, setNotice] = useState<string>();
   const [graphMeta, setGraphMeta] = useState<GraphMeta>();
   const [nodes, setNodes] = useState<PlayableFlowNode[]>([]);
@@ -157,7 +159,9 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     viewport: DEFAULT_CANVAS_VIEWPORT,
     view: "canvas",
   });
-  const [workspaceView, setWorkspaceView] = useState<"canvas" | "code">("canvas");
+  const [workspaceView, setWorkspaceView] = useState<"canvas" | "code" | "assets">("canvas");
+  // The saved layout remembers Story or Code; Assets reopens on the Story.
+  const savedView = workspaceView === "code" ? "code" : "canvas";
   const [codeRevision, setCodeRevision] = useState(0);
   const [fileRequest, setFileRequest] = useState(openFileRequest);
   const [designHeaderActions, setDesignHeaderActions] = useState<HTMLDivElement | null>(null);
@@ -209,8 +213,8 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   const [, setHistoryRevision] = useState(0);
 
   const codebase = useMemo(
-    () => graphMeta ? buildCodebase(graphMeta, nodes, edges, editorLayout, workspaceView) : undefined,
-    [graphMeta, nodes, edges, editorLayout, workspaceView],
+    () => graphMeta ? buildCodebase(graphMeta, nodes, edges, editorLayout, savedView) : undefined,
+    [graphMeta, nodes, edges, editorLayout, savedView],
   );
   latestCodebase.current = codebase;
   const playerViewport = graphMeta?.viewport ?? { width: 1280, height: 720 };
@@ -230,7 +234,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   }), [projectId]);
 
   // Apply Playtest navigation after loading, so the saved Code tab cannot override it.
-  const showTab = useRef<(tab: "canvas" | "design" | "code") => void>(() => {});
+  const showTab = useRef<(tab: "canvas" | "design" | "code" | "assets") => void>(() => {});
   useEffect(() => {
     if (!showStoryMap || phase === "loading") return;
     setOpenedNodeId(undefined);
@@ -298,34 +302,37 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
     };
   }, [projectId, workspaceRevision]);
 
-  // A story from before web stories is offered the upgrade; a fresh upgrade can be taken back.
+  // A story from before web stories only plays once it is upgraded, so the
+  // editor upgrades it as soon as it has it open.
   useEffect(() => {
     let disposed = false;
     void getStoryUpgrade(projectId).then((status) => { if (!disposed) setUpgrade(status); }).catch(() => {});
     return () => { disposed = true; };
   }, [projectId, workspaceRevision]);
 
+  // The earliest stories' graph.json cannot even be read before the upgrade
+  // fixes it, so a canvas that failed to load upgrades too.
+  useEffect(() => {
+    if (phase === "loading" || !upgrade || upgrade.web || upgrading.current === projectId) return;
+    upgrading.current = projectId;
+    void runUpgrade();
+  }, [phase, upgrade, projectId]);
+
   async function runUpgrade(): Promise<void> {
-    // Unsaved edits go first; the upgrade then reloads every editor.
-    if (codebase) await save(codebase);
-    await upgradeStory(projectId);
-    setUpgrade(await getStoryUpgrade(projectId));
+    setUpgradeError(undefined);
+    try {
+      // Unsaved edits go first; the upgrade then reloads every editor.
+      if (codebase) await save(codebase);
+      await upgradeStory(projectId);
+      setUpgrade(await getStoryUpgrade(projectId));
+    } catch (cause) {
+      setUpgradeError(errorMessage(cause));
+    }
   }
 
   async function copyLibraryMedia(): Promise<void> {
     if (codebase) await save(codebase);
     await copyStoryLibraryMedia(projectId);
-    setUpgrade(await getStoryUpgrade(projectId));
-  }
-
-  async function keepUpgrade(): Promise<void> {
-    setUpgrade((current) => current && { web: current.web, ...(current.libraryAssets ? { libraryAssets: current.libraryAssets } : {}) });
-    await keepStoryUpgrade(projectId).catch(() => {});
-  }
-
-  async function undoUpgrade(): Promise<void> {
-    if (codebase) await save(codebase);
-    await undoStoryUpgrade(projectId);
     setUpgrade(await getStoryUpgrade(projectId));
   }
 
@@ -623,7 +630,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   useEffect(() => () => window.clearTimeout(historyTimer.current), []);
 
   useEffect(() => {
-    if (workspaceView === "code" || projectSettingsOpen) return;
+    if (workspaceView !== "canvas" || projectSettingsOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const step = undoShortcut(event);
       if (!step || isTextEntry(event.target)) return;
@@ -727,12 +734,6 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   function renameNode(nodeId: string, title: string): void {
     setNodes((current) => current.map((node) => node.id === nodeId
       ? { ...node, data: { ...node.data, node: { ...node.data.node, title } } }
-      : node));
-  }
-
-  function setStoryOption(nodeId: string, option: "hidden" | "ending", value: boolean): void {
-    setNodes((current) => current.map((node) => node.id === nodeId
-      ? { ...node, data: { ...node.data, node: withPlayableStoryOption(node.data.node, option, value) } }
       : node));
   }
 
@@ -968,7 +969,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
         ...nodes.map((node) => node.selected ? { ...node, selected: false } : node),
         createFlowNode({ ...structuredClone(copy.node), id, source }, snapCanvasPosition(position)),
       ];
-      const next = buildCodebase(graphMeta, nextNodes, edges, editorLayout, workspaceView);
+      const next = buildCodebase(graphMeta, nextNodes, edges, editorLayout, savedView);
       const update: NodeCodebaseUpdate = {
         ...next,
         sources: {
@@ -1091,7 +1092,7 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
       const owner = issue.surfaceId ?? nodeIdForIssuePath(issue.path, nodes);
       if (!owner) continue;
       nodeIssues.set(owner, [...nodeIssues.get(owner) ?? [], issue.message]);
-      if (issue.phase === "compiler") failed.add(owner);
+      if (issue.phase === "source") failed.add(owner);
     }
     return nodes.map((node): PlayableFlowNode => {
       const cached = thumbnails?.[node.id];
@@ -1107,7 +1108,6 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
         data: {
           node: node.data.node,
           entry: codebase?.graph.entryNodeId === node.id,
-          ending: isPlayableStoryEnding(node.data.node),
           issues: nodeIssues.get(node.id) ?? [],
           connected: connected.get(node.id) ?? {},
           failed: failed.has(node.id),
@@ -1120,15 +1120,16 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
   }, [nodes, edges, selectedEdgeId, issues, graphMeta, codebase, thumbnails, thumbnailFailures, builtDefinition]);
   const canvasPlayer = useMemo(() => ({ projectId, onRenameNode: renameNode, onSelectEdge: selectEdge, onOpenNode: openNode }), [projectId]);
   const projectIssues = issues.filter((issue) => !issue.surfaceId && !nodeIdForIssuePath(issue.path, nodes));
-  const tabs: WorkspaceTabOption<"canvas" | "design" | "code">[] = [
+  const tabs: WorkspaceTabOption<"canvas" | "design" | "code" | "assets">[] = [
     { id: "canvas", label: t("storyEditor.tab.story"), icon: Clapperboard },
     ...(onDesignOpenChange ? [{ id: "design" as const, label: t("workspace.tab.design"), icon: FileText }] : []),
     { id: "code", label: t("workspace.tab.code"), icon: Code2 },
+    { id: "assets", label: t("workspace.tab.assets"), icon: Layers3 },
   ];
   showTab.current = (tab) => {
     const navigate = () => {
       if (tab !== "design") {
-        if (tab === "code") clearSelection();
+        if (tab !== "canvas") clearSelection();
         setWorkspaceView(tab);
       }
       onDesignOpenChange?.(tab === "design");
@@ -1181,13 +1182,14 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
       </header>
       {designOpen ? <Suspense fallback={<div className="design-loading"><LoaderCircle className="spin" size={18} /></div>}><CanvasWorkspace
         project={project} onProjectUpdated={onProjectUpdated} headerActionsTarget={designHeaderActions} onLeaveReady={registerDesignLeave} onSaveReady={onDesignSaveReady} onContextChange={onDesignContextChange}
-      /></Suspense> : workspaceView !== "code" ? <div className="interactive-story-body">
+      /></Suspense> : workspaceView === "canvas" ? <div className="interactive-story-body">
         <div className="interactive-story-canvas">
           {phase === "loading" ? <div className="story-canvas-state">{t("storyEditor.loadingScenes")}</div> : null}
           {phase === "error" ? <div className="story-canvas-state story-canvas-state-error">{notice}</div> : null}
-          {phase === "ready" && upgrade && !upgrade.web ? <CanvasNotice
+          {phase !== "loading" && upgrade && !upgrade.web && upgradeError !== undefined ? <CanvasNotice
             className="story-upgrade-notice"
-            message={t("storyEditor.upgradeOffer")}
+            tone="warning"
+            message={t("storyEditor.upgradeFailed", { error: upgradeError })}
             detail={t("storyEditor.upgradeDetail")}
             actionLabel={t("storyEditor.upgrade")}
             onAction={runUpgrade}
@@ -1198,12 +1200,6 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
             message={t("storyEditor.libraryMedia", { assets: upgrade.libraryAssets.join(", ") })}
             actionLabel={t("storyEditor.copyLibraryMedia")}
             onAction={copyLibraryMedia}
-          /> : phase === "ready" && upgrade?.web && upgrade.upgradedAt ? <CanvasNotice
-            className="story-upgrade-notice"
-            message={t("storyEditor.upgraded")}
-            actionLabel={t("storyEditor.undoUpgrade")}
-            onAction={undoUpgrade}
-            onDismiss={() => void keepUpgrade()}
           /> : null}
           {phase === "ready" ? (
             <PlayableCanvasContext.Provider value={canvasPlayer}>
@@ -1248,7 +1244,6 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
             canPaste={Boolean(copiedNode) && !writing}
             busy={writing}
             isEntry={canvasContextMenu.nodeId === codebase?.graph.entryNodeId}
-            story={storyOptions(nodes.find((node) => node.id === canvasContextMenu.nodeId)?.data.node)}
             onClose={() => setCanvasContextMenu(undefined)}
             onUndo={() => void undoEditorChange()?.catch(() => {})}
             onRedo={() => void redoEditorChange()?.catch(() => {})}
@@ -1258,7 +1253,6 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
             onCopy={() => { if (canvasContextMenu.nodeId) void copyNode(canvasContextMenu.nodeId); }}
             onDuplicate={() => { if (canvasContextMenu.nodeId) void duplicateNode(canvasContextMenu.nodeId); }}
             onSetEntry={() => { if (canvasContextMenu.nodeId) setEntryNode(canvasContextMenu.nodeId); }}
-            onStoryOption={(option, value) => { if (canvasContextMenu.nodeId) setStoryOption(canvasContextMenu.nodeId, option, value); }}
             onDelete={() => { if (canvasContextMenu.nodeId) removeNodes(new Set([canvasContextMenu.nodeId])); }}
           /> : null}
           {notice && phase === "ready" ? <div className="story-save-notice" role="alert">{notice}</div> : null}
@@ -1268,8 +1262,17 @@ export function PlayableEditorWorkspace({ project, agentBusy, publishing, worksp
             </div>
           ) : null}
         </div>
-      </div> : <main className="story-code-view" aria-label={t("storyEditor.code")}>
+      </div> : workspaceView === "code" ? <main className="story-code-view" aria-label={t("storyEditor.code")}>
         <WorkspaceCodeView projectId={projectId} revision={workspaceRevision + codeRevision} openFileRequest={fileRequest} />
+      </main> : <main className="story-assets-view" aria-label={t("workspace.tab.assets")}>
+        <WorkspaceAssetsView
+          projectId={projectId}
+          revision={workspaceRevision + codeRevision}
+          onShowInCode={(path) => {
+            setFileRequest({ path, id: Date.now() });
+            setWorkspaceView("code");
+          }}
+        />
       </main>}
       {openedNode && codebase ? <PlayableNodeWorkbench
         projectId={projectId}
@@ -1322,11 +1325,6 @@ async function readNodeSources(projectId: string, node: PlayableNode): Promise<R
   const paths = [node.source.html, node.source.css, node.source.javascript];
   const files = await Promise.all(paths.map((path) => getWorkspaceFile(projectId, path)));
   return Object.fromEntries(paths.map((path, index) => [path, files[index]?.content ?? ""]));
-}
-
-/** How a Scene shows on the Story map, for its context menu. */
-function storyOptions(node: PlayableNode | undefined): { onMap: boolean; ending: boolean } {
-  return { onMap: !node?.story?.hidden, ending: node ? isPlayableStoryEnding(node) : false };
 }
 
 function errorMessage(error: unknown): string {

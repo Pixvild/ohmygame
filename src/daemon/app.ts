@@ -41,7 +41,6 @@ import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, l
 import { CHECKPOINT_UNDONE_ENTRY, TURN_END_ENTRY, referencedSnapshots } from "./checkpoint-extension.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { AgentRuntimeService } from "./agent-runtimes/service.js";
-import { neverTouchPaths } from "./agent-runtimes/policy.js";
 import { skillFolders } from "./agent-runtimes/skills.js";
 import { appendSystemPromptForProject } from "./agent-prompts.js";
 import { ACCOUNT_RUNTIME_IDS, isAccountRuntimeId, isAccountProfileIds, isAgentRuntimeId, nativeEffort, type AgentRuntimeId, type AnswerApprovalRequest } from "../shared/agent-runtimes.js";
@@ -64,7 +63,6 @@ import { registerProviderSettingsRoutes } from "./provider-settings-routes.js";
 import { CanvasError, canvasLibraryAssetUsage } from "./canvas-workspace.js";
 import { gameDesignReference } from "./game-design-context.js";
 import { ArtifactBuilder, PublishError } from "./publish/archive.js";
-import { PlayableDraftServer } from "./playable-draft-server.js";
 import { promptContextBlock } from "./prompt-context.js";
 import { RemotePublisher, RemotePublishError } from "./publish/client.js";
 import { registerCommunityRoutes } from "./publish/community-routes.js";
@@ -98,12 +96,12 @@ import { modelUsageList } from "../shared/custom-models.js";
 import { ToolRunner, ToolRunError } from "./tools.js";
 import type { VideoGenerator } from "./video-generation.js";
 import { ProviderVideos } from "./provider-videos.js";
-import { ProviderAudio, type AudioGenerator } from "./audio-generation.js";
+import { AudioGenerationError, ProviderAudio, type AudioGenerator } from "./audio-generation.js";
+import { AUDIO_SETTINGS_PROPERTIES } from "../shared/audio-schema.js";
+import { DoubaoVoiceSettingsStore } from "./doubao-voice-settings.js";
 import { VolcengineTtsProvider } from "./volcengine-tts-provider.js";
-import { VolcengineTtsSettingsStore } from "./volcengine-tts-settings.js";
 import { VolcengineSeedAudioProvider } from "./volcengine-seed-audio-provider.js";
-import { VolcengineSeedAudioSettingsStore } from "./volcengine-seed-audio-settings.js";
-import { AUDIO_OUTPUT_FORMATS, AUDIO_SAMPLE_RATES, AUDIO_VOICE_ID_MAX_LENGTH, AUDIO_VOICE_ID_PATTERN, DOUBAO_SEED_AUDIO_PROVIDER_NAME, DOUBAO_SPEECH_PROVIDER_NAME, availableAudioOperations, type AudioOperation } from "../shared/audio.js";
+import { DOUBAO_SEED_AUDIO_PROVIDER_NAME, DOUBAO_SPEECH_PROVIDER_NAME, type AudioOperation } from "../shared/audio.js";
 import { SEEDANCE_PROVIDER_IDS, SEEDANCE_PROVIDERS } from "./seedance-models.js";
 import { SeedanceSettingsStore } from "./seedance-settings.js";
 import { MINIMAX_PROVIDER_IDS, MINIMAX_PROVIDERS } from "./minimax-models.js";
@@ -179,7 +177,6 @@ export interface AppOptions {
   createModelRuntime?: () => Promise<ModelRuntime>;
   bundledPluginsDirectory?: string;
   preinstalledPluginsDirectory?: string;
-  interactiveStoryPlayerDirectory?: string;
   /** Examples prepared by scripts/prepare-examples.ts; omitted means no examples. */
   examplesDirectory?: string;
   playtestDriver?: GameRuntimeAdapter;
@@ -410,7 +407,7 @@ const answerApprovalSchema = {
     type: "object",
     additionalProperties: false,
     required: ["decision"],
-    properties: { decision: { enum: ["allow", "allow-session", "deny"] } },
+    properties: { decision: { enum: ["allow", "allow-always", "deny"] } },
   },
 } as const;
 
@@ -495,24 +492,10 @@ const toolRunSchema = {
       outputs: { type: "integer", enum: [...IMAGE_OUTPUT_COUNTS] },
       duration: { type: "integer", minimum: 1, maximum: 30 },
       durationSeconds: { type: "number", minimum: 0.1, maximum: 600 },
-      voiceId: { type: "string", minLength: 1, maxLength: AUDIO_VOICE_ID_MAX_LENGTH, pattern: AUDIO_VOICE_ID_PATTERN },
-      language: { type: "string", minLength: 1, maxLength: 40 },
-      style: { type: "string", minLength: 1, maxLength: 2_000 },
-      speed: { type: "number", minimum: -50, maximum: 100 },
       loop: { type: "boolean" },
       instrumental: { type: "boolean" },
       lyrics: { type: "string", maxLength: 20_000 },
       negativePrompt: { type: "string", maxLength: 4_000 },
-      referenceAssetId: { type: "string", minLength: 1, maxLength: 100 },
-      output: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          format: { enum: [...AUDIO_OUTPUT_FORMATS], description: "Must be supported by the selected model; Doubao Speech supports mp3 only." },
-          sampleRate: { type: "integer", enum: [...AUDIO_SAMPLE_RATES] },
-          channels: { type: "integer", enum: [1, 2] },
-        },
-      },
       referenceMode: { enum: ["frame", "reference"] },
       targetPolycount: { type: "integer", minimum: 100, maximum: MODEL_3D_MAX_POLYCOUNT },
       texture: { type: "boolean" },
@@ -558,18 +541,15 @@ const toolRunSchema = {
           },
         },
       },
+      ...AUDIO_SETTINGS_PROPERTIES,
     },
   },
 } as const;
 
 const TOOL_RUN_BODY_LIMIT = 25 * 1024 * 1024;
+/** Why a story made before web stories cannot play, build, or publish yet. */
+const NEEDS_UPGRADE = "This story was made before stories played as their own web page. Ask the user to open it in the Story editor, which upgrades it, then try again.";
 const CHECKPOINT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-
-/** The Player build's sandbox page and its script, by the URL the daemon serves each at. */
-const PLAYABLE_SANDBOX_FILES = new Map([
-  ["/playable-sandbox/playable-sandbox.html", "playable-sandbox.html"],
-  ["/playable-sandbox/assets/playable-sandbox.js", "assets/playable-sandbox.js"],
-]);
 
 export function createApp(options: AppOptions = {}) {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -583,10 +563,8 @@ export function createApp(options: AppOptions = {}) {
   const conversations = new ConversationManager(conversationImages, (runtime, id) => agentRuntimes.settings.resolveProfileId(runtime, id));
   const agentPlaytests = new Map<string, OwnedPlaytestDriver>();
   const publishing = new Set<string>();
-  const playerDirectory = options.interactiveStoryPlayerDirectory ?? path.join(repositoryRoot, "dist", "player");
-  const artifacts = new ArtifactBuilder(library, playerDirectory);
-  const playableDrafts = new PlayableDraftServer((project) => artifacts.preparePlayableDraft(project));
-  const examples = new ExampleStore(options.examplesDirectory, (workspacePath, exampleId) => artifacts.preparePlayableExample(workspacePath, exampleId));
+  const artifacts = new ArtifactBuilder();
+  const examples = new ExampleStore(options.examplesDirectory);
   const localPublisher = options.localDebug ? new LocalPublisher() : undefined;
   const cloudModels = new CloudModelsClient(options.cloudApiUrl ?? options.publishApiUrl ?? process.env.CLOUD_API_URL ?? process.env.PUBLISH_API_URL ?? "http://127.0.0.1:43130", options.cloudFetch);
   const publisher = localPublisher ?? new RemotePublisher({
@@ -606,8 +584,7 @@ export function createApp(options: AppOptions = {}) {
   const native3DProviders = [["meshy", "Meshy", meshySettings], ["tripo", "Tripo", tripoSettings], ["hyper3d", "Hyper3D", hyper3dSettings]] as const;
   const seedanceSettings = new SeedanceSettingsStore(dataDirectory);
   const minimaxSettings = new MinimaxSettingsStore(dataDirectory);
-  const volcengineTtsSettings = new VolcengineTtsSettingsStore(dataDirectory);
-  const volcengineSeedAudioSettings = new VolcengineSeedAudioSettingsStore(dataDirectory);
+  const doubaoVoiceSettings = new DoubaoVoiceSettingsStore(dataDirectory);
   const providerModelSettings = new ProviderModelSettingsStore(dataDirectory, piAgentDirectory);
   // Coding agents reach OhMyGame's tools over loopback only when they cannot take them over their own pipe.
   const agentRuntimes = new AgentRuntimeService(dataDirectory, () => {
@@ -715,14 +692,14 @@ export function createApp(options: AppOptions = {}) {
     isEnabled: providerEnabled, request: options.model3DFetch, defaultModel: () => providerModelSettings.defaultModel3D(), cloud: cloudModels,
   });
   const volcengineTtsProvider = new VolcengineTtsProvider(
-    () => volcengineTtsSettings.key(),
+    () => doubaoVoiceSettings.key("volcengine-tts"),
     options.audioFetch,
     undefined,
     () => providerEnabled("volcengine-tts"),
-    () => volcengineTtsSettings.defaultVoiceId(),
+    () => doubaoVoiceSettings.defaultVoiceId(),
   );
   const volcengineSeedAudioProvider = new VolcengineSeedAudioProvider(
-    () => volcengineSeedAudioSettings.key(),
+    () => doubaoVoiceSettings.key("volcengine-seed-audio"),
     options.audioFetch,
     undefined,
     () => providerEnabled("volcengine-seed-audio"),
@@ -740,7 +717,7 @@ export function createApp(options: AppOptions = {}) {
       if (projectId && !project) throw new ToolRunError("Project not found", 404);
       const audioOperation: AudioOperation | undefined = toolId === "generate-speech" ? "speech"
         : toolId === "generate-sound-effect" ? "sound-effect"
-          : toolId === "generate-music" ? "music" : undefined;
+          : toolId === "generate-music" ? "music" : toolId === "generate-audio" ? "audio-scene" : undefined;
       if (audioOperation) {
         const explicit = (input as { model?: AgentModelRef }).model;
         const selected = providerAudio.resolveModel(audioOperation, explicit);
@@ -847,13 +824,12 @@ export function createApp(options: AppOptions = {}) {
       canvasStore,
     ), ...(project.integration?.preview === "external" ? [projectPreviewTool(project, plugins, pluginIntegrations)] : [])];
   };
-  const playtestTarget = async (project: ProjectState): Promise<GameUseOpenTarget> => ({
-    runtime: "web",
-    // A web story plays its own page; older stories still use the sandbox.
-    url: project.type === "interactive-story" && !await isWebStory(project.workspacePath)
-      ? await playableDrafts.open(project)
-      : previewPageUrl(await previews.ensureStarted(project, false), "playtest"),
-  });
+  const playtestTarget = async (project: ProjectState): Promise<GameUseOpenTarget> => {
+    // A story plays its own page, which one made before web stories has once the editor upgrades it.
+    if (project.type === "interactive-story" && !await isWebStory(project.workspacePath))
+      throw new Error(NEEDS_UPGRADE);
+    return { runtime: "web", url: previewPageUrl(await previews.ensureStarted(project, false), "playtest") };
+  };
   /** OhMyGame's tools for agents outside the app; playtest windows belong to their MCP session. */
   const externalMcp = new ExternalMcpService({
     dataDirectory,
@@ -924,10 +900,6 @@ export function createApp(options: AppOptions = {}) {
       pluginMcp: { config: effectiveMcp, host: pluginCapabilities.host, agentDir: piAgentDirectory },
       skillDirectories: [...pluginSkillFolders(pluginSkills), ...ownSkills],
       instructions: appendSystemPromptForProject(project).join("\n\n"),
-      policy: {
-        workspacePath: project.workspacePath,
-        neverTouch: [...neverTouchPaths(dataDirectory, piAgentDirectory, projects.list().filter((other) => other.id !== project.id).map((other) => other.workspacePath)), ...ACCOUNT_RUNTIME_IDS.flatMap((runtime) => agentRuntimes.settings.profiles(runtime)).flatMap((profile) => profile.configDirectory ? [profile.configDirectory] : [])],
-      },
       snapshotBeforeMessage: () => snapshotWorkspace(project),
       turnNotice: () => readWorkspaceNotice(project),
       requestApproval: (details, toolCallId, signal) => agents.askApproval(project.id, conversation.summary.id, toolCallId, details, signal),
@@ -972,11 +944,7 @@ export function createApp(options: AppOptions = {}) {
     }),
     activeToolNames: (project, mode, session) => {
       const registered = session.getAllTools?.().map((tool) => tool.name) ?? [];
-      const audioOperations = availableAudioOperations(providerAudio.catalog().models);
-      const enabledTools = TOOL_IDS.filter((toolId) => toolId === "generate-speech" ? audioOperations.has("speech")
-        : toolId === "generate-sound-effect" ? audioOperations.has("sound-effect")
-          : toolId === "generate-music" ? audioOperations.has("music") : true);
-      return projectPiToolNames(mode, enabledTools, registered, webSearch.enabled());
+      return projectPiToolNames(mode, TOOL_IDS, registered, webSearch.enabled());
     },
     onRunFinished: async (project, conversationId) => {
       await agentPlaytests.get(`${project.id}:${conversationId}`)?.cleanup();
@@ -1064,7 +1032,7 @@ export function createApp(options: AppOptions = {}) {
     await onboarding.load().catch((err) => app.log.warn({ err }, "Could not load onboarding state"));
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
-    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), volcengineTtsSettings.load(), volcengineSeedAudioSettings.load(), providerModelSettings.load(), externalMcp.load(), externalClients.load(), agentRuntimes.load().catch((err) => app.log.warn({ err }, "Could not load coding agent settings"))]);
+    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), doubaoVoiceSettings.load(), providerModelSettings.load(), externalMcp.load(), externalClients.load(), agentRuntimes.load().catch((err) => app.log.warn({ err }, "Could not load coding agent settings"))]);
     await Promise.all(projects.list().map(async (project) => { projectWrites.initialize(project.id, await readWorkspaceVersion(project)); }));
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     // Updates the Skill and launcher path in connected clients without holding up startup.
@@ -1086,7 +1054,7 @@ export function createApp(options: AppOptions = {}) {
       reply.header("vary", "Origin");
     }
     if (request.method === "OPTIONS") return reply.code(204).send();
-    if (!options.accessToken || (request.method === "GET" && PLAYABLE_SANDBOX_FILES.has(request.url))) return;
+    if (!options.accessToken) return;
     // A coding agent's tool calls carry their session's own token, never the app's; the route checks it.
     if (request.url === AGENT_RUNTIME_BRIDGE_PATH) return;
     // External agents carry the token published in endpoint.json; the route checks it.
@@ -1107,16 +1075,6 @@ export function createApp(options: AppOptions = {}) {
     projects, agents, writes: projectWrites, checkpoints, snapshot: snapshotWorkspace, library, events,
     busy: (id) => publishing.has(id) || canvasStore.isProjectBusy(id) || tools.jobs().some((job) => job.context?.projectId === id && job.status === "running"),
   });
-
-  // The page Scenes run in. The desktop app loads its own pages from file://,
-  // where a sandboxed frame may not load its script, so the frame comes from
-  // here instead. It is the public Player build, so it needs no token.
-  for (const [url, file] of PLAYABLE_SANDBOX_FILES) {
-    app.get(url, async (_request, reply) => reply
-      .type(file.endsWith(".html") ? "text/html; charset=utf-8" : "text/javascript; charset=utf-8")
-      .header("cache-control", "no-cache")
-      .send(await readFile(path.join(playerDirectory, file))));
-  }
 
   const networkSettingsSchema = {
     body: {
@@ -1324,7 +1282,15 @@ export function createApp(options: AppOptions = {}) {
 
   app.post<{ Params: { toolId: string }; Body: RunToolRequest & { title?: string; projectId?: string; nodeId?: string } }>(
     "/tools/:toolId/jobs",
-    { schema: toolRunSchema, bodyLimit: TOOL_RUN_BODY_LIMIT },
+    {
+      schema: toolRunSchema,
+      bodyLimit: TOOL_RUN_BODY_LIMIT,
+      preValidation: async (request, reply) => {
+        if (!["generate-speech", "generate-sound-effect", "generate-music", "generate-audio"].includes(request.params.toolId) || !request.body || typeof request.body !== "object") return;
+        const removed = ["references", "referenceAssetId", "subtitles"].find((key) => key in request.body);
+        if (removed) return reply.code(400).send({ error: `Unexpected ${removed} option` });
+      },
+    },
     async (request, reply) => {
       try {
         const { title, projectId, nodeId, ...input } = request.body;
@@ -2262,20 +2228,20 @@ export function createApp(options: AppOptions = {}) {
     }), {
       id: "volcengine-tts",
       name: DOUBAO_SPEECH_PROVIDER_NAME,
-      configured: volcengineTtsSettings.get().configured,
+      configured: Boolean(doubaoVoiceSettings.key("volcengine-tts")),
       enabled: providerEnabled("volcengine-tts"),
       custom: false,
-      status: volcengineTtsSettings.get().configured ? "connected" as const : "not_configured" as const,
+      status: doubaoVoiceSettings.key("volcengine-tts") ? "connected" as const : "not_configured" as const,
       methods: [{ type: "api_key" as const, label: `${DOUBAO_SPEECH_PROVIDER_NAME} API key` }],
       credentialType: "api_key" as const,
       capabilities: ["audio"] as const,
     }, {
       id: "volcengine-seed-audio",
       name: DOUBAO_SEED_AUDIO_PROVIDER_NAME,
-      configured: volcengineSeedAudioSettings.get().configured,
+      configured: Boolean(doubaoVoiceSettings.key("volcengine-seed-audio")),
       enabled: providerEnabled("volcengine-seed-audio"),
       custom: false,
-      status: volcengineSeedAudioSettings.get().configured ? "connected" as const : "not_configured" as const,
+      status: doubaoVoiceSettings.key("volcengine-seed-audio") ? "connected" as const : "not_configured" as const,
       methods: [{ type: "api_key" as const, label: `${DOUBAO_SEED_AUDIO_PROVIDER_NAME} API key` }],
       credentialType: "api_key" as const,
       capabilities: ["audio"] as const,
@@ -2366,11 +2332,12 @@ export function createApp(options: AppOptions = {}) {
     openAIEndpoint,
     seedanceSettings,
     minimaxSettings,
-    volcengineTtsSettings,
-    volcengineSeedAudioSettings,
+    doubaoVoiceSettings,
     syncOpenAIEndpoint,
     openAIImages,
     volcengineTtsProvider,
+    volcengineSeedAudioProvider,
+    providerEnabled,
     cloudModels,
     modelAuth,
   });
@@ -3304,7 +3271,6 @@ export function createApp(options: AppOptions = {}) {
     await conversationImages.flush();
     await previews.stopAll();
     await artifacts.close();
-    await playableDrafts.close();
     await examples.close();
     await localPublisher?.close();
   });

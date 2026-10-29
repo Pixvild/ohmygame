@@ -1,5 +1,5 @@
 import { useReadyRuntimeGeneration } from "./runtime-connection.js";
-import { Box, Film, Image, LoaderCircle, Plus, RefreshCw, type IconComponent } from "./icons.js";
+import { Box, Film, Image, LoaderCircle, Music2, Plus, RefreshCw, type IconComponent } from "./icons.js";
 import { useEffect, useRef, useState } from "react";
 import type { ProjectState } from "../shared/contracts.js";
 import type { AssetCanvasStarter } from "../shared/asset-canvas.js";
@@ -19,6 +19,8 @@ const QUICK_START_ICONS: Record<AssetCanvasStarter, IconComponent> = {
   image: Image,
   video: Film,
   "model-3d": Box,
+  music: Music2,
+  "audio-scene": Music2,
 };
 
 export function AssetCanvasHome({ onNavigate, onOpenProject }: {

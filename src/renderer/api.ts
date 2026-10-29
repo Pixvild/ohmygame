@@ -507,10 +507,6 @@ export async function updateMinimaxApiKey(providerId: string, apiKey: string): P
   });
 }
 
-export async function getVolcengineTtsSettings(): Promise<{ configured: boolean; defaultVoiceId?: string }> {
-  return request("/settings/models/providers/volcengine-tts");
-}
-
 export async function updateVolcengineTtsApiKey(apiKey: string): Promise<{ configured: boolean; defaultVoiceId?: string }> {
   const result = await request<{ configured: boolean; defaultVoiceId?: string }>("/settings/models/providers/volcengine-tts", {
     method: "PUT",
@@ -803,7 +799,7 @@ export async function ensureProjectPreview(projectId: string): Promise<{ url: st
   return request(`/projects/${encodeURIComponent(projectId)}/preview?reuse=1`, { method: "POST" });
 }
 
-/** Whether an Interactive Story plays as its own page, and whether its upgrade can be taken back. */
+/** Whether an Interactive Story plays as its own page, or must be upgraded first. */
 export async function getStoryUpgrade(projectId: string): Promise<StoryUpgradeStatus> {
   return request(`/projects/${projectId}/interactive-story/upgrade`);
 }
@@ -812,17 +808,8 @@ export async function upgradeStory(projectId: string): Promise<StoryUpgradeResul
   return request(`/projects/${projectId}/interactive-story/upgrade`, { method: "POST" });
 }
 
-/** Keeps the upgrade, so it is no longer offered to be taken back. */
-export async function keepStoryUpgrade(projectId: string): Promise<void> {
-  await request(`/projects/${projectId}/interactive-story/upgrade/keep`, { method: "POST" });
-}
-
 export async function copyStoryLibraryMedia(projectId: string): Promise<StoryLibraryMediaResult> {
   return request(`/projects/${projectId}/interactive-story/library-media`, { method: "POST" });
-}
-
-export async function undoStoryUpgrade(projectId: string): Promise<{ changed: string[] }> {
-  return request(`/projects/${projectId}/interactive-story/upgrade/undo`, { method: "POST" });
 }
 
 export async function getNodeRuntime(projectId: string): Promise<NodeRuntimeResponse> {
@@ -1183,11 +1170,6 @@ export async function reviseLastPrompt(
   });
 }
 
-/** Puts the workspace and the conversation back to just before the message the checkpoint was taken for. */
-export async function restoreCheckpoint(projectId: string, conversationId: string, checkpointId: string): Promise<void> {
-  return request(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/restore`, { method: "POST" });
-}
-
 /** Lists the files the turn of the checkpoint's message changed. */
 export async function getCheckpointChanges(projectId: string, conversationId: string, checkpointId: string): Promise<CheckpointChangeItem[]> {
   const { changes } = await request<{ changes: CheckpointChangeItem[] }>(`/projects/${projectId}/conversations/${conversationId}/checkpoints/${encodeURIComponent(checkpointId)}/changes`);
@@ -1453,16 +1435,6 @@ function parseModelAuthEvent(block: string): ModelAuthEvent | undefined {
   }
 }
 
-/**
- * The page Scenes run in. The desktop app loads its own pages from file://,
- * where Chromium will not let the sandboxed frame load its script, so there
- * the daemon serves it.
- */
-export function playableSandboxUrl(): string {
-  const runtime = desktopRuntime();
-  return runtime ? `${runtime.daemonUrl}/playable-sandbox/playable-sandbox.html` : "./playable-sandbox.html";
-}
-
 function apiUrl(path: string): string {
   const runtime = desktopRuntime();
   return runtime ? `${runtime.daemonUrl}${path}` : `${API_BASE}${path}`;
@@ -1623,4 +1595,11 @@ export function clearProjectIntegration(projectId: string): Promise<ProjectState
 }
 export function setProjectIntegration(projectId: string, pluginId: string): Promise<ProjectState> {
   return request(`/projects/${encodeURIComponent(projectId)}/integration`, { method: "PUT", body: JSON.stringify({ pluginId }) });
+}
+
+export function getVolcengineTtsSettings(): Promise<{ configured: boolean; defaultVoiceId?: string }> { return request("/settings/models/providers/volcengine-tts"); }
+export async function previewSeedAudio(prompt: string): Promise<Blob> {
+  const response = await fetch(apiUrl("/settings/models/providers/volcengine-seed-audio/preview"), { method: "POST", headers: { ...runtimeHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ prompt, durationSeconds: 2 }) });
+  if (!response.ok) throw await responseError(response);
+  return response.blob();
 }
