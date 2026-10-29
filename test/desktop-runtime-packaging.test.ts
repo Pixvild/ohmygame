@@ -44,7 +44,8 @@ describe("desktop runtime packaging", () => {
       await createPackage(source, archive);
       await vi.waitFor(() => expect(extractFile(archive, "package.json").toString()).toContain("packaged-fixture"));
       const entry = path.join("dist", "daemon", "server.js");
-      expect(createRequire(path.join(archive, entry)).resolve("missing-packaged-dependency")).toBe(await realpath(path.join(dependency, "index.js")));
+      const resolved = createRequire(path.join(archive, entry)).resolve("missing-packaged-dependency");
+      expect(await realpath(resolved)).toBe(await realpath(path.join(dependency, "index.js")));
 
       const isolated = await isolateDesktopArchive(archive, path.join(directory, "isolated"));
       expect(extractFile(isolated, "package.json").toString()).toContain("packaged-fixture");
