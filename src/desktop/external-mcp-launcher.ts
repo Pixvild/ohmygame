@@ -460,8 +460,9 @@ export function appStartCommand(
   platform: NodeJS.Platform = process.platform,
 ): { command: string; args: string[] } {
   if (platform === "darwin" && !appPath) {
+    // macOS paths stay POSIX when the platform is simulated on Windows.
     // <name>.app/Contents/MacOS/<name>
-    const bundle = path.resolve(executable, "../../..");
+    const bundle = path.posix.resolve(executable, "../../..");
     if (bundle.endsWith(".app"))
       return { command: "/usr/bin/open", args: [bundle] };
   }
