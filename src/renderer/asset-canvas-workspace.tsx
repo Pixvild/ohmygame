@@ -28,6 +28,7 @@ import {
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
+  Panel,
   applyEdgeChanges,
   applyNodeChanges,
   type Connection,
@@ -38,6 +39,8 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import { CANVAS_GRID_SIZE, snapCanvasPosition } from "./canvas-alignment.js";
+import { alignSelectionLayout, distributeSelectionLayout, measureSelectionLayoutNodes, type CanvasAlignEdge, type CanvasDistributeAxis } from "./canvas-selection-layout.js";
+import { CanvasSelectionToolbar, SelectionArrangeMenuItems } from "./canvas-selection-toolbar.js";
 import { RESIZABLE_CANVAS_NODE_SIZES, canvasNodeLayout, isResizableCanvasNodeType } from "../shared/canvas-node-layout.js";
 import { MAX_ASSET_CANVAS_NODES, MAX_TEXT_NODE_REFERENCES } from "../shared/asset-canvas-schema.js";
 import { createCanvasClipboard, duplicateAssetCanvasNode, duplicateCanvasSelection, lastCanvasClipboard, parseCanvasClipboard, rememberCanvasClipboard, type CanvasClipboard } from "./asset-canvas-clipboard.js";
@@ -547,6 +550,31 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     }, 0);
   }
 
+  // One board undo step for a discrete edit, including two edits made in a row.
+  function commitCanvasEdit(apply: () => void): void {
+    const currentDocument = latestCanvas.current;
+    if (!currentDocument) return;
+    if (historyGestureBase.current) {
+      const gestureBase = historyGestureBase.current;
+      historyGestureBase.current = undefined;
+      if (canvasHistoryKey(gestureBase) !== canvasHistoryKey(currentDocument)) {
+        pushUndoSnapshot(gestureBase);
+        editorRedoHistory.current = [];
+      }
+    }
+    commitPendingHistory();
+    const base = structuredClone(latestCanvas.current ?? currentDocument);
+    historyGestureBase.current = base;
+    flushSync(apply);
+    const next = latestCanvas.current;
+    historyGestureBase.current = undefined;
+    if (!next || canvasHistoryKey(base) === canvasHistoryKey(next)) return;
+    pushUndoSnapshot(base);
+    editorRedoHistory.current = [];
+    observeHistoryDocument(next);
+    updateHistoryControls();
+  }
+
   useEffect(() => {
     if (phase !== "ready" || !document) return;
     const serialized = canvasHistoryKey(document);
@@ -575,8 +603,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
       if (event.isComposing || event.keyCode === 229 || isTextEntry(event.target) || eventWithin(event, ".nokey") || !canvasElement.current?.contains(event.target as globalThis.Node)) return;
       if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "d") {
         event.preventDefault();
-        const selected = nodes.filter((node) => node.selected).map((node) => toAssetCanvasNode(node, model3DModels));
-        if (selected.length) pasteSelection(createCanvasClipboard(projectId, selected, document.edges), { x: Math.min(...selected.map((node) => node.position.x)) + 40, y: Math.min(...selected.map((node) => node.position.y)) + 40 });
+        duplicateSelectedNodes();
         return;
       }
       const step = undoShortcut(event);
@@ -1014,12 +1041,46 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     if (value.nodes.some((node) => (node.type === "document" || node.type === "table" || node.type === "file")) && value.projectId !== projectId) {
       setTransferError(t("assetCanvas.pasteProject")); return;
     }
-    commitPendingHistory();
     setTransferError(undefined);
     const copied = duplicateCanvasSelection(value.nodes, value.edges, position);
-    setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), ...copied.nodes.map((node) => ({ ...toFlowNode(node, imageModels, videoModels), selected: true }))]);
-    setEdges((current) => [...current, ...copied.edges]);
-    setSelectedAssetEdgeId(undefined);
+    commitCanvasEdit(() => {
+      setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), ...copied.nodes.map((node) => ({ ...toFlowNode(node, imageModels, videoModels), selected: true }))]);
+      setEdges((current) => [...current, ...copied.edges]);
+      setSelectedAssetEdgeId(undefined);
+    });
+  }
+
+  function duplicateSelectedNodes(): void {
+    const selected = nodesRef.current.filter((node) => node.selected).map((node) => toAssetCanvasNode(node, model3DModels));
+    if (!selected.length) return;
+    pasteSelection(createCanvasClipboard(projectId, selected, latestCanvas.current?.edges ?? []), { x: Math.min(...selected.map((node) => node.position.x)) + 40, y: Math.min(...selected.map((node) => node.position.y)) + 40 });
+  }
+
+  function applySelectionLayout(next: ReturnType<typeof alignSelectionLayout>): void {
+    const positions = new Map(next.map((node) => [node.id, node.position]));
+    if (nodesRef.current.every((node) => {
+      const position = positions.get(node.id);
+      return !position || (position.x === node.position.x && position.y === node.position.y);
+    })) return;
+    commitCanvasEdit(() => {
+      setNodes((current) => current.map((node) => {
+        const position = positions.get(node.id);
+        if (!position || (position.x === node.position.x && position.y === node.position.y)) return node;
+        return { ...node, position: { x: position.x, y: position.y } };
+      }));
+    });
+  }
+
+  function alignSelection(edge: CanvasAlignEdge): void {
+    const layout = measureSelectionLayoutNodes(nodesRef.current.filter((node) => node.selected));
+    if (layout.length < 2) return;
+    applySelectionLayout(alignSelectionLayout(layout, edge));
+  }
+
+  function distributeSelection(axis: CanvasDistributeAxis): void {
+    const layout = measureSelectionLayoutNodes(nodesRef.current.filter((node) => node.selected));
+    if (layout.length < 3) return;
+    applySelectionLayout(distributeSelectionLayout(layout, axis));
   }
 
   function startAltDragDuplicate(dragged: readonly AssetCanvasFlowNode[]): void {
@@ -1648,7 +1709,11 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
               defaultViewport={editorLayout.viewport}
               fitViewOnLoad={editorLayout.fitView === true}
               onInitialFit={finishInitialFit}
-            />
+            >
+              {selectedNodes.length >= 2 ? <Panel className="story-canvas-selection-panel" position="top-center">
+                <CanvasSelectionToolbar count={selectedNodes.length} onAlign={alignSelection} onDistribute={distributeSelection} onDuplicate={duplicateSelectedNodes} />
+              </Panel> : null}
+            </EditorCanvas>
           ) : null}
           {canvasContextMenu ? <AssetCanvasContextMenu
             documents={documents} tables={tables}
@@ -1673,6 +1738,10 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
             onView={() => { if (contextMenuNode) openViewer(contextMenuNode); }}
             onDownload={() => { if (contextMenuNode?.data.assetId) downloadAsset(contextMenuNode.data.assetId, assetDownloadName(contextMenuNode.data.assetId, contextMenuNode.id)); }}
             onSendToProject={() => { if (contextMenuNode?.data.assetId) sendAssetToProject(contextMenuNode.data.assetId, contextMenuNode.data.name || titleCase(contextMenuNode.type ?? "asset")); }}
+            selectionCount={selectedNodes.length}
+            onAlign={alignSelection}
+            onDistribute={distributeSelection}
+            onDuplicateSelection={duplicateSelectedNodes}
             onCopy={() => { if (canvasContextMenu.nodeId) copyCanvasNode(canvasContextMenu.nodeId); }}
             onDuplicate={() => { if (canvasContextMenu.nodeId) duplicateCanvasNode(canvasContextMenu.nodeId); }}
             onDelete={() => { if (canvasContextMenu.nodeId) removeCanvasNodes(new Set([canvasContextMenu.nodeId])); }}
@@ -1898,6 +1967,10 @@ function AssetCanvasContextMenu({
   onDuplicate,
   onDelete,
   onDetails,
+  selectionCount,
+  onAlign,
+  onDistribute,
+  onDuplicateSelection,
 }: {
   documents: CanvasDocuments;
   tables: CanvasTables;
@@ -1925,6 +1998,10 @@ function AssetCanvasContextMenu({
   onDuplicate: () => void;
   onDelete: () => void;
   onDetails?: () => void;
+  selectionCount: number;
+  onAlign: (edge: CanvasAlignEdge) => void;
+  onDistribute: (axis: CanvasDistributeAxis) => void;
+  onDuplicateSelection: () => void;
 }) {
   const creationGroups = canvasCreationGroups(documents, tables);
   const uploadInput = useRef<HTMLInputElement>(null);
@@ -1964,8 +2041,13 @@ function AssetCanvasContextMenu({
     </CanvasContextMenu>
   );
 
+  const arrange = selectionCount >= 2 ? <>
+    <SelectionArrangeMenuItems count={selectionCount} onAlign={(edge) => run(() => onAlign(edge))} onDistribute={(axis) => run(() => onDistribute(axis))} onDuplicate={() => run(onDuplicateSelection)} />
+    <div className="playable-project-menu-separator" role="separator" />
+  </> : null;
   return (
-    <CanvasContextMenu screenPosition={menu.screenPosition} label={menu.kind === "pane" ? t("assetCanvas.canvasActions") : t("assetCanvas.nodeActions")} onClose={onClose}>
+    <CanvasContextMenu className={selectionCount >= 2 ? "is-wide" : undefined} screenPosition={menu.screenPosition} label={menu.kind === "pane" ? t("assetCanvas.canvasActions") : t("assetCanvas.nodeActions")} onClose={onClose}>
+      {arrange}
       {onDetails ? <button type="button" role="menuitem" onClick={() => run(onDetails)}><Pencil size={15} /><span>{t("assetCanvas.nodeDetails")}</span></button> : null}
       {onUseInDocument ? <button type="button" role="menuitem" onClick={() => run(onUseInDocument)}><FileText size={15} /><span>{t("assetCanvas.addToDocument")}</span></button> : null}
       {menu.kind === "pane" ? <>
@@ -1998,7 +2080,7 @@ function AssetCanvasContextMenu({
         {canDownload ? <button type="button" role="menuitem" disabled={nodeActionsDisabled} onClick={() => run(onDownload)}><Download size={15} /><span>{t("assetCanvas.download")}</span></button> : null}
         {canSendToProject ? <button type="button" role="menuitem" disabled={nodeActionsDisabled} onClick={() => run(onSendToProject)}><FolderPlus size={15} /><span>{t("assetCanvas.addToProjectEllipsis")}</span></button> : null}
         <button type="button" role="menuitem" disabled={nodeActionsDisabled} onClick={() => run(onCopy)}><Copy size={15} /><span>{t("assetCanvas.copyNode")}</span></button>
-        <button type="button" role="menuitem" disabled={nodeActionsDisabled || !canDuplicate} onClick={() => run(onDuplicate)}><Plus size={15} /><span>{t("common.duplicate")}</span></button>
+        {selectionCount >= 2 ? null : <button type="button" role="menuitem" disabled={nodeActionsDisabled || !canDuplicate} onClick={() => run(onDuplicate)}><Plus size={15} /><span>{t("common.duplicate")}</span></button>}
         <button className="is-danger" type="button" role="menuitem" disabled={nodeActionsDisabled} onClick={() => run(onDelete)}><Trash2 size={15} /><span>{t("common.delete")}</span></button>
       </>}
     </CanvasContextMenu>

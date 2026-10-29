@@ -207,3 +207,15 @@ all connections, including connections within a copied selection. The originals
 stay in place. Releasing at the starting position cancels the copies; a completed
 drag is one board undo step. If the copies would exceed the 2,000-node limit,
 the editor rejects the drag and keeps the originals in place.
+
+Select two or more nodes and the selection toolbar aligns them. The canvas
+context menu offers the same actions while that selection is still active.
+Right-clicking one node still focuses that node. Alignment uses each node's
+visible frame and the bounding box of the selection: left, horizontal center,
+right, top, vertical middle, or bottom. With three or more nodes, the same
+controls distribute them horizontally or vertically so the gaps are equal. The
+outer edges stay put when the nodes already have room; overlapping nodes are
+packed apart from the start edge. Duplicate selection copies the selected nodes
+and the connections among them, the same action as Command (Ctrl on Windows
+and Linux)+D. Each align, distribute, or duplicate is one board undo step. The
+new positions are saved in the board's editor layout file.
