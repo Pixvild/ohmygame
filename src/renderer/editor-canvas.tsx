@@ -246,10 +246,11 @@ export function useCanvasCenter(): () => CanvasPosition | undefined {
  * A context menu at the pointer, kept inside the window. It closes on a
  * click outside, Escape, or a window resize; the items are the editor's.
  */
-export function CanvasContextMenu({ screenPosition, label, onClose, children }: {
+export function CanvasContextMenu({ screenPosition, label, onClose, className, children }: {
   screenPosition: CanvasPosition;
   label: string;
   onClose: () => void;
+  className?: string;
   children: ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -285,7 +286,7 @@ export function CanvasContextMenu({ screenPosition, label, onClose, children }: 
   return createPortal(
     <div
       ref={root}
-      className={`story-canvas-context-menu${opensLeft ? " opens-left" : ""}${opensUp ? " opens-up" : ""}`}
+      className={`story-canvas-context-menu${className ? ` ${className}` : ""}${opensLeft ? " opens-left" : ""}${opensUp ? " opens-up" : ""}`}
       role="menu"
       aria-label={label}
       tabIndex={-1}

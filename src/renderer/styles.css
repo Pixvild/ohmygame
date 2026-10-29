@@ -9025,6 +9025,54 @@ button {
   opacity: 0.45;
 }
 
+.story-canvas-selection-panel {
+  z-index: 6;
+  margin-top: 12px;
+}
+
+.story-canvas-selection-toolbar {
+  display: flex;
+  height: 40px;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--story-editor-surface);
+  box-shadow: var(--menu-shadow);
+}
+
+.story-canvas-selection-toolbar button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.story-canvas-selection-toolbar button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.story-canvas-selection-toolbar button:disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.story-canvas-selection-toolbar-separator {
+  width: 1px;
+  align-self: stretch;
+  margin: 6px 3px;
+  background: var(--border);
+}
+
 .story-canvas-context-menu,
 .story-canvas-context-submenu,
 .story-canvas-context-branch-menu {
@@ -9040,6 +9088,10 @@ button {
   position: fixed;
   z-index: 1200;
   outline: 0;
+}
+
+.story-canvas-context-menu.is-wide {
+  width: 228px;
 }
 
 .story-canvas-context-menu button {
